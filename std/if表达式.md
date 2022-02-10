@@ -1,12 +1,12 @@
-语法：`[Expr]`+`if`+`[rvalue-Boolean-Expr]`(+`else`+`[Expr]`)?
+语法：`[Expr-1]`+`if`+`[rvalue-Boolean-Expr]`(+`else`+`[Expr-2]`)?
 
-若 `[Boolean-Expr]` 为真时计算第一个 `[Expr]` 作为表达式的值，否则计算第二个 `[Expr]` （如果有的话）或空值（`()`）作为表达式的值。
+若 `[Boolean-Expr]` 为真时计算 `[Expr-1]` 作为表达式的值，否则计算 `[Expr-2]` （如果有的话）或空值（`()`）作为表达式的值。
 
 语言保证对于两个表达式只会计算其一的值。
 
 `else`永远与最近的`if`结合。
 
-若 `if表达式` 中不含 `else` 则其值类型为 `optional[typeof(Expr)]` 否则若两个 `[Expr]` 为同一类型，则其值类型为静态，否则其值类型为动态。
+若 `if表达式` 中不含 `else` 则其值类型为 `optional[typeof([Expr-1])]` 否则类型为 `typeof([Expr-1])|typeof([Expr-2])`
 
 
 例子：
