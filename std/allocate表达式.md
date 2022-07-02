@@ -1,3 +1,3 @@
-语法： `allocate`+`[rvalue-Expr with type type]`
+语法： `allocate`+`[shape]`
 
-在栈上分配一段空间，返回一个 `mutable` 左值，代表分配出的栈空间。
+按照对象的形状，在栈上分配一段空间，返回一个 `mutable` 左值，代表分配出的栈空间。
