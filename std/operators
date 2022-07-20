@@ -1,12 +1,12 @@
-  prefix  infix  suffix  priority
-+  YES     YES     NO     7,19,       
--  YES     YES     NO     8,18,       
-*  YES     YES     NO     9,17,       
-/  YES     YES     NO     10,16,
-%          YES            ,15,
+   prefix  infix  suffix  priority
++   YES    YES     NO     7,19,  
+-   YES    YES     NO     8,18,  
+*   YES    YES     NO     9,17,  
+/   YES    YES     NO     10,16, 
+%          YES            ,15,   
 
-== NO      YES            ,26,
-~= NO      YES            ,27,
+==  NO     YES            ,26,
+~=  NO     YES            ,27,
 <          YES     YES    ,22,4
 >          YES     YES    ,23,5
 ~<         YES            ,24,
@@ -15,18 +15,26 @@
 
 &          YES            ,29,
 |          YES            ,31,
-~  YES                    6,,
+~   YES                   6,,
 ^          YES            ,30,
 <<         YES            ,20,
 >>         YES            ,21,
 #          YES            ,32,
 
-$  YES             YES    11,,13
-`  YES             YES    12,,14
-:          YES            ,34,
-.  YES     YES            1,2,
-@          YES            ,3,
-,          YES            ,35,
-;          YES            ,36,
+$   YES            YES    11,,13      
+`   YES            YES    12,,14      
+:          YES            ,33,        
+.   YES    YES            1,2,        
+@          YES            ,3,         
+,          YES            ,40,        
+;          YES            ,41,        
 
-=          YES            ,33,
+=          YES            ,37,        
+:=         YES            ,38,        
+=:         YES            ,39,        
+
+'new'      prefix         34
+'allocate' prefix         35
+.'if'.('else'.)? infix    36
+'{'.'}'                   
+'('.')'                   
