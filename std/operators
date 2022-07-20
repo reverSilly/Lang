@@ -1,0 +1,27 @@
+  prefix  infix  suffix
++  YES     YES     NO            
+-  YES     YES     NO            
+*  YES     YES     NO            
+/  YES     YES     NO 
+%          YES          
+
+==         YES
+~=         YES
+<          YES     YES
+>          YES     YES
+<=         YES
+>=         YES
+~<         YES
+~>         YES
+
+&          YES
+|          YES
+~  YES       
+^          YES
+<<         YES
+>>         YES
+
+$  YES             YES  
+`  YES             YES
+
+=          YES
