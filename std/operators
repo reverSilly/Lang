@@ -23,18 +23,20 @@
 
 $   YES            YES    11,,13      
 `   YES            YES    12,,14      
-:          YES            ,33,        
+:          YES            ,34,        
+->         YES            ,33,
 .   YES    YES            1,2,        
 @          YES            ,3,         
-,          YES            ,40,        
-;          YES            ,41,        
+,          YES            ,42,        
+;          YES            ,43,        
 
-=          YES            ,37,        
-:=         YES            ,38,        
-=:         YES            ,39,        
+=          YES            ,39,        
+:=         YES            ,40,        
+=:         YES            ,41,        
 
-'new'      prefix         34
-'allocate' prefix         35
-.'if'.('else'.)? infix    36
+'new'      prefix         35
+'allocate' prefix         36
+.'if'.('else'.)? infix    37
+'match'.('with'.)+        38
 '{'.'}'                   
 '('.')'                   
