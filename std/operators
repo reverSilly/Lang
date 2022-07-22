@@ -1,42 +1,43 @@
    prefix  infix  suffix  priority
-+   YES    YES     NO     7,19,  
--   YES    YES     NO     8,18,  
-*   YES    YES     NO     9,17,  
-/   YES    YES     NO     10,16, 
-%          YES            ,15,   
++   YES    YES     NO     10,22,  
+-   YES    YES     NO     11,21,  
+*   YES    YES     NO     12,20,  
+/   YES    YES     NO     13,19, 
+%          YES            ,18,   
 
-==  NO     YES            ,26,
-~=  NO     YES            ,27,
-<          YES     YES    ,22,4
->          YES     YES    ,23,5
-~<         YES            ,24,
-~>         YES            ,25,
-<=>        YES            ,28,
+==  NO     YES            ,29,
+~=  NO     YES            ,30,
+<          YES     YES    ,25,7
+>          YES     YES    ,26,8
+~<         YES            ,27,
+~>         YES            ,28,
+<=>        YES            ,31,
 
-&          YES            ,29,
-|          YES            ,31,
-~   YES                   6,,
-^          YES            ,30,
-<<         YES            ,20,
->>         YES            ,21,
-#          YES            ,32,
+&          YES            ,32,
+|          YES            ,34,
+~   YES                   9,,
+^          YES            ,33,
+<<         YES            ,23,
+>>         YES            ,24,
+#          YES            ,35,
 
-$   YES            YES    11,,13      
-`   YES            YES    12,,14      
-:          YES            ,34,        
-->         YES            ,33,
+$   YES            YES    14,,16      
+`   YES            YES    15,,17      
+:          YES            ,37,        
+->         YES            ,36,
 .   YES    YES            1,2,        
-@          YES            ,3,         
-,          YES            ,42,        
-;          YES            ,43,        
+@          YES            ,6,         
+,          YES            ,43,        
+;          YES            ,44,        
 
-=          YES            ,39,        
-:=         YES            ,40,        
-=:         YES            ,41,        
+=          YES            ,40,        
+:=         YES            ,41,        
+=:         YES            ,42,        
 
-'new'      prefix         35
-'allocate' prefix         36
-.'if'.('else'.)? infix    37
-'match'.('with'.)+        38
+'new'      prefix         4
+'allocate' prefix         5
+.'if'.('else'.)? infix    38
+'match'.('with'.)+        39
+'shapeof'. prefix         3
 '{'.'}'                   
 '('.')'                   
