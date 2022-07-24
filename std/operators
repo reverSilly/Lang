@@ -31,8 +31,8 @@ $   YES            YES    14,,16
 ;          YES            ,44,        
 
 =          YES            ,40,        
-:=         YES            ,41,        
-=:         YES            ,42,        
+:=         YES            ,42,        
+=:         YES            ,41,        
 
 'new'      prefix         4
 'allocate' prefix         5
