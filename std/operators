@@ -15,14 +15,15 @@
 
 &          YES            ,32,
 |          YES            ,34,
-~   YES                   9,,
-^          YES            ,33,
+~   YES    YES            9,33.5,
+^   YES    YES            ,33,
 <<         YES            ,23,
 >>         YES            ,24,
 #          YES            ,35,
 
 $   YES            YES    14,,16      
-`   YES            YES    15,,17      
+'   YES            YES    15,,17      
+`   YES                   
 :          YES            ,37,        
 ->         YES            ,36,
 .   YES    YES            1,2,        
