@@ -29,7 +29,10 @@ $   YES            YES    14,,16
 .   YES    YES            1,2,        
 @          YES            ,6,         
 ,          YES            ,43,        
-;          YES            ,44,        
+;          YES            ,44,       
+
+?   NO
+[]  NO
 
 =          YES            ,40,        
 :=         YES            ,42,        
@@ -38,7 +41,7 @@ $   YES            YES    14,,16
 'new'      prefix         4
 'allocate' prefix         5
 .'if'.('else'.)? infix    38
-'match'.('with'.)+        39
+.'while'.  infix          39
 'shapeof'. prefix         3
 '{'.'}'                   
 '('.')'                   
