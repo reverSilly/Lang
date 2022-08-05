@@ -31,8 +31,9 @@ $   YES            YES    14,,16
 ,          YES            ,43,        
 ;          YES            ,44,       
 
-?   NO
-[]  NO
+?   NO     NO       NO
+[]  NO     NO       NO
+
 
 =          YES            ,40,        
 :=         YES            ,42,        
@@ -43,5 +44,6 @@ $   YES            YES    14,,16
 .'if'.('else'.)? infix    38
 .'while'.  infix          39
 'shapeof'. prefix         3
+. .+
 '{'.'}'                   
 '('.')'                   
