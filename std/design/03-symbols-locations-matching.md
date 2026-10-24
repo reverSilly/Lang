@@ -1,6 +1,8 @@
 # Symbol / Location / 匹配 设计记录
 
 状态：已定稿（2026-10-24）
+修订：location 的 shape 约束已由 [06-ownership.md](06-ownership.md) 改为可选契约；
+形状是内容的当前结构，不是 location 的固有容量。
 
 前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)
 
@@ -10,12 +12,24 @@
 
 - **symbol**：一等原子值（类似 Lisp symbol）。标识符 token 即 symbol 值字面量。
   symbol 可用于 pattern matching，可动态构造；它不是编译期概念。
-- **location**：`allocate` 产生的格子，持有值。三个属性：标识（哪个格子）、
-  形状约束（能装什么）、可变性（能否改写）。location 不可作为值传递。
+- **location**：`allocate` 产生的格子，持有内容（value 或子 location）。
+  属性：标识、当前内容、可变性、所有权状态；可附带可选的 shape 约束
+  （显式类型/契约），缺省无约束。location 不可作为值传递。
 - **value**：纯数据，永远不可变，可传递、可固化。"不可变"不是值的属性，
   而是 location 的缺省；值根本没有可变性概念。
 
 一个 block 持有：若干 location + 一张 `symbol → location` 映射表。
+
+### 形状与约束
+
+- **形状（shape）是内容/对象的当前结构**，由内容决定；empty location
+  没有内容形状。
+- **shape 约束是可选的静态契约**，不是 location 的固有属性；缺省不存在。
+  写入/move 时只检查显式约束；无约束的槽可接收任意形状。
+- 显式约束在 empty 时保留；此时 empty 只能按该约束接收内容。
+- block/对象形状是动态的；`break` 的 result、move 的目标空槽都默认
+  可以改变形状。
+- 存储布局（内联、装箱、重新分配）属于实现，不属于 shape 语义。
 
 ## 两个前缀运算符（任何位置含义不变，无模式切换）
 
