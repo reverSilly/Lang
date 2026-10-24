@@ -1,6 +1,0 @@
-# ninja log v5
-13	707596	6820735428940000	CMakeFiles/compiler.dir/Expression.cpp.obj	642bc0cdff6a48d2
-9	370329	6820809856080000	CMakeFiles/compiler.dir/Parser.cpp.obj	66104903ff2f0d86
-5	170205	6820834716190000	CMakeFiles/compiler.dir/main.cpp.obj	bdeab9048570b081
-62	665	6820915445070000	build.ninja	3289c49994377fb9
-170209	301902	6820835427240000	compiler.exe	65bbd7d7401e3342
