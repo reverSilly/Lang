@@ -1,8 +1,9 @@
 # 控制流设计记录
 
 状态：草案（2026-10-25 重写，按 06 的 block/result 归并语义；
-同日修订循环与 `%drop`：循环不产生 block，while 不做隐式销毁，
-`{}` body 需用户显式 `%drop` 才按轮回收）
+同日修订循环与 `%drop`：循环不产生 block，`{}` body 需用户显式 `%drop`
+才按轮回收；`%branch` 与 while 改为经 `evaluate` 在当前 env force，
+不分配 result location，结果按 kind 透传）
 
 前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)、
 [03-symbols-locations-matching.md](03-symbols-locations-matching.md)、
@@ -13,13 +14,15 @@
 内核控制流只有两个原语：
 
 - **`break`**：非局部终止，把值写进目标 block 的 self root/result location；
-- **`%branch`**：纯值二分支，选择 then/else prototype 之一求值。
+- **`%branch`**：纯值二分支，选择 then/else prototype 之一，**经 `evaluate`
+  在当前 env force**（不分配 result location、不换 env；结果透传）。
 
 分支 = `%branch` + 匹配（03）；早退、错误传播、资源清理由 break 派生；
 跨协程控制流仍只有 `@`/`\^`（02）。
 语言没有 return、throw、label、defer 原语，内核不认识"错误"概念。
 `if`/`while`/`try`/`catch`/`return`/`defer` 都是 stdlib 宏（05）；
-`while` 的契约归 05，实现在需要时可降为编译器派生 form。
+`while` 是 transparent macro/prototype（经 `evaluate` 跑 body/cond，无
+脚手架、无 env 切换、无内部清理），契约归 05。
 
 ## break
 
@@ -45,29 +48,31 @@ break handle value     !- 显式目标；语法章裁决分隔符 -!
 ## `\this`
 
 `\this` 是当前 block 的**帧 handle**（普通 value），指向该 block 的
-self root/result location。它**不是** location，不能用 `:=` 命名。
+self root/result location。它**不是** location；`:=` dispatcher 只会把它
+当 value auto-box，不会绑成帧内 location。
 
 - 可以复制、存储、捕获；但 handle 有效期绑定其 block 的 frame。
   帧结束后再使用是运行时错误；静态可证明时编译期拒绝；禁止固化到
   comptime 边界。
-- 从 handle 取得临时 view 以读写当前 block 的字段；view 不能存储、
-  捕获、返回或 move（06 §2.4）。
+- 经 handle 的 fat pointer 默认携带 immutable overlay：取得对当前 block
+  字段的临时只读访问；借用不能存储、捕获、返回或 move（06 §2.4）。
+  写自己的字段直接用当前 env 的符号（`\a = v`），不需要 handle。
 - 早退 = `break <体帧handle> v`。`return` 宏（05）在体首取得体帧 handle，
-  嵌套原型经值捕获拿到它；捕获的是 handle，不是 view。
+  嵌套原型经值捕获拿到它；捕获的是 handle，不是借用。
 - `\this` 不能替代别的帧：访问调用者的局部值必须经显式 handle/路径；
   不存在隐式动态环境。
 
 ## 清理协议（RAII）
 
 对象可携带保留方法 `\destroy`（普通字段，约定见 06 §6）。
-`%drop(location)` 是唯一显式销毁原语；`\destroy` 是销毁过程中被调用的
+`%drop`（参数为 location 表达式）是唯一显式销毁原语；`\destroy` 是销毁过程中被调用的
 钩子，不是另一个操作。
 
 **触发点：**
 
 1. **对象销毁**：move 覆盖、block 被 break 终止、父对象销毁、协程结束、
-   显式 `%drop`。销毁顺序：先 `\destroy`（以 self 的 view 调用），再按创建
-   逆序销毁仍 live 的直接子 location，empty 跳过。
+   显式 `%drop`。销毁顺序：先 `\destroy`（以 self 的临时只读借用调用），
+   再按创建逆序销毁仍 live 的直接子 location，empty 跳过。
 2. **block 正常完成**：未命名/未绑定的直接子 location（临时量）逆序销毁；
    已命名的成为 self root 的字段，随对象存活。未绑定的 block result
    location 在**父 block 结束**时统一回收，而不是在 `;` 处。
@@ -91,9 +96,12 @@ self root/result location。它**不是** location，不能用 `:=` 命名。
   纯值判别，cond 为真走 then prototype，否则走 else prototype；不绑定、
   不看 pattern、无 checkpoint。cond 使用哪个 builtin 类型留待 07，
   v1 暂定为 Boolean。
-- 两个 prototype 分别经 `allocate` 在当前 block 求值；**`%branch` 的值就是
-  被选中分支的 result location**（06 §2.5）。因此分支的值是 place，不是
-  value；需要叶子值时写 `$`，需要对象时直接绑定/移动该 location。
+- **`%branch` 透明**：被选中的 prototype 经 `evaluate` 在当前 env force，
+  **不分配 result location、不换 env**；`%branch` 的值就是被选 prototype
+  求值的直接结果，按 kind 透传（value 或 location，由 prototype 体决定）。
+  因此分支不需要"分支结果槽"——之前的"`%branch` 的值是被选中分支的
+  result location"作废：那是旧 `allocate prototype` 模型下的产物，新模型
+  下 evaluate 不新建 location。
 - **if = 二分支糖**（05 宏），直接展开在 `%branch` 上：
   `expr if cond else expr2` ⇒ `%branch(cond, ^expr, ^expr2)`；
   无 else 时 else 分支为 `^()`，v1 不引入 optional 值类型。
@@ -102,11 +110,15 @@ self root/result location。它**不是** location，不能用 `:=` 命名。
   得到 `Bindings | fail`；失败则 `%branch` 到下一分支；成功则先执行提交
   循环（`allocate` + `%bind`，Bindings 落进当前 block），再进入分支体。
   matcher 必须纯；绑定在匹配期间不可见（03 §匹配的内核化简）。
-- **循环不产生 block（核心裁决 16）**。`while` 是 stdlib 宏；循环本身没有
-  自己的 block、self root 或符号作用域。循环体和条件里未包进 `{}` 的部分
-  按**外层 block** 求值，循环不提供新的所有权或符号边界。因此：
-  - 循环体里没有包进 `{}`、也没有显式 `%drop` 的 `allocate` 是外层 block
-    的直接子 location，循环结束后仍然存活到外层 block 结束；循环不销毁它：
+- **`while` 是 stdlib transparent macro/prototype**（经 `evaluate` 跑
+  body/cond）。它**不分配脚手架槽、不换 env、不分配 result location、
+  不内部清理**。body/cond 的求值在调用 while 的 env（当前 block 的
+  self root）里发生，结果直接透传——和 `evaluate` 一样。
+  循环体和条件里未包进 `{}` 的部分按**外层 block** 求值，循环不提供
+  新的所有权或符号边界。因此：
+  - 循环体里没有包进 `{}`、也没有显式 `%drop` 的 `allocate <shape>`
+    是外层 block 的直接子 location，循环结束后仍然存活到外层 block
+    结束；循环不销毁它：
 
     ```
     {
@@ -117,7 +129,7 @@ self root/result location。它**不是** location，不能用 `:=` 命名。
 
   - 同理，循环体里没有 `{}` 的 `:=` 落在外层 block。它在第二轮就是重复
     绑定（03/06 禁止）；需要每轮新名字时必须用 `{}`。
-  - 需要“整个循环一个作用域”时，把 **while 整体**包进 `{}`；这仍然只是
+  - 需要"整个循环一个作用域"时，把 **while 整体**包进 `{}`；这仍然只是
     一个 block，不是每轮一个。
   - `defer` 遵循同一规则：循环体没有 `{}` 时 guard 留在外层 block，
     循环结束后才执行；需要每轮执行时把循环体写成 `{}`（guard 是未绑定
@@ -130,29 +142,26 @@ self root/result location。它**不是** location，不能用 `:=` 命名。
   `(%drop({ body })) while cond`。`%drop` 接收 block 的 result location，
   递归销毁后它变 empty（06 §6）；下一轮重新分配 root。`%drop` 是唯一的
   显式销毁原语，不是 while 的内置规则。
-- **while 不做任何自动销毁**，也不需要识别 body 是不是 block。body 就是
-  普通表达式：`{...}`、`%drop({...})`、`(allocate integer)`……while 只负责
-  条件与迭代；销毁策略由用户表达式显式决定。非 block 体若写
+- **while 不引入额外的循环级销毁规则**，也不需要识别 body 是不是 block。
+  body 就是普通表达式：`{...}`、`%drop({...})`、`(allocate integer)`……
+  while 只负责条件与迭代；销毁策略由用户表达式显式决定。body 作为普通
+  block 完成时，仍按普通 block 规则回收自身未绑定临时量；这不是循环规则。
+  非 block 体若写
   `%drop(allocate integer)`，同样每轮销毁该 location；不写则按裁决 15
   活到外层 block 结束。
 - **不需要额外的包装组合子**。`{}` 不是自动销毁标记，`%drop` 才是销毁
   动作；不新增 `destroy` 操作，`%drop` 是唯一拼写（`\destroy` 是析构钩子，
   不是操作）。
-- **循环自身的脚手架**（`%branch` 的分支结果、尾恢复状态）由 while 的展开
-  自行复用或回收，不得按迭代数泄漏；它们不是用户可见的 block，也不得
-  拥有用户循环体分配出的 location。现在的 `%branch` 总会分配分支结果
-  location，这是 05 必须解决的冲突：要么让结果被丢弃的分支在原 block 中
-  求值，要么引入不建立所有权边界的迭代形式。若无法同时满足，优先保持
-  本节的生命周期规则，改动分支原语；纯 stdlib 展开做不到时，允许把 while
-  定为编译器派生 form——接口与宏契约不变，内核原语集合不增。
-- **没有循环帧 ⇒ 没有内核级“只退循环”**。break 的目标是当前 block 的帧
+- **没有循环帧 ⇒ 没有内核级"只退循环"**。break 的目标是当前 block 的帧
   handle：非 block 体的裸 `break` 退到包含循环的那个 block；`{}` 体的裸
-  `break` 只退到 body block，即结束本轮、while 继续。两种都不是“只退循环”。
+  `break` 只退到 body block，即结束本轮、while 继续。两种都不是"只退循环"。
   若 05 需要 `break`/`continue` 式循环控制，必须由 while 的 stdlib 协议
   显式提供（例如宏注入的 handle）；内核不新增 label、循环帧或循环块。
   v1 以条件退出为准；提前退出 = break 外层 block。
 - **迭代值**：while 不收集结果（旧的 `Sequence` 收集退役）；需要收集时用
-  显式 stdlib collector cell。while 表达式自身的值由 05 固定。
+  显式 stdlib collector cell。while 表达式自身的值由 05 固定；透明透传下
+  它就是最后一次 body 求值的结果（value 或 location），中间每轮的
+  location 仍由调用者 block 拥有，不被 while 内部清理。
 - **生成器协议**（`new` + `\^@` yield，02 验收用例 4）是 stdlib 协议；
   for/map/filter 等均为其消费方式，不进内核。
 
@@ -162,17 +171,18 @@ self root/result location。它**不是** location，不能用 `:=` 命名。
 
 - `value : pattern` 匹配失败 ⇒ 产生 fail 值并 `break` 当前 block 的
   result location；**只终结当前 block 一级**，不自动接力。
-  `:=` 是命名，不是匹配，不产生 fail。
-- **传播 = stdlib `try` 宏**：把代码包成 prototype `allocate` 求值，
+  `:=` 是 stdlib dispatcher（auto-box value 不产生 fail）；只有静态/动态
+  命名错误才报错。
+- **传播 = stdlib `try` 宏**：把代码包成 prototype 用 block 求值（新 env），
   对 result 做形状/值判别——fail 则 break 接力，成功则正常绑定。
-  原料是已有机制（allocate 的控制流能力 + match）。
-- **捕获 = `catch` 宏**：包 prototype `allocate`，判别结果，fail 进 handler。
+  原料是已有机制（block 的控制流能力 + match）。
+- **捕获 = `catch` 宏**：包 prototype 用 block 求值，判别结果，fail 进 handler。
 - **fail 必须可复制**（06 §8.4）：fail 不能拥有资源；`site`/traceback 是
   **冻结快照**，不是活帧 handle。恢复链的打印不触碰已弹出的 frame。
 - **丢弃纪律**：语言不检查被丢弃的 fail（无 `;` 检查、无自动接力）。
-  fail 是 value，直接以 `;` 丢弃；若它是 location，则用 `%drop` 显式销毁，
-  `;` 只丢弃 place、不析构。没有 `_ :=` 这种“绑定 value”写法
-  （`:=` 只命名 location）。lint 可警告被丢弃的 fail 形状值，但不进内核。
+  fail 是 value，直接以 `;` 丢弃合法（core 允许吞错）；若它是 location，
+  则用 `%drop` 显式销毁，`;` 只丢弃 place、不析构。lint 可警告被丢弃的
+  fail 形状值，但不进内核。
 - main 的值为 fail 形状 ⇒ 运行时报告 fail 对象及其 traceback 并退出。
 
 ## `?` 形式
@@ -197,22 +207,27 @@ v ? pattern
 
 ## 词汇表
 
-- 新增原语：`break`、`%branch`、`\this`、`%drop`。
+- 新增原语：`break`、`%branch`、`\this`、`%drop`、`%seal`（03）。
 - 新增约定（非机制）：`\destroy` 清理协议、fail 形状、defer guard、
-  fix/self 递归糖。
+  fix/self 递归糖、while = transparent macro/prototype。
 - 退役：return、throw/try-catch 机制、label、defer 原语、
   break/continue 关键字、while 的 Sequence 收集、循环帧/尾恢复帧、
   独立隐式 result 槽、内核级 fail 概念、内核匹配失败信号与
-  checkpoint/rollback、`;` fail 检查、一切自动接力。
-- 沿用：`@`/`\^`（02）、match 壳 `:`（03）、`\destroy` 命名。
+  checkpoint/rollback、`;` fail 检查、一切自动接力、
+  "`%branch` 的值是被选中分支的 result location"（新模型下经 evaluate
+  透传，不分配 result location）。
+- 沿用：`@`/`\^`（02）、match 壳 `:`（03）、`\destroy` 命名、
+  `evaluate`（02，分支与 while 经它透传）。
 
 ## 与 01/02/03/06 的对接
 
 - **01**：comptime 中 break/销毁语义相同（一个求值器）；
   comptime 的 break 不产生额外阶段规则；owned 树在阶段结束销毁。
-- **02**：帧链跨 allocate 连续 ⇒ break 沿帧链逐层弹，core 只认 block 树、
+- **02**：帧链跨 block 连续 ⇒ break 沿帧链逐层弹，core 只认 block 树、
   无函数边界；根帧焊接 `@`/`\^`；handle 捕获走值复制，无新通道。
-- **03**：`:=` 命名、`:` pattern；`%branch` 是分支底；Bindings 只含 value；
+  `%branch` 与 while 都经 `evaluate` 在当前 env force，不换 env。
+- **03**：`:=` 是 stdlib dispatcher（location/value 分派）；`:` pattern；
+  `%branch` 是分支底，分支经 `evaluate` force；Bindings 只含 value；
   匹配失败是 fail 返回值，不是内核信号。
 - **06**：block 的 self root = result location；break 写入同一个 location；
   `\this` 是 handle；清理/销毁/typed empty/非自有指针按 06；
@@ -234,15 +249,16 @@ v ? pattern
   stdlib 约定。
 - 不写 `%drop` 时，`{}` body 的 root/已命名字段活到父 block 结束；写
   `(%drop({ body })) while cond` 才每轮销毁。非 block 体同理：不写 `%drop`
-  就留到外层 block 结束；while 不做隐式销毁。
+  就留到外层 block 结束；while 不引入额外的循环级销毁规则。
 - `\destroy` 递归深度、循环引用、`\destroy` 中再次 break/出错的行为，
   挂账 06/stdlib 实现。
 - block 字段默认可见；可见性修饰是后续特性（06 核心裁决 14）。
 
 ## 验收用例（自检清单）
 
-1. `r := { a := allocate ^1; break 42 }` ⇒ `r` 绑定 self root/result
-   location；`$(\r)` 为 42；`a` 的 location 随 break 清理销毁。
+1. `r := { a := allocate integer; \a = 1; break 42 }` ⇒ `r` 绑定 self
+   root/result location；`$(\r)` 为 42；`a` 的 location 随 break 清理
+   销毁。
 2. RAII：带 `\destroy` 的资源对象所在 block 被 break 穿过 ⇒
    `\destroy` 被调用；同帧多资源逆声明序调用。
 3. `defer` 展开为未命名 guard location；`;` 不销毁它；
@@ -254,27 +270,32 @@ v ? pattern
 6. `catch` 宏：handler 收到 fail 对象（含冻结 traceback 快照）。
 7. break 至协程根 ⇒ 协程结束，恢复者的 `@` 表达式取得 break 值。
 8. `v ? Exactly(x)` 纯查询返回 Boolean；不执行提交/绑定。
-9. `if` 宏展开为 `%branch(cond, ^then, ^else)`；分支值是被选中分支的
-   result location；无 else 的 else 分支为 `^()`。
+9. `if` 宏展开为 `%branch(cond, ^then, ^else)`；分支经 `evaluate` 在当前
+   env force，不分配 result location；分支值按 kind 透传（value/location）。
+   无 else 的 else 分支为 `^()`。
 10. comptime 中执行含 break/销毁的代码，语义与运行期一致（01）；
     固化时只允许 value/frozen/prototype，且销毁 owned 树。
 11. 循环不产生 block：`{ (allocate integer) while cond }` 结束后
     integer 仍是外层 block 的子 location；把 while 整体包进 `{}` 时，
-    该 block 结束时才销毁。
+    该 block 结束时才销毁。while 经 `evaluate` 跑 body/cond，不分配脚手架。
 12. 循环体 `{}` 未 `%drop`：root/已命名字段活到父 block 结束，每轮只回收
     块内未绑定临时量；写 `(%drop({ body })) while cond` 时每轮销毁 root，
     字段/临时量/defer 按轮销毁；非 block 体写 `%drop(allocate integer)`
-    同样每轮销毁，不写则活到外层 block 结束。while 不做隐式销毁。
+    同样每轮销毁，不写则活到外层 block 结束。while 不引入额外的循环级销毁
+    规则。
 13. 循环体内不带 `{}` 的 `:=` 不能跨迭代重复；带 `{}` 时块内每轮新名字。
     非 block 体的裸 break 退外层 block；`{}` 体的裸 break 只结束本轮。
-    两者都没有内核级的“只退循环”。
+    两者都没有内核级的"只退循环"。
+14. while 透明：`x := while(...)` 走 `:=` dispatcher（value → auto-box /
+    location → 直接 `%bind`）；中间每轮的 location 由 caller block 拥有，
+    while 不内部清理；fail 作为 value 被丢弃是合法的（core 允许）。
 
 ## 待办
 
 - [ ] 05 章宏规格：return / try / catch / if / while / defer 的展开规则
-- [ ] 05 章循环协议：循环自身控制 location 的回收、`%branch` 与“循环不
-      产生 block”的冲突消解；body 销毁由用户显式 `%drop` 表达，while 不
-      处理。
+- [ ] 05 章循环协议：while 作为 transparent macro/prototype 的具体展开，
+      body/cond 经 `evaluate` 跑、结果透传；body 销毁由用户显式 `%drop`
+      表达，while 不引入额外的循环级销毁规则。
 - [ ] 07 章：fail 形状保留字段、Boolean/条件类型、形状与类型检查
 - [ ] break 显式目标的语法分隔符（`break handle value` 的解析）
 - [ ] frame handle 的完整能力面、过期检查与跨 comptime 边界规则

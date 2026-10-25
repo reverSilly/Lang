@@ -65,12 +65,12 @@ comptime 不是值上的属性，而是**求值发生的时机**。
 | 标注 | 含义 | 默认 |
 |---|---|---|
 | `compile` | 强制编译期求值 | 编译器尽力折叠，不保证 |
-| `mutable` | 可变 | 不可变 |
+| `mutable` | location shape 修饰：可写 | 默认 mutable；要 immutable 用 `%seal`（06） |
 
-- `:=` 只命名 location（06），因此不存在 `compile mutable x = ...` 这种
-  旧绑定写法。组合示例：`x := allocate mutable integer` 之后
+- `:=` 是 stdlib dispatcher（06），因此不存在 `compile mutable x = ...`
+  这种旧绑定写法。组合示例：`x := allocate integer`（默认 mutable）之后
   `\x = compile f()`（编译期求值、运行期可写），或
-  `x := allocate ^(compile f())`（编译期求值并固化为不可变初值）。
+  `x := compile f()`（auto-box 成 immutable；编译期求值并固化为初值）。
 - 废弃旧词：`constant`（混淆了时机与可变性）、`variant`（缺省状态无需标注）、
   `comptime`（合成词不自解释）、`static`（C 系历史歧义）。
 - 同一编译器进程中**单次** comptime 求值共享堆，受词法作用域约束；
@@ -81,7 +81,7 @@ comptime 不是值上的属性，而是**求值发生的时机**。
 ```
 compile { ... }              // 元层块：编译期执行（构建脚本等）
 n : compile usize            // 位置约束/pattern：此处要求编译期已知
-size := allocate ^(compile f(x))  // 编译期求值并固化为不可变初值
+size := compile f(x)         // 编译期求值并固化为不可变初值（auto-box）
 ```
 
 ## 验收用例（自检清单）
