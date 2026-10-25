@@ -9,13 +9,19 @@
 > 绑定在 RHS 完成后发生；非自有对象访问走裸指针；`;` 只丢弃、不析构，
 > 未绑定 location 在所属 block 结束时统一回收。旧版本中的“独立隐式
 > result 槽”“view 代替 handle”“只能 move 直接子”“分号处析构”均已废弃。
+> 循环裁决：循环不产生 block；循环体里未包进 `{}` 的 `allocate` 属于外层
+> block，循环不销毁它们。`{}` body 只是普通 block：未 `%drop` 时 root/
+> 已命名字段活到父 block 结束；用户写 `%drop({ body })` 才每轮销毁。
+> while 不特殊处理 body，也不做隐式销毁。
+> `%drop(location)` 是唯一显式销毁原语；`\destroy` 是被它调用的对象钩子；
+> `;` 只丢弃、不销毁。
 
 前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)、
 [03-symbols-locations-matching.md](03-symbols-locations-matching.md)、
 [04-control-flow.md](04-control-flow.md)
 
 范围：location 的所有权、`block` 作为对象字面量、`allocate` 与 `:=` 的分工、
-move / destroy、跨 block 与跨协程转移、comptime 边界和指针的定位。
+move / `%drop`、跨 block 与跨协程转移、comptime 边界和指针的定位。
 本章不解决 05 的宏展开细则与完整的静态类型系统；只固定所有权语义，
 以及 shape 作为“内容当前结构 + 可选约束”的基础规则。
 
@@ -60,7 +66,19 @@ move / destroy、跨 block 与跨协程转移、comptime 边界和指针的定�
     后续设计，不影响本章的所有权规则。
 15. **`;` 只丢弃，不析构。** 丢弃 value 无操作，丢弃 location/place 也不
     销毁它。没有 `:=` 绑定的 location 在所属 block 结束时统一按创建逆序
-    回收析构；显式提前回收用 `drop`。`;` 不缩短生命周期。
+    回收析构；显式提前回收用 `%drop`。`;` 不缩短生命周期。
+16. **循环不产生 block。** `while` 是 stdlib 宏，不分配自己的 self root，
+    也不建立用户可见的符号作用域。循环体里未包进 `{}`、也未显式 `%drop`
+    的 `allocate` 得到外层 block 的直接子 location，循环结束后仍存活到外层
+    block 结束。
+    `{}` body 只是普通 block：未绑定/未 `%drop` 时，root 与已命名字段作为
+    父 block 的临时量活到父 block 结束；用户写 `%drop({ body })` 才在每轮
+    结束销毁它。while 不特殊处理 body，也不做隐式销毁。内核没有“循环体
+    自动析构”规则；`;` 和循环边界都不提供回收点。
+17. **`%drop(location)` 是唯一显式销毁原语。** 它递归销毁目标拥有的整棵
+    location 子树，目标 location 变 empty（typed empty），但**不从父 block
+    删除**。绑定不参与销毁：目标上的 symbol 保留并指向 empty。`\destroy`
+    是对象上的析构钩子，不是另一个销毁操作；`;` 仍然只丢弃。
 
 ## 一、本体
 
@@ -101,8 +119,9 @@ R4. 一个 location 只能在它属于当前 block 的所有权子树时被 move
 
 R5. value 可复制；location/对象绝不隐式复制。深拷贝只能经显式 `clone`。
 
-R6. empty location 不可读、不可再 move；销毁时跳过。empty 可以作为 move
-的目标（初始化）；有显式 shape 约束时，目标内容必须满足约束。
+R6. empty location 不可读、不可再 move；显式 `%drop` empty 报错，递归清理
+时跳过。empty 可以作为 move 的目标（初始化）；有显式 shape 约束时，目标
+内容必须满足约束。
 
 R7. symbol 绑定不产生所有权。一个 symbol 的消失不会销毁 location；
 一个 location 的销毁也不会因为 symbol 的存在而延迟。
@@ -176,6 +195,8 @@ R_B2 的直接子 location = B2 的字段
 - 若 `R_B` 没有被父 block 绑定，它本身就是父 block 的临时 location；
   在父 block **结束时**随未绑定 location 统一回收，其字段随之销毁。
   `;` 不会提前销毁它（核心裁决 15）。
+- 循环体 `{}` 与普通 block 相同：未 `%drop` 时 `R_B` 随父 block 结束回收；
+  写 `%drop({ body })` 时由该调用提前销毁它（§2.6）。
 - 若 `R_B` 被绑定为 `p`，其寿命属于父 block，直到父 block 结束或被 move。
 
 ### 2.3 绑定 block
@@ -230,6 +251,28 @@ p := {
 - result 默认无显式 shape 约束；若 `R_B` 显式带约束，最终内容必须满足它，
   否则是 shape/类型错误。break 不额外改变 block 对象以外的形状。
 - `result` 是普通用户字段名，与 `R_B` 没有命名关系；`R_B` 没有源码标识符。
+
+### 2.6 循环
+
+- 循环表达式不是 block：没有 self root，不新增 `\this` 目标，不是 `:=`
+  的附着对象，也不产生 block 结束时的自动回收。它只是 stdlib 宏展开出的
+  控制流。
+- 循环体里未包 `{}` 的 `:=` 落在外层 block，第二轮就是重复绑定，因此需要
+  每轮新名字时必须把循环体写成 `{}`。未包 `{}`、也未显式 `%drop` 的
+  `allocate` 同样属于外层 block，存活到外层 block 结束（`;` 和每轮结束都
+  不销毁）。
+- 循环体是 `{}` 时，它仍按 §2.1 分配 result location；未绑定/未 `%drop`
+  时，root 与已命名字段作为父 block 的临时量活到父 block 结束。每轮 block
+  完成只回收块内未绑定临时量（含 `defer` guard）；已命名字段不在此列。
+- 需要每轮销毁整个 body block 时，用户写 `(%drop({ body })) while cond`。
+  `%drop` 接收 block 的 result location，递归销毁后它变 empty；下一轮重新
+  分配 root。该 root 通常是未绑定临时量，其 empty 槽可按 §6 被实现物理
+  回收，因此不会按迭代积累空槽。while 不识别 body 语法、不自动销毁，
+  也不持有 body root。
+- 非 block body 若用户写 `%drop(allocate integer)`，同样每轮销毁该
+  location；不写则按裁决 15 活到外层 block 结束。
+- while 自己的控制状态/分支结果不得成为用户循环体 allocation 的所有者：
+  它们的复用/回收是 05 的实现契约，不能表现为用户可见的 block。
 
 ## 三、allocate 与 :=
 
@@ -307,7 +350,8 @@ x := $(...)                        !- 非法：value 不是 location -!
   不属于自己的子树。
 - 当前 block 的直接子包括：`allocate` 的结果、子 block 的 result location、
   已绑定的字段等；孙位置通过 root 的路径访问。
-- move 后源槽变 empty：槽还在、symbol 还在，但读、再次 move、drop 都是错误。
+- move 后源槽变 empty：槽还在、symbol 还在，但读、再次 move、`%drop`
+  都是错误。
 - 被 move 出的位置保留其 shape/尺寸约束（typed empty），父对象的布局继续
   有效；empty 可接收同一约束的后续 move。没有显式约束时，empty 不保留内容
   形状，只保留“曾占用的尺寸”作为实现选项。
@@ -355,7 +399,7 @@ x := $(...)                        !- 非法：value 不是 location -!
 | read `$p` | p 是 value 叶子 | 返回副本；object location 不可整体读 |
 | move `\p` | p 在当前 block 所有权子树内、live；目标槽由接收方预分配 | p 变 typed empty；目标获得子树；无约束不查形状，有显式约束才查 |
 | assign `\p = v` | p 是 mutable location | 先销毁旧内容，再写入 value；有 shape 约束则检查 |
-| drop `\p` | p 在当前 block 所有权子树内、live | 递归销毁，p 变 empty |
+| `%drop(\p)` | p 在当前 block 所有权子树内、live | 递归销毁 owned 子树，p 变 empty |
 | clone `\p` | 图内只有 value/可克隆资源 | 新的独立 owned 子树 |
 | view | 经 `\this` 等帧 handle，在同步调用期间 | 临时访问，禁止存/捕获/返回/move |
 | freeze `\p` | 仅编译期或受限构造 | 转 frozen，失去所有权与析构 |
@@ -365,20 +409,52 @@ x := $(...)                        !- 非法：value 不是 location -!
 
 - 静态可判定：绑定 value、绑定非直接子、复制 owned 对象、移动 view/frozen、
   显式 shape 约束不兼容；
-- 动态需检查：读取 empty、重复 move、使用已销毁对象、使用过期帧 handle；
+- 动态需检查：读取 empty、重复 move、重复 `%drop`、使用已销毁对象、
+  使用过期帧 handle；
 - 无显式 shape 约束时不做形状检查；容量/布局不是语义错误；
 - 指针失效不检查，解引用为 UB。
 
 ## 六、销毁
+
+`%drop(location)` 是唯一显式销毁原语，返回 unit。参数必须是当前 block
+所有权子树内（直接子或后代）的 live location；对 value 是类型错误，对
+empty 是错误（递归清理跳过 empty）。
 
 销毁一个 owned 对象时：
 
 1. 标记为 destroying，拒绝重入；
 2. 若存在 `\destroy` 字段，以 self 的 view 调用它；
 3. 按创建逆序销毁仍 live 的直接子 location；empty 跳过；
-4. 释放 root，状态变 empty。
+4. 释放 root 的内容，状态变 empty（若有显式 shape 约束，保留为 typed empty）。
 
-约束：
+目标与后代：
+
+- 语义上，目标是唯一保留为 empty 的 location；它在父 block/对象中的槽位
+  不变，symbol/path 仍解析到它，但读、再 move、再 `%drop` 报错。
+- 后代随目标内容一起销毁，不作为空的嵌套子槽保留在 empty 目标里。
+- 若目标是某个 live 祖先的后代（如 `%drop(\p.q)`），`q` 本身作为 empty
+  槽留在 `p` 中（tombstone），它的后代消失；之后销毁 `p` 时跳过 empty `q`。
+- 对未绑定临时量的 empty 槽，实现可在无安全引用时物理回收槽位；绑定
+  location/对象字段保留 empty 槽以维持身份与形状。
+
+绑定：
+
+- 绑定不在 location 内部，销毁不删除任何 symbol。命名目标的 symbol 保留
+  并指向 empty；可重新初始化（mutable / typed empty）后继续使用。
+- 后代的符号属于已结束的内层 block；`:=` 只命名当前 block 的直接子，
+  因此不存在仍活着、指向被销毁后代的 symbol。
+
+值/引用：
+
+- value、frozen 引用、cell/GC handle、指针都不是 owned location，不参与
+  递归销毁；指针指向被销毁子树后失效（解引用 UB），frozen/GC handle
+  不受影响。
+- `\destroy` 钩子不是 `%drop` 的替代：它是销毁过程中被调用的字段；
+  直接调用它不等于销毁。
+- 循环里显式写 `(%drop({ body })) while cond` 即每轮销毁 body block 的
+  result location；while 不做隐式销毁（§2.6）。
+
+`\destroy` 约束：
 
 - `\destroy` 不得 move 出 self 或其字段；
 - 不得 `break` 离开，不得挂起，不得创建新协程；
@@ -393,10 +469,13 @@ x := $(...)                        !- 非法：value 不是 location -!
   只是不再使用，不会被 `;` 销毁。
 - `:=` 产生 unit，所以 `x := allocate ...; rest` 不会在分号处销毁 x。
 - 未绑定的 location（临时量）在**所属 block 结束时**统一按创建逆序析构；
-  已绑定字段的销毁只由 block 结束/对象销毁/`drop` 负责。
-- 需要提前回收时显式 `drop \p`；`;` 不缩短任何 location 的生命周期。
+  已绑定字段的销毁只由 block 结束/对象销毁/`%drop` 负责。
+- 需要提前回收时显式 `%drop(\p)`；`;` 不缩短任何 location 的生命周期。
 - 因此 `;` 是纯序列点，不再承担 RAII 的“语句级析构”职责；资源释放的
   默认边界是 block/对象，而不是分号。
+- 循环不是 block：`;` 与“循环结束”都不提供每轮回收点。回收点只有用户
+  显式 `%drop`（如 `%drop({ body })`）和外层 block 结束；while 不做隐式
+  销毁。
 
 `break`：
 
@@ -502,7 +581,7 @@ move 不指定目标 block，只指定源。目标槽由接收方预先分配：
 - 指针是 value，指向 location，但不拥有、不保活；
 - 访问不属于当前所有权子树的对象使用指针；view 只从帧 handle 取得，
   用于自有对象的临时访问；
-- 对象 move/drop 后指针失效，解引用是 UB；
+- 对象 move/`%drop` 后指针失效，解引用是 UB；
 - 安全子集 = owned location + view + cell；指针在安全子集之外。
   标准库可以在内部使用指针并以不变量保证正确性；用户代码使用指针
   即离开安全子集。
@@ -527,7 +606,7 @@ move 不指定目标 block，只指定源。目标槽由接收方预先分配：
 ## 十、检查策略
 
 - 静态能证明的：所有 move/use 在编译期检查，零运行时状态。
-- 动态路径：location 携带 empty 状态检查；move/read/drop 时 trap。
+- 动态路径：location 携带 empty 状态检查；move/read/`%drop` 时 trap。
 - shape 检查只对显式约束进行：有约束静态可证则编译期检查，
   否则运行时检查；无约束不检查形状，也不存在容量检查。
 - 存储布局选择（内联/装箱/重分配）不改变语义；静态布局失败只影响优化。
@@ -580,6 +659,15 @@ move 不指定目标 block，只指定源。目标槽由接收方预先分配：
     统一回收。`:=` 产生 unit，不销毁绑定字段。
   - `%branch` 的值是被选分支 prototype 的值（即其 result location）；
     `if` 由 `%branch` 派生。
+  - 循环不产生 block：循环体未包 `{}` 的 `allocate`/`:=` 属于外层 block。
+    `{}` body 是普通 block；未 `%drop` 时 root/已命名字段随父 block 结束。
+    用户写 `(%drop({ body })) while cond` 才每轮销毁；while 不做隐式销毁。
+  - `%drop` 是唯一显式销毁原语：递归销毁 owned 子树，目标变 empty，
+    bindings 不删除，后代随内容消失；`\destroy` 是钩子不是操作。
+  - 裸 `break` 没有“只退循环”的目标；循环控制/退出协议由 05 的 stdlib
+    提供，内核不新增 label 或循环帧。
+  - `%branch` 的分支结果 location 在循环中必须由 while 每轮回收；05 需
+    解决它与“循环不产生 block”的冲突。
   - `\destroy` 的签名和限制按第六章；fail 必须可复制，traceback 是冻结快照。
 
 ## 十二、验收用例（自检清单）
@@ -606,7 +694,7 @@ move 不指定目标 block，只指定源。目标槽由接收方预先分配：
 10. module 为 frozen：多协程只读共享；写或附加 `\destroy` 拒绝。
 11. comptime 构造可变 location 并试图固化到运行期：编译错误；
     只读数据、frozen、prototype/code 可固化。
-12. 裸指针指向 location；对象 move/drop 后解引用为 UB（文档断言）。
+12. 裸指针指向 location；对象 move/`%drop` 后解引用为 UB（文档断言）。
 13. 静态可证明的 move 路径无运行时检查；动态路径 use-after-move trap。
 14. `p := { result := allocate ^7 }`；`$(\p.result)` 为 7；
     `result` 是普通字段，没有隐式 result 概念。
@@ -616,6 +704,21 @@ move 不指定目标 block，只指定源。目标槽由接收方预先分配：
     临时 block 对象中的 empty 字段随对象一起释放。
 17. 块内 `\this` 取得 view 读取字段；view 不能存进字段/捕获/返回；
     `\this` handle 在块结束后使用是运行时错误。
+18. `{ (allocate integer) while cond }`：integer 是外层 block 的子
+    location，循环结束后仍可经路径访问，外层 block 结束时销毁。
+19. 循环体 `{}` 未 `%drop`：root/已命名字段活到父 block 结束；每轮只回收
+    块内未绑定临时量（含 defer guard）。写 `(%drop({ body })) while cond`
+    时每轮销毁 body root，已命名字段/临时量/defer 都按轮销毁；while 不做
+    隐式销毁。非 block 体不回收，其 allocation 存活到外层 block 结束。
+20. 循环体内不带 `{}` 的 `:=` 不能跨迭代重复；带 `{}` 时每轮新名字；
+    `defer` 只有包在 `{}` 循环体里才每轮执行。
+21. `p := { a := allocate ^1 }`；`%drop(\p)` 后 p 变 empty，symbol p 保留，
+    `$\p` trap，重复 `%drop(\p)` 报错；字段 a 与 `\destroy` 钩子按第六章
+    处理，后代消失。
+22. `%drop(\p.q)`（q 是 live 对象 p 的后代）：q 变 empty 槽留在 p 中
+    （tombstone），q 的后代消失；p 仍 live；之后 `%drop(\p)` 跳过 empty q。
+23. `%drop` 对 value 是类型错误；对 empty 报错；未绑定临时量的 empty 槽
+    可被实现物理回收，绑定 location/对象字段保留 empty 槽。
 
 ## 十三、待办 / 未决
 
@@ -634,4 +737,8 @@ move 不指定目标 block，只指定源。目标槽由接收方预先分配：
 - [ ] 析构函数挂起、失败、循环引用与协程 GC 终结的细则。
 - [ ] frozen 的运行期构造与生命周期（v1 仅 comptime frozen）。
 - [ ] stdlib wrapper 对调用结果的契约：暴露 location 还是 value。
-- [ ] `allocate` / `move` / `drop` / `clone` / `freeze` / 指针取址的最终语法拼写。
+- [ ] while 的循环协议：自身控制 location 的回收；body 销毁已由用户显式
+      `%drop` 表达，while 不处理。
+- [ ] `%drop` 的正式语法（当前 `%drop(location)` 为暂定）、body 值带出时的
+      先 move 再 `%drop`。
+- [ ] `allocate` / `move` / `%drop` / `clone` / `freeze` / 指针取址的最终语法拼写。

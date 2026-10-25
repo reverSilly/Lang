@@ -40,11 +40,14 @@ self root 就是它的 result location（06 §2.5），对象是一棵 location 
 | `\p.a` | location 路径/子 location | location |
 | `$\p.a` | 读出叶子 location 的 value | value |
 | `&p.a` | 取 location 的指针（拼写待定） | value (pointer) |
+| `%drop(\p.a)` | 递归销毁 location 及其 owned 子树 | unit（操作） |
 
 - `$`：location → value（读取）；只对叶子合法，object location 不能整体读。
 - `=`：mutable location × value → 写；表达式的值为被写的 location。
 - `:=`：命名一个当前 block 的直接子 location；不分配、不移动、不产生
   可丢弃值。绑定在 RHS 完全求值之后发生。
+- `%drop`：唯一显式销毁原语；递归销毁 owned 子树，目标变 empty，不从
+  父 block 删除，绑定不删除。语义见 06 §6。
 - `.`：location 路径；文档中 `p.a` 是 `\p.a` 的简写，正式源码必须显式
   解析 symbol（语法章可再决定是否放宽）。
 - 读取必须显式写 `$`；已接受其噪音。指针解引用写作 `$ptr`，兑现为
@@ -64,7 +67,7 @@ self root 就是它的 result location（06 §2.5），对象是一棵 location 
 
 ## 绑定与 pattern
 
-只有两个操作，方向固定：
+绑定与 pattern 只有两个操作，方向固定：
 
 ```
 x := location               !- 命名；RHS 是当前 block 的直接子 location -!
@@ -81,9 +84,12 @@ value : pattern             !- 可反驳约束；失败产生 fail 并 break 当
   - `$\a`（任意 value）→ 按值相等匹配，即 `Exactly`；
   - `a+1`、stdlib 构造的 pattern value、shape、字面量 → 由 stdlib
     matcher 处理；
-  - **对象 pattern 由 stdlib 构造器构建**：block 是对象/帧，不是 value
-    literal；`{x, y}` 只是概念简写，源码中由 stdlib 的对象 pattern
-    构造器生成（具体名字见 stdlib 章）。语法层不新增 pattern 字面量；
+  - **对象 pattern 是 stdlib 构造出的普通 value，不是字面量**。block `{}`
+    是对象/帧，不是 value literal，因此对象 pattern 不能借用 block 语法
+    书写；源码里写的是构造器调用（例如 `ObjPattern(a, pa, b, pb)`，
+    名字与参数形状由 stdlib 章定），实参是 symbol value 与子 pattern
+    value。`{...}` 在源码中永远只表示 block/对象，任何位置都不表示
+    pattern。语法层不新增 pattern 字面量；
   - `\a`（location）**不是 v1 pattern**：location 不可作为 value 传给
     match。需要引用语义时使用指针（不安全）或显式 alias 特性（后续）。
 - pattern 的匹配是纯函数 `match(pattern, subject) -> Bindings | fail`
@@ -118,7 +124,7 @@ match(pattern, subject) -> Bindings | fail
 - 退役：内核 `%match`、checkpoint/rollback、匹配失败信号、全局可重定义
   `\$match`、`\a` location pattern。
 
-## 编译器内建原语（最小集，共 5 个）
+## 编译器内建原语（最小集，共 6 个）
 
 判据：需要触碰语言私有结构（帧树、对象布局）的必须内建；
 只操作 value 的全部下放 stdlib。
@@ -130,12 +136,15 @@ match(pattern, subject) -> Bindings | fail
 | 基础类型的 bits 相等（每种 builtin 一个比较原语） | value 比较的底 |
 | `%field(place/object, symbol-value)` → location | 动态字段访问 |
 | `%branch(cond, then-prototype, else-prototype)` | 纯值判别分支，一切分支的底 |
+| `%drop(location)` → 递归销毁 owned 子树，目标置空 | 触碰所有权状态、析构钩子与对象布局 |
 
 - `%branch` 不做绑定、不看 pattern、无 checkpoint：cond 为真走 then，
   否则走 else。`if`、`?`、match 分派、`while` 全部在其上由 stdlib 展开。
 - **cond 的具体 builtin 类型（cond-type）留待 07；v1 暂定 Boolean。**
 - `%field` 作用于自有对象的 place/view，或经指针兑现的 location；
   非自有对象访问必须显式使用指针。
+- `%drop` 是唯一暴露给用户的销毁原语；`\destroy` 是销毁过程中调用的
+  对象钩子，不是另一个操作。
 
 ## 标准库提供（全部可推导）
 
@@ -144,7 +153,7 @@ match(pattern, subject) -> Bindings | fail
 - 相等 `eq`：对 value/frozen 递归；对象比较走 `%field`/指针，属不安全面；
 - `Exactly(x)`、`If` 守卫（= 调用闭包）；
 - 对象/序列 pattern 构造器（具体名字由 stdlib 章定；语法层不内建
-  对象 pattern literal）；
+  对象 pattern 字面量）；
 - 形状匹配（comptime 反射生成检验代码，同 `derive` 机制）；
 - 选择 `p1 | p2`、合取 `p1 & p2` 组合子；
 - 可逆算术 pattern（`a+1 : 3` 绑 `a` 到 2）：stdlib 定义“可逆操作”协议，
@@ -190,23 +199,24 @@ owned location + view + cell；指针是不安全特性。非自有对象的读�
 ## 词汇表
 
 - 新增/明确：symbol（value）、location、pointer、`%bind`、`%field`、
-  `%branch`、`\this`（帧 handle）。
+  `%branch`、`%drop`、`\this`（帧 handle）。
 - 运算符：`\`（解析）、`$`（读/指针兑现）、`=`（写）、`:=`（命名）、
-  `:`（pattern 约束）。
+  `:`（pattern 约束）、`%drop`（销毁）。
 - 退役：内置 pattern 类、全局 `\$match`、`` ` `` 取左值、左值类型一等公民、
   `readonly`、“标识符可重绑定/销毁”、内核 `%match`、checkpoint/rollback、
-  匹配失败信号、`pattern := value`、`\a` location pattern。
+  匹配失败信号、`pattern := value`、`\a` location pattern、`destroy` 操作；
+  `drop` 的暴露拼写统一为 `%drop`（`\destroy` 只是钩子）。
 - 留作后续设计：`%branch` 的 cond-type、`\` 的转义/解析双角色、
-  指针取址拼写、可逆操作协议、matcher 注册机制。
+  指针取址拼写、可逆操作协议、matcher 注册机制、`%drop` 的正式语法。
 
 ## 已知边界（诚实清单）
 
 - 读取噪音（`$\a`）：已接受的取舍。
 - `\` 同时承担转义与解析两个角色：语法章裁决（候选：换符号；
   或规定转义只发生在字面量/标识符内部，运算符只在前缀位置）。
-- 对象 pattern 不内建语法：由 stdlib 构造器生成 pattern value；
-  结构化匹配/绑定受限于 value + frozen，自有对象跨字段解构需要指针或
-  显式 move 协议，v1 不提供。
+- 对象 pattern 不内建语法：由 stdlib 构造器生成 pattern value；`{...}`
+  永远只表示 block/对象，不是 pattern。结构化匹配/绑定受限于 value +
+  frozen，自有对象跨字段解构需要指针或显式 move 协议，v1 不提供。
 - 动态绑定（pattern 里放计算出的 symbol 值）合法化 = 动态作用域回归风险；
   默认允许但记为边界，必要时由 lint 限制。
 - matcher 纯度不由内核强制；“纯”是失败残留语义的契约。
@@ -227,6 +237,9 @@ owned location + view + cell；指针是不安全特性。非自有对象的读�
    （试图绕开 `%bind` 的 matcher 无法引入新 symbol 绑定）。
 9. `:=` 在 RHS 完成后绑定；块内用 `\this` 访问字段，不暴露半构建 location。
 10. 非自有对象的结构匹配必须显式使用指针；安全匹配范围 = value/frozen。
+11. `%drop(\p)` 递归销毁 owned 子树，p 变 empty 但 symbol 保留；
+    `%drop` 对 value 是类型错误，对 empty 报错；`\destroy` 只是被调用的
+    钩子，不是另一个销毁操作。
 
 ## 待办
 
@@ -234,4 +247,5 @@ owned location + view + cell；指针是不安全特性。非自有对象的读�
 - [ ] 语法章：`\` 的转义/解析双重角色、指针取址拼写
 - [ ] 07 章：Boolean/cond-type、shape 与静态类型检查
 - [ ] stdlib 章：可逆操作协议、matcher 注册机制、对象匹配的 unsafe API
+- [ ] `%drop` 的正式语法与 place 参数形式
 - [ ] 指针的取址运算符形式与 GC 根规则
