@@ -1,335 +1,121 @@
-# Symbol / Location / 匹配 设计记录
+# 03 - 本体、符号、位置与模式匹配
 
-状态：草案（2026-10-25 按 06 的 location 模型回写；同日精简 kinds 为
-value/location，mutability 并入 shape，`:=` 改为 stdlib dispatcher）
+前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)
+后续：[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)
 
-前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)、
-[06-ownership.md](06-ownership.md)
+## 一、核心原则：二元结果本体
 
-## 核心原则
+求值结果在宇宙里只有两种基本类别（Kind）：**`value`** 与 **`location`**。
 
-宇宙里只有两种 result kind：**value 与 location**。
+1. **`value`（纯值）**：
+   - 永远不可变、无身份、无生命周期、无所有权、可自由按位复制（bit-copy）、可跨阶段固化。
+   - **子类**：
+     - 基础类型值（`integer`、`boolean`、`bits` 等）；
+     - **`symbol`**：一等原子值（类似 Lisp symbol）。源码中的裸标识符 token `a` 即 `symbol` 字面量；可动态构造、可参与模式匹配，不是编译期专属概念；
+     - **`prototype`**：`^Expr` 产生的纯代码值；
+     - **`handle`**：帧 handle（`\this`）与协程 handle（`new` 返回值、`\^`）；
+     - **`pointer`**：指向 `location` 的地址凭证（瘦指针与胖指针），不拥有目标、不保活；
+     - **`frozen`**：编译期或受控冻结产生的只读对象快照；
+     - **`fail`**：表示错误的普通值。
+2. **`location`（存储位置 / 格子）**：
+   - 由 `allocate <shape>` 或 `block proto` 产生，持有内容（叶子 `value` 或子 `location` 树）。
+   - 具有唯一身份、所有权状态（`uninitialized` / `live` / `empty`）与固定契约（可选 `shape` 约束 + `mutability`）。
+   - **`location` 绝不可作为 `value` 传递或隐式复制**。
 
-- **value**：纯不可变数据，可传递、可固化、可 bit-copy，无身份与生命周期。
-  子类（按 shape 分）：
-  - 基础值：integer、symbol、boolean 等；
-  - **pointer**：指向 location 的可复制 value，不拥有、不保活、不检查有效性；
-  - fail、frozen 对象、prototype/code 值。
-- **location**：`allocate <shape>` 或 block 的 self root 产生的格子，
-  持有内容（value 或子 location）。属性：标识、当前内容、所有权状态、
-  **shape（含 mutability）**。location 不可作为 value 传递；要把它"借给"
-  别处用 pointer（不安全）或显式 alias（后续）。
-- **place**（`\p`、`p.field`）不是 kind，是指向 location 的路径语法，
-  求值得到 location。**view 不再是独立 kind**：借用经 fat pointer 实现，
-  其携带的 shape 可与原 location 不同（含把 mutable 叠加为 immutable
-  的只读借用），见 §指针。
+一个 `block` 帧就是一个容器 `location`（`self root`），内部持有若干直接子 `location` 以及一张 `symbol → location` 的符号映射表。
 
-**symbol** 是一等原子 value（类似 Lisp symbol）。标识符 token 即 symbol
-value 字面量；可用于 pattern matching，可动态构造；不是编译期概念。
+## 二、组合式前缀记号（零模式切换）
 
-一个 block 持有若干 location + 一张 `symbol → location` 映射表；block 的
-self root 就是它的 result location（06 §2.5），对象是一棵 location 树。
+语言采用严格自底向上的组合算子，任何标识符在任何位置含义恒定，不存在“左值模式/右值模式/模式匹配模式”的切换：
 
-### 形状与 mutability
+| 写法 | 运算分解 | 含义 | 结果类别 |
+| :--- | :--- | :--- | :--- |
+| `a` | 原子字面量 | `symbol` 值 `'a'` 本身 | `value` (`symbol`) |
+| `\a` | `\` 作用于 `a` | 将 `symbol` 值沿当前帧解析为对应的 `location`（支持动态计算出的 symbol：`\(expr)`） | `location` |
+| `$\a` | `$` 作用于 `\a` | 从叶子 `location` 读出其存放的 `value` 副本 | `value` |
+| `\p.a` | `%field(\p, a)` | 访问 `location` `\p` 下名为 `a` 的子 `location` | `location` |
+| `$\p.a` | `$` 作用于 `\p.a` | 读取子 `location` `\p.a` 的 `value` | `value` |
 
-- **shape 是内容/对象的当前结构 + mutability 的乘积**，由内容决定。
-  shaped location 的 mutability 在 shape 里；unshaped location 无 shape
-  约束，shape+mutability 跟随当前内容，empty 时无 shape 无 mutability。
-- **shape 约束是可选的静态契约**，不是 location 的固有属性。shaped
-  location 的 mutability 由 shape 指定（默认 mutable，要 immutable 用
-  `%seal`）；unshaped location 的 mutability 跟随内容。
-- 显式约束在 empty 时保留；empty 只能按该约束接收内容。
-- block/对象形状是动态的；block 的 self root 是 unshaped（必然——
-  body 求值前不知道会装什么），默认 mutable，可单向 `%seal` 为 immutable。
-- 存储布局（内联、装箱、重新分配）属于实现，不属于 shape 语义。
+- **`\`（解析算子，`symbol → location`）**：在当前帧符号表中查找 `symbol` 对应的 `location`。
+- **`$`（读取/兑现算子）**：
+  - 作用于存储叶子的 `location`：读出其 `value`（含子 `location` 的复合对象不可用 `$` 整体读出为 `value`，只能按字段访问、移动或克隆）；
+  - 作用于 `pointer` value（`$ptr`）：在当前求值环境现场兑现出被指向的 `location`（若要继续读值则写 `$($ptr)`）。
 
-## 记号
+## 三、三大“内核 Location 原语 × 标准库分派器”对偶
 
-| 写法 | 含义 | 类别 |
-|---|---|---|
-| `a` | symbol value 本身 | value |
-| `^p` | 取 p 的 prototype value（延迟形态） | value (prototype) |
-| `evaluate proto` | 在当前 env force 一个 prototype value | 透传（value/location） |
-| `allocate <shape>` | 在当前 block 新建空 location（默认 mutable） | location |
-| `new proto` | 在新协程 force prototype | 协程 handle（value） |
-| `\a` | 把 symbol 沿帧树解析为 location | location |
-| `\p.a` | location 路径/子 location | location |
-| `$\p.a` | 读出叶子 location 的 value | value |
-| `&p.a` | 取 location 的指针（拼写待定） | value (pointer) |
-| `%drop(loc-expr)` | 递归销毁 location 及其 owned 子树 | unit（操作） |
-| `%seal(loc)` | 单向 mutable → immutable；对已 immutable 是 no-op | unit（操作） |
+为了保持编译器内核最小化，内核状态修改原语**只接受 `location`**；而面向用户的常用操作符（`:=`、`=`、`@`）全部是标准库提供的轻量 **Kind-Dispatcher**，负责按右操作数是 `location` 还是 `value` 进行分派：
 
-- `$`：location → value（读取）；只对叶子合法，object location 不能整体读。
-- `=`：stdlib dispatch（基础类型有内建 assign）；对 bit-copyable shape
-  的 value 做 bit-copy，销毁旧内容，location 标识/所有权/shape 不变。
-  非 bit-copyable 不能 `=`（用 move/clone）。表达式的值为被写的 location。
-- `:=`：stdlib dispatcher（见 §绑定与 pattern）。不分配、不移动、不产生
-  可丢弃值。绑定在 RHS 完全求值之后发生。
-- `%drop`：唯一显式销毁原语；参数是产生 location 的表达式（place path、
-  block 字面量、`allocate` 的结果等），先求值出 location。递归销毁 owned
-  子树，目标变 empty，不从父 block 删除，绑定不删除。语义见 06 §6。
-- `%seal`：location 系统原语，单向 mutability mutable→immutable。只对
-  mutability = mutable 的 location 合法（含 unshaped 跟随成 mutable 的情况）；
-  对已 immutable 是 no-op。shaped immutable location 由 shape 直接指定，
-  不经 `%seal`。shape 直接操作（含 immutable→mutable 等不安全变更）留作
-  unsafe 逃生口，拼写待定。
-- `.`：location 路径；文档中 `p.a` 是 `\p.a` 的简写，正式源码必须显式
-  解析 symbol（语法章可再决定是否放宽）。
-- 读取必须显式写 `$`；已接受其噪音。指针解引用写作 `$ptr`，兑现为
-  location，再读需 `$($ptr)`；拼写待语法章裁决。
+| 领域 | 编译器内核原语（仅操作 `location`） | 标准库分派器（接受 `location \| value`） |
+| :--- | :--- | :--- |
+| **1. 命名绑定** | **`%bind(symbol, loc)`**：将当前 block 下尚未绑定的直接子 `loc` 挂入当前帧符号表，返回 `()` | **`x := rhs`**：<br>• 若 `rhs` 为当前块直接子 `location` → 直接 `%bind(x, rhs)`；<br>• 若 `rhs` 为 `value` → 在当前块 `allocate` 一个不可变空槽、拷贝填入 `rhs`、再 `%bind`（Auto-box）；<br>• 若 `rhs` 为只读借用 → 静态/动态报错 |
+| **2. 写入与移动** | **`%move(dst_loc, src_loc)`**：将当前块所有权子树内的 `src_loc` 整棵移入 `dst_loc`，`src_loc` 置为 `empty`，返回 `()` | **`\dst = rhs`**：<br>• 若 `rhs` 为 `location` → 调用 `%move(\dst, rhs)`（所有权转移，不复制）；<br>• 若 `rhs` 为 `value` → 调用标准库 `copy`（基础类型调内建按位写，复合类型调派生或自定义 copy）写入 `\dst` |
+| **3. 协程传递** | **`%resume(target, src_loc)`**：原子地将 `src_loc` `%move` 进 `target` 的 `\in`、设 `target` 的 `\^` 为本协程、挂起并切换；恢复后返回本协程的 `\in` | **`target @ rhs`**：<br>• 若 `rhs` 为 `location` → 直接 `%resume(target, rhs)`（跨协程移动子树）；<br>• 若 `rhs` 为 `value` → 装入临时 location 后调用 `%resume(target, temp_loc)`；<br>• 均返回本协程醒来时的 `\in` location |
 
-## 可变性与所有权
+这一对偶带来的核心性质：
+- **字面区分 Copy 与 Move**：`\b = $\a` 显式用 `$` 读出了 `value`，因此是 **Copy**（`\a` 保持 `live`）；`\b = \a` 未写 `$`，右操作数是 `location`，因此是 **Move**（`\a` 变 `empty`）。全语言无需单独的 `move` 关键字。
+- **绑定结果一致性**：由于新建 `location`（无论是 `allocate` 还是 `block`）默认契约均为 `immutable`（允许 `uninitialized → live` 初始化一次，见 [05-ownership.md](05-ownership.md)），`x := 1`（走 value auto-box）与 `p := { a := 1 }`（走 location 直接 `%bind`）得到的 `x` 与 `p` **全部是一致的 `live` + `immutable` location**。
 
-- mutability 是 **shape 的一部分**，不是 location 的独立属性。
-  shaped location 的 mutability 由 shape 指定；unshaped location 跟随内容。
-- `allocate <shape>` 默认 mutable；要 immutable 用 `%seal`。block 的
-  self root 是 unshaped 默认 mutable；可经 `%seal` 单向冻结为 immutable。
-- **存储 mutability 不沿路径继承**：一个 immutable location 可以有
-  mutable 字段；每个字段是独立 allocate 的 location（06 §4）。
-- **只读借用经 fat pointer**：fat pointer 携带的 shape 可与原 location
-  不同，把 mutable 叠加为 immutable 即得只读借用。深度只读的来源是
-  fat pointer shape 的传播规则（具体传播范围待指针章）。借用是临时
-  访问，不存储、不捕获、不返回。
-- 字段级 mutability 由各字段自己的 allocate（shape）决定。
-- 退役：`readonly`/`mutable` 二选一、深只读随根继承、旧"标识符可重绑定"、
-  旧"mutability 是 location 属性、allocate 时确定终身不变"、
-  旧"默认不可变"。
+## 四、编译器内建原语最小集
 
-## 绑定与 pattern
+判据：**凡是需要触碰语言私有结构（AST 延迟、帧树、对象内存布局、所有权状态机、协程栈）的必须入核；凡是只操作值的全部下放标准库。**
 
-绑定与 pattern 只有两个核心操作，方向固定：
+| 分类 | 内核原语 | 语义简述 |
+| :--- | :--- | :--- |
+| **代码延迟** | `^Expr` | 唯一特殊形式：将 `Expr` 包装为 `prototype` 值 |
+| **环境求值** | `evaluate` / `block` / `new` | 在当前帧 / 新子帧 / 新协程根帧中安置或求值 `prototype` |
+| **位置分配** | `allocate [mutable] <shape>` | 在当前 block 下分配直接子 `location`（初始处于 `uninitialized` 状态） |
+| **帧树导航** | `\` / `%field` / `%parent` | 当前帧 symbol 解析 / 子字段 location 访问 / 单步父帧导航 |
+| **位置读写** | `$` / 基础类型 copy | 从叶子 location 读 value（或兑现指针）/ 向基础类型槽写入 bits |
+| **所有权演进** | `%bind` / `%move` / `%drop` | 符号表命名 / 子树所有权转移 / 递归析构并置 `empty` |
+| **控制与调度** | `break` / `%branch` / `%resume` | 非局部弹帧写结果 / 纯值二路透明分支 / 跨协程原子传槽与切换 |
+| **基础比较** | 基础类型 bits 相等 | 每种 builtin 基础类型的按位相等原语，构成一切相等与匹配的底座 |
 
-```
-x := <expr>                 !- stdlib dispatcher：依 RHS kind 分派 -!
-value : pattern             !- 可反驳约束；失败产生 fail 并 break 当前 block -!
-```
+## 五、模式匹配（标准库纯函数）
 
-- **`:=` 是 stdlib dispatcher，不是内核原语**。它依 RHS 的 kind 分派：
-  - **location**：直接 `%bind(symbol, location)`——绑定到现有 location，
-    不复制、不 move。绕过通用 match 以保护 match 的纯度（match 主体
-    不接受 location）。
-  - **value**：走 **标准 symbol match**（stdlib 策略，对裸 symbol 返回
-    `(symbol, value)`），提交循环 `allocate` + bit-copy + `%bind`，
-    即 **auto-box**：value 进一个 **immutable** location。`x := 1` 合法。
-  - **fail**：当 value 处理（auto-box；不自动接力）。
-  - **借用**（经 fat pointer 兑现出的临时 location）：借用规则不允许 `:=`，
-    报错（要长期持有需 move/clone）。
-- **核心 `%bind(symbol, location)` 仍只接 location**——value 不经 core
-  绑定。auto-box 是 stdlib 把 value 提升为 location 的桥。
-- **`:` 是唯一的 pattern 语法壳。** pattern 是由 value 写成的普通表达式，
-  不存在"pattern 模式求值"：
-  - 裸 symbol `a` → 绑定目标（提交阶段经 `%bind`）；
-  - `$\a`（任意 value）→ 按值相等匹配，即 `Exactly`；
-  - `a+1`、stdlib 构造的 pattern value、shape、字面量 → 由 stdlib
-    matcher 处理；
-  - **对象 pattern 是 stdlib 构造出的普通 value，不是字面量**。block `{}`
-    是对象/帧，不是 value literal，因此对象 pattern 不能借用 block 语法
-    书写；源码里写的是构造器调用（例如 `ObjPattern(a, pa, b, pb)`，
-    名字与参数形状由 stdlib 章定），实参是 symbol value 与子 pattern
-    value。`{...}` 在源码中永远只表示 block/对象，任何位置都不表示
-    pattern。语法层不新增 pattern 字面量；
-  - `\a`（location）**不是 v1 pattern**：location 不可作为 value 传给
-    match。需要引用语义时使用指针（不安全）或显式 alias 特性（后续）。
-- pattern 的匹配是纯函数 `match(pattern, subject) -> Bindings | fail`
-  （stdlib）；subject 必须是 value，或经指针传入的非自有对象（不安全）。
-  Bindings 是 `(symbol, value)` 列表，不能携带 location/对象子树。
-- 匹配成功后，调用方（stdlib 的提交循环）对每个绑定执行
-  `allocate` + `%bind`，把 value 复制进当前 block 的新 location。
-  匹配期间绑定不可见；组合子/守卫需自行传递 accumulator。
-- 匹配失败 ⇒ fail 值 + `break` 当前 block 的 result（04 §错误）。
-  `:=` 不产生 fail（auto-box 不失败）；它失败是静态/动态的命名错误。
-- **对象的结构化匹配边界**：非自有对象必须经指针，属不安全 API；
-  Bindings 只能绑定叶子 value，不能把对象字段绑定成 value/location。
-  v1 的安全匹配范围 = value + frozen 对象；对象内部遍历由 stdlib/
-  comptime 反射或指针完成。
-
-旧设计的 `Exactly`/`Symbol`/`Shape`/`If` 四类内置 pattern 消解为
-value、symbol 和 stdlib matcher；无保留关键字，无 pin 运算符。
-`:=` 左侧的 pattern 语法已退役；`x := 1` 在旧版非法，现在经 auto-box
-合法。
-
-## 编译期内核化简
-
-**内核不认识 pattern。** 匹配是 stdlib 的纯函数：
+**编译器内核不认识 Pattern。** 模式匹配完全由标准库纯函数与两个语法壳构成：
 
 ```
 match(pattern, subject) -> Bindings | fail
 ```
 
-- Bindings 只装 value；location 不可作为 value 传递。解构绑定 = 调用方
-  先 `allocate` 新 location，再 `%bind`，因此不需要“绑定即分配”的第二内核机制。
-- matcher 必须纯：没有 rollback 兜底，副作用无法撤销。深嵌套短路靠组合子
-  逐级返回 fail。纯度是 API 契约，不是内核强制；违反者自行承担失败残留。
-- 退役：内核 `%match`、checkpoint/rollback、匹配失败信号、全局可重定义
-  `\$match`、`\a` location pattern。
+### 5.1 语法壳与提交流程
 
-## 编译器内建原语（最小集，共 7 个）
+- **`value : pattern`（可反驳约束）**：
+  1. 求值 `value` 与 `pattern`（两者都是普通表达式，无特殊求值模式）；
+  2. 调用纯函数 `match(pattern, value)`；
+  3. 若返回 `fail`：立即执行 `break <fail>` 终止当前 block（见 [04-control-flow.md](04-control-flow.md)）；
+  4. 若返回 `Bindings`（即 `(symbol, value)` 列表）：标准库提交循环依次在当前 block 执行 `allocate` + copy + `%bind`，将所有绑定落入当前帧。匹配执行期间新绑定尚不可见。
+- **`v ? pattern`（纯查询匹配）**：
+  调用 `match(pattern, v)`，成功返回 `true`，返回 `fail` 则返回 `false`；丢弃 `Bindings`，不产生任何绑定或 `break` 控制效应。
 
-判据：需要触碰语言私有结构（帧树、对象布局、location 系统状态）的必须
-内建；只操作 value 的全部下放 stdlib。
+### 5.2 Pattern 的自然消解与可扩展性
 
-| 原语 | 理由 |
-|---|---|
-| `\` 解析（symbol → location，帧树导航） | 帧是私有结构 |
-| `%bind(symbol, location)` → 命名当前 block 的直接子 location | 绑定的唯一入口 |
-| 基础类型的 bits 相等（每种 builtin 一个比较原语） | value 比较的底 |
-| `%field(place/object, symbol-value)` → location | 动态字段访问 |
-| `%branch(cond, then-prototype, else-prototype)` | 纯值判别分支，一切分支的底 |
-| `%drop(loc-expr)` → 递归销毁 owned 子树，目标置空 | 触碰所有权状态、析构钩子与对象布局 |
-| `%seal(loc)` → 单向 mutable→immutable | 触碰 location 系统的 shape/状态 |
+由于 `pattern` 是普通值表达式，`match` 根据 `pattern` 值的形状分派：
+- **裸 `symbol` 值 `a`**：作为绑定目标，匹配任意 `subject` 并产出绑定对 `(a, subject)`；
+- **普通 `value`（如字面量 `3` 或变量读取 `$\a`）**：按值相等（`eq`）匹配——不需要内置 `Exactly` 关键字，在 pattern 位置写 `$\a` 天然就是按值相等匹配；
+- **带 `matcher` 协议的自定义 Pattern 值**：调用 `pattern.matcher(subject)`。标准库借此实现：
+  - 形状/类型匹配（编译期反射生成字段检验逻辑）；
+  - 选择 `p1 | p2`、合取 `p1 & p2`、守卫 `If(pred)`；
+  - 可逆算术模式（如 `a + 1 : 3` 由 `+` 注册的逆运算求得 `a = 2`，内核无任何算术白名单）；
+  - 对象与序列解构构造器（如 `ObjPattern(...)`，源码中 `{...}` 永远只表示 `block`，不复用于 pattern 字面量）。
+- **安全边界**：造绑定的唯一入口 `%bind` 锁在内核手中；自定义 matcher 只能返回纯数据 `Bindings | fail`，保证了任何第三方 pattern 都具有局部可推理性。
 
-- `%branch` 不做绑定、不看 pattern、无 checkpoint：cond 为真走 then，
-  否则走 else。`if`、`?`、match 分派、`while` 全部在其上由 stdlib 展开。
-  分支经 `evaluate` 在当前 env force，**不分配 result location，结果
-  直接透传**（value/location 由被选 prototype 决定）。
-- **cond 的具体 builtin 类型（cond-type）留待 07；v1 暂定 Boolean。**
-- `%field` 作用于自有对象的 place，或经 fat pointer 兑现出的 location
-  （携带的 mutability 决定只读/可写）；非自有对象访问必须显式使用指针。
-- `%drop` 是唯一暴露给用户的销毁原语；`\destroy` 是销毁过程中调用的
-  对象钩子，不是另一个操作。
-- `%seal` 是 location 系统原语，单向 mutability mutable→immutable；
-  对已 immutable 是 no-op。shape 直接操作（含 immutable→mutable）留作
-  unsafe 逃生口。
+## 六、指针与只读借用
 
-## 标准库提供（全部可推导）
+指针是 `value`（可复制、可存储、可经 `@` 跨协程发送），指向 `location` 但自身不拥有目标。
 
-- **`:=` dispatcher**：依 RHS kind 分派（location → `%bind`；
-  value → 标准 symbol match + auto-box；fail → 当 value；借用 → 报错）。
-- **`=` assign dispatch**：依 LHS shape 分派；bit-copyable shape 走
-  bit-copy（基础类型有内建 assign 原语），非 bit-copyable 报错（用
-  move/clone）。assign 销毁旧内容，location 标识/所有权/shape 不变。
-- **bit-copyable 判定**：基础类型天生 bit-copyable；用户结构体若字段
-  全 bit-copyable 且无 `\destroy`，其 shape 也是 bit-copyable。判定在
-  shape 定义时静态完成。**无 trait 机制**，bit-copyable 是 shape 属性。
-- `match(pattern, subject)` 纯函数：返回 `Bindings | fail`；
-- 提交循环：`allocate` + `%bind`，把 Bindings 落进当前 block；
-- 相等 `eq`：对 value/frozen 递归；对象比较走 `%field`/指针，属不安全面；
-- `Exactly(x)`、`If` 守卫（= 调用闭包）；
-- 对象/序列 pattern 构造器（具体名字由 stdlib 章定；语法层不内建
-  对象 pattern 字面量）；
-- 形状匹配（comptime 反射生成检验代码，同 `derive` 机制）；
-- 选择 `p1 | p2`、合取 `p1 & p2` 组合子；
-- 可逆算术 pattern（`a+1 : 3` 绑 `a` 到 2）：stdlib 定义“可逆操作”协议，
-  匹配器遇到注册过的操作反向应用。内核不知道 `+` 可逆；
-- range、字符串/正则、序列解包等一切花哨 pattern；
-- 模式分派（match/switch）：宏，展开为连续 match + `%branch`。
+| 类型 | 内容构成 | 指向目标 | 可变性呈现 |
+| :--- | :--- | :--- | :--- |
+| **瘦指针（Thin Pointer）** | 仅内存地址 | 形状静态已知的 `location` | 遵循原 `location` 契约 |
+| **胖指针（Fat Pointer）** | 地址 + 动态形状/分派信息 + 可变性掩码 | 长度或形状动态的对象（slice、装箱对象、帧借用） | **可叠加 `immutable` 掩码（只读借用）** |
 
-**可扩展性界线**：`match` 对 pattern value 的形状分派——symbol/value
-两种基本情况是语言语义固定的；带 matcher 字段的新 pattern 形状经
-`p.matcher(v)` 扩展，匹配行为由 pattern value 自身携带，词法可见。
-造绑定的能力被 `%bind` 锁在编译器手里，入口唯一；matcher 只能产出
-Bindings 数据，提交由调用方执行。
+- **受控只读借用（Safe Subset）**：通过帧 handle（如 `\this`、`\^`）获取的访问默认表现为叠加了 `immutable` 掩码的临时胖指针（使整条访问路径呈现深度只读），且受栈帧结构约束不得存储、捕获或返回。
+- **裸指针（Unsafe）**：显式取址获得的指针不检查目标生命周期；一旦目标 `location` 被 `%move` 或 `%drop`，解引用失效指针属于未定义行为（UB）。安全子集 = owned `location` + 帧 handle 临时只读访问 + `cell` 协程。
 
-## 指针
+## 七、验收用例（自检清单）
 
-指针是 value（可传递、可存储、可跨 `@` 发送），指向 location 但自身
-不是 location。解引用 `$ptr` 在当前求值环境现场兑现出 location，
-兑现瞬间才受可变性检查。
-
-| | 瘦指针 | 胖指针 |
-|---|---|---|
-| 内容 | 仅地址 | 地址 + shape 信息（含 mutability、长度/形状引用/分派信息） |
-| 指向 | shape 静态已知的 location | 长度/shape 动态的对象（slice、动态分派） |
-| mutability | 取原 location 的 shape | **可携带与原 location 不同的 mutability**（含把 mutable 叠加为 immutable 的只读借用） |
-| 对应机制 | 单态化一侧 | 装箱一侧：装箱 = 瘦指针变胖指针 |
-
-- **只读借用 = fat pointer with immutable overlay**：原 location 的
-  mutability 可以被 fat pointer 改写为 immutable 呈现，不修改原 location
-  的 shape。这是"深度只读"的来源。
-- **写借用 = fat pointer with mutable**：unsafe，绕过所有者；只有显式
-  unsafe 代码可用。
-- frame handle（`\this`、`\^`）类似 fat pointer：默认给出 immutable
-  叠加的访问；mutable handle 是单独的 unsafe 操作。
-
-**有效性不检查**：解引用失效指针是未定义行为。安全子集 =
-owned location + cell；指针是不安全特性。非自有对象的读取、结构化比较、
-容器内部链接使用指针；标准库可以内部使用并依靠不变量，用户代码使用即
-离开安全子集。指针参与的 GC 根/跨协程有效性尚未定义。
-
-## 与 01/02/06 的对接
-
-- 固化：只允许 value、frozen、prototype/code 跨阶段；禁止固化 owned
-  mutable location、裸指针、资源、frame handle（06 §9）。
-- comptime 堆里同样只有 value/location（+ pointer value 子类），同一套规则。
-- 02 的调用改为 stdlib wrapper 用 block 建 per-call frame + `evaluate`
-  函数 prototype body；共享 `Proc.in` 交接槽已退役；递归由 fix/self 协议
-  提供。
-- 跨协程共享可变状态的受检通道仍然只有 cell 协程 + `@`/`\^` 消息；
-  指针绕过了检查，由"不安全特性"定位承担。
-- block 的 self root = result location；`:=` 在块完成后可命名它（auto-box
-  value 或直接 `%bind` location）；块内字段用 `\this` handle 访问。
-
-## 词汇表
-
-- 新增/明确：value（含 symbol、pointer、fail、frozen、prototype 子类）、
-  location、`%bind`、`%field`、`%branch`、`%drop`、`%seal`、
-  `\this`（帧 handle）、`^p`（取 prototype）、`evaluate proto`、
-  `allocate <shape>`。
-- 运算符：`\`（解析）、`$`（读/指针兑现）、`=`（stdlib assign）、
-  `:=`（stdlib dispatcher）、`:`（pattern 约束）、`%drop`（销毁）、
-  `%seal`（mutability 冻结）。
-- 退役：内置 pattern 类、全局 `\$match`、`` ` `` 取左值、左值类型一等公民、
-  `readonly`、"标识符可重绑定/销毁"、内核 `%match`、checkpoint/rollback、
-  匹配失败信号、`pattern := value`、`\a` location pattern、`destroy` 操作、
-  `view` 作为独立 kind（合并入 location，借用经 fat pointer）、
-  `mutable` 作为 location 独立属性（改为 shape 的一部分）、
-  `allocate prototype` 写法（拆为 `evaluate proto` 与 `allocate <shape>`）、
-  旧"默认不可变"（默认 mutable，要 immutable 用 `%seal`）。
-- 留作后续设计：`%branch` 的 cond-type、`\` 的转义/解析双角色、
-  指针取址拼写、可逆操作协议、matcher 注册机制、`%drop` 的正式语法、
-  `%seal` 的正式语法、shape 直接操作（unsafe）的拼写。
-
-## 已知边界（诚实清单）
-
-- 读取噪音（`$\a`）：已接受的取舍。
-- `\` 同时承担转义与解析两个角色：语法章裁决（候选：换符号；
-  或规定转义只发生在字面量/标识符内部，运算符只在前缀位置）。
-- 对象 pattern 不内建语法：由 stdlib 构造器生成 pattern value；`{...}`
-  永远只表示 block/对象，不是 pattern。结构化匹配/绑定受限于 value +
-  frozen，自有对象跨字段解构需要指针或显式 move 协议，v1 不提供。
-- 动态绑定（pattern 里放计算出的 symbol 值）合法化 = 动态作用域回归风险；
-  默认允许但记为边界，必要时由 lint 限制。
-- matcher 纯度不由内核强制；"纯"是失败残留语义的契约。
-- `:=` dispatcher 依 kind 分派需要运行期 kind tag 或 core `%kind` 原语；
-  动态类型一侧有运行期开销，具体方案待 07。
-- unshaped location 的 shape+mutability 跟随内容，意味着同一 location
-  在不同时刻可呈现不同 mutability；`%seal` 后才不可逆冻结。lint 可提示
-  unshaped mutable 跨越复杂控制流时的可读性风险。
-
-## 验收用例（自检清单）
-
-1. `a := 3; $\a + 1` 得 4（auto-box：`a` 绑定 immutable location）。
-2. `3 : 3` 通过；`3 : 4` 失败产生 fail 并 break 当前 block；
-   `a := 3` 合法（stdlib dispatcher auto-box value）。
-3. `a+1 : 3` 绑 `a` 到 2（stdlib 可逆协议），提交循环为 `a` 分配新
-   location；无编译器特判。
-4. `$(\a) : 3` 按 value 匹配；`Exactly` 是 stdlib matcher，不产生绑定。
-5. `eq` 对叶子 value/frozen 递归；对象比较需要指针，属不安全面。
-6. per-location mutability：immutable root 可以含 mutable 字段；
-   只读借用经 fat pointer immutable overlay 使访问只读。
-7. 瘦指针存取；胖指针 slice 解引用；fat pointer 携带 immutable overlay
-   实现只读借用；失效指针解引用 = UB（文档断言）。
-8. match 分派宏展开为连续 match + `%branch`，且 stdlib 之外无法造绑定
-   （试图绕开 `%bind` 的 matcher 无法引入新 symbol 绑定）。
-9. `:=` 在 RHS 完成后绑定；块内用 `\this` 访问字段，不暴露半构建 location。
-10. 非自有对象的结构匹配必须显式使用指针；安全匹配范围 = value/frozen。
-11. `%drop(\p)` 递归销毁 owned 子树，p 变 empty 但 symbol 保留；
-    `%drop` 对 value 是类型错误，对 empty 报错；`\destroy` 只是被调用的
-    钩子，不是另一个销毁操作。
-12. `x := { ... }`：block self root 是 unshaped 默认 mutable；
-    `%seal(\x)` 单向冻结为 immutable；对已 immutable 是 no-op。
-    `x := 1` auto-box 出一个 immutable location（标准 symbol match）。
-13. `%branch` 经 evaluate 在当前 env force 被选 prototype；不分配 result
-    location，结果透传。while 同样 transparent（04）。
-
-## 待办
-
-- [ ] 控制流章已重写；05 章需固定 try/catch/if/matcher/while 宏形态
-- [ ] 语法章：`\` 的转义/解析双重角色、指针取址拼写、`^p`/`evaluate`/`allocate` 的具体语法
-- [ ] 07 章：Boolean/cond-type、shape 与静态类型检查、运行期 kind tag 或 `%kind` 原语
-- [ ] stdlib 章：可逆操作协议、matcher 注册机制、对象匹配的 unsafe API、
-      bit-copyable shape 判定与 `=` assign dispatch、`:=` dispatcher 细节
-- [ ] `%drop` 的正式语法（参数是 location 表达式）
-- [ ] `%seal` 的正式语法与 unshaped 跟随内容时的具体冻结时机
-- [ ] shape 直接操作（unsafe）的拼写与边界
-- [ ] 指针的取址运算符形式与 GC 根规则、fat pointer mutability 叠加语法
+1. `a := 3; $\a + 1`：`:=` 将 `3` auto-box 入不可变 location 并绑定到 `a`，`$\a + 1` 得 `4`。
+2. `x := allocate integer; \x = 1`：`x` 经历 `uninitialized → live` 单次初始化成功；若再次执行 `\x = 2` 则因 `x` 默认不可变而报错。
+3. `a := allocate integer; \a = 1; b := allocate integer; \b = \a`：`\b = \a` 触发 `%move`，`\b` 得 `1`，`\a` 变为 `empty`。
+4. `a + 1 : 3`：通过 stdlib 可逆协议匹配成功，在当前块将 `a` 绑定到 `2`；`3 : 4` 匹配失败并 `break` 当前 block 返回 `fail`。
+5. `$(\a) : 3`：因为左侧求值为普通 value，直接按值相等匹配，不产生新绑定。
