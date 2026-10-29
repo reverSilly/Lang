@@ -9,7 +9,7 @@
 
 1. **`^Expr`（Prototype）是全语言唯一拦截求值的语法特殊形式（Special Form）**：它把未求值的表达式 `Expr` 包装成一个不透明的纯代码值（`prototype` value），不携带任何环境或 AST 包袱。
 2. **求值原语全是接收 `prototype` 值的普通操作符**：环境永远由触发求值的操作符提供——在当前环境就地展开用 `evaluate`，开辟子帧求值用 `block`，开辟独立协程求值用 `new`。
-3. **内核零高层概念**：内核不存在独立的“函数定义”、不认识 `\destroy` 钩子、不处理 RAII；标准库基础包装器（`{...}`、`block1`、`:=`、`=`、`$`、`@`、`destroy`、`drop`、`move`、`swap`）在 [06-stdlib-foundations.md](06-stdlib-foundations.md) 中由这组原语导出（注：函数调用传参协议、Lambda 表面语法与闭包捕获细则目前处于待定稿状态，列于 `06` 末节待办）。
+3. **内核零高层概念**：内核不存在独立的“函数定义”、不认识 `\destroy` 钩子、不处理 RAII；标准库基础包装器（`{...}`、`block1`、`:=`、`=`、`$`、`@`、`destroy`、`drop`、`move`、`swap`）在 [06-stdlib-foundations.md](06-stdlib-foundations.md) 中由这组原语导出（注：基础算术与类型操作的内建原语 vs `compile` capability 设计、函数调用传参协议、Lambda 表面语法与闭包捕获细则列于 `06` 末节待办）。
 
 ## 二、求值原语与特殊内建值
 
@@ -23,14 +23,15 @@
 | `block proto` | 内核建帧原语 | 在当前 block 下隐式分配匿名 `self root` location 作为**新子 env**，执行 `proto`；闭合时直接丢弃未 `%bind` 槽及处于 `empty`/`uninitialized` 的槽，仅将 `live` 绑定字段压平为连续内存并锁定 `shape` | 指向该 `self root` location 的 `pointer` |
 | `new proto` | 内核协程原语 | **惰性（Lazy）**创建独立协程根帧（初始停在 `proto` 入口 PC=0，不执行代码） | 协程 `handle` |
 | `%resume(target, src_ptr)` | 内核切换原语 | 原子地将 `src_ptr` 指向的直接子槽内容移入 `target` 的 `%in` 槽（`src_ptr` 置 `empty`）、将 `target` 的 `\^` 设为本协程、挂起自身并恢复 `target` | 本协程下次被唤醒时指向自身 `%in` 槽的 `pointer` |
-| `{ Expr }` | 标准库语法糖 | 展开为带局部守卫清理的 `block ^(Expr)`；**空块 `{}` 直接展开为 `block ^()`**（返回空的闭合对象指针） | 同 `block`（返回 `pointer`） |
+| `{ Expr }` | 标准库语法糖 | 展开为带隐式父帧链与局部守卫清理的 `block ^(Expr)`；**空块 `{}` 直接展开为 `block ^()`**（返回空的闭合对象指针） | 同 `block`（返回 `pointer`） |
 | `target @ rhs` | 标准库分派器 | 将 `rhs` 装入或移入当前块临时直接子槽 `src_ptr`，调用 `%resume(target, src_ptr)`（详见 `06` §2.2） | 指向本协程 `%in` 槽的 `pointer` |
 
-### 2.2 三个核心环境标识原语
+### 2.2 四个核心环境标识原语（皆为零参原语）
 
 | 原语 / 记号 | 结果类型 | 含义 |
 | :--- | :--- | :--- |
 | `%this`（记作 `\this`） | `pointer` | 指向当前 `block` 的 `self root` location 的普通胖指针（全语言**无独立的“帧指针/帧 handle”类型**，`\this` 即普通 `pointer`；当前帧符号解析 `\sym` 即 `%field(%this, sym)` 的语法糖） |
+| `%parent` | `pointer` | 零参原语，返回指向当前栈顶构建帧 `%this` 在协程构建栈（Construction Stack）上的直接父构建帧指针（通用 `pointer` 不存储 parent，唯独构建栈上未闭合的 `block` 具有父子链） |
 | `%caller`（记作 `\^`） | `handle` | 指向最近一次唤醒本协程的那个协程的句柄（由 `%resume` 原子更新；`handle` 唯一专指协程句柄） |
 | `%in`（记作 `\in`） | `pointer` | 指向本协程根帧持有的来信槽 location 的普通胖指针，存放最近一次唤醒本协程时由对方移入的内容 |
 
@@ -57,15 +58,20 @@
 - 一旦 `block` 闭合，所有 `live` 字段被压平为固定偏移量的连续内存，其 `shape` 彻底凝固且所有字段恒为 `live`（见 [05-ownership.md](05-ownership.md)）；
 - 拒绝 `with <ptr> evaluate` 从根本上保证了：**已闭合对象的固定 `shape` 与连续内存布局绝不会被二次拆开追加字段，且构建了一半的 location 绝不会提前暴露给父作用域**。
 
-## 四、帧树与确定性导航
+## 四、构建栈与逐步递归上溯导航
 
-所有求值发生在帧树（Frame Tree）上：
-- 每个 `block` 求值时在调用点（Caller）所在的父 block 下挂载一个新 `self root` location；
+所有求值发生在当前协程的构建栈（Construction Stack）与帧树上：
+- **通用 `pointer` 不存储 `parent`**：普通胖指针固定为 `(addr, shape_ptr, mutability)`，不包含父指针；**唯有当前协程构建栈上尚未闭合的 `block` 才具有父子链关系**（由协程运行时维护）。
 - **内核只提供确定性的单步导航原语（全部返回普通 `pointer` value）**：
   - 向下访问子字段：`%field(ptr, symbol)`（语法记作 `ptr.symbol`；当前帧 `\sym` 即 `%field(%this, sym)`；若字段不存在或处于构建期 `empty`/`uninitialized`，返回 `null` 指针）；
-  - 向上访问直接父帧：**零元原语 `%parent`**（返回指向当前正在执行的 `block` 在帧树上的直接父 `block` 的 `self root` 指针；内核**不需要**对任意外部指针取父帧的一元 `%parent(ptr)` 原语）。
-- **无隐式动态作用域**：因为 `prototype` 是纯代码、不携带环境，内核不存在隐式的环境查找链。在同一个函数/块内部书写嵌套块或透明 `if` 分支时，`%parent` 既是帧树父节点也是词法父节点；跨函数传递的闭包则通过标准库显式捕获 `env` 实现。
-- **协程树隔离**：`new proto` 另起一棵独立的协程帧树，运行期不允许通过 `%parent` 跨越协程根帧访问创建者的运行期栈帧（静态拒绝）。
+  - 向上访问直接父构建帧：**零参原语 `%parent`**（仅返回当前栈顶构建帧 `%this` 在协程构建栈中的直接父构建帧指针）。
+- **跨多层构建帧的逐步递归上溯（零闭合内存开销）**：
+  - 每个由标准库 `{ ... }`（或函数/循环块）开启的构建帧，在进入块时自动绑定一个指向直接父帧的隐式父链槽位：`__parent := %parent`；
+  - 向上走 1 步：`%parent`（等价于 `$(\__parent)`）；
+  - 向上走 2 步：`$($(\__parent).__parent)`；
+  - 向上走 $k$ 步：编译期宏自动展开为 $k$ 次 `%field` + `%deref` 链式寻址；
+  - **闭合时零内存开销**：当该 `block` 准备闭合为对象（或通过 `break` 退出）时，标准库包裹层在末尾调用 `%drop(\__parent)` 将其置为 `empty`。根据闭合相变规则，处于 `empty` 的 `__parent` 绑定在闭合时被**自动静默剥离**，最终闭合出的连续内存对象中不占 1 个字节！
+- **协程树隔离**：`new proto` 另起一棵独立的协程构建栈，运行期不允许通过 `%parent` 跨越协程根帧访问创建者的运行期栈帧（静态拒绝）。
 
 ## 五、协程状态机：`new`、`%resume` 与 `\^` / `\in`
 
@@ -88,7 +94,7 @@
 3. **中途挂起与再次唤醒（`\^ @ reply`）**：
    协程 `c` 内部执行 `\^ @ reply` 时，将 `reply` 移入恢复者 `\^` 的 `\in` 并挂起自己；当未来某协程再次以 `c @ v2` 唤醒 `c` 时，原本挂起的 `%resume` 表达式求值完成并返回指向 `c` 自身 `\in` 槽的 `pointer`。
 4. **根帧结束与终止**：
-   当协程 `c` 的根帧正常求值完毕，或 `%break` 弹出至协程根帧时（见 [04-control-flow.md](04-control-flow.md)）：
+   当协程 `c` 的根帧正常求值完毕，或 `%break(src_ptr)` 弹出至协程根帧时（见 [04-control-flow.md](04-control-flow.md)）：
    - 协程 `c` 状态标记为已终止（Dead）；
    - 内核将最终结果移入当前 `\^` 的 `\in` 槽，释放 `c` 的根帧，并恢复 `\^` 执行；
    - 对已终止（Dead）或正处于运行链上（Running）的协程执行 `%resume` 是运行时错误（trap）。
@@ -117,7 +123,7 @@ c := $(gen @ ()); !- 3 -!
 
 ## 七、验收用例（自检清单）
 
-1. `{ a := 1; b := 2 }` 展开后通过 `block` 返回指向包含连续字段 `a`、`b` 的 `self root` location 的 `pointer`；空块 `{}` 展开为 `block ^()` 返回空对象指针。
+1. `{ a := 1; b := 2 }` 展开后通过 `block` 返回指向包含连续字段 `a`、`b` 的 `self root` location 的 `pointer`（块内隐式绑定的 `__parent` 在闭合前被 `%drop` 置空并自动剥离，最终对象零额外字节开销）；空块 `{}` 展开为 `block ^()` 返回空对象指针。
 2. 同一 `{ ... }` 内连续执行两次 `evaluate`，通过 `%this` 共同向当前构建中的 `self root` 绑定字段，闭合后一次性压平为完整连续对象。
-3. 在嵌套块内，零元 `%parent` 指向直接外层块，且透明 `if`（`%branch`）不产生额外帧层，在分支内访问 `%parent.val` 直接命中外层块字段。
+3. 在嵌套块内，零参 `%parent` 指向直接外层构建块，多层嵌套块（如双层 `while` 循环）通过 `$($(\__parent).__parent)` 逐步递归上溯访问外层函数帧，且透明 `if`（`%branch`）不产生额外帧层。
 4. `c := new proto` 惰性创建协程，首次 `c @ 10` 将 `10` 移入 `c` 的 `\in` 槽并从 `proto` 入口启动，无任何值丢失。

@@ -45,7 +45,7 @@
 
 - **唯一类型概念 `shape`**：全语言用 `shape` 统一替代传统的 `type`。
   - **构建期动态性**：尚处于构建期（Constructing）的 `block` 在内部维护可变的 `shape` 构建器随 `%bind` 与 `%drop` 演进；
-  - **闭合对象与基础值的 `shape` 驻留常量区**：任何基础 `value` 与已闭合（Closed）对象的 `shape` 描述表均驻留在只读常量区（`frozen` 区），通过指向它的只读指针 `pointer(shape)` 表示，满足第 2 层自指不动点闭环（见 [03-symbols-locations-matching.md](03-symbols-locations-matching.md)）。
+  - **闭合对象与基础值的 `shape` 驻留常量区**：任何基础 `value` 与已闭合（Closed）对象的 `shape` 描述表均驻留在只读常量区（`frozen` 区），通过指向它的只读指针 `pointer(shape)` 表示，并通过以 `0` 为基地址的相对胖指针与符号游标直接暴露底层结构（见 [03-symbols-locations-matching.md](03-symbols-locations-matching.md)）。
 - **泛型即普通子程序**：泛型函数 = 参数中包含 `pointer(shape)` 的普通子程序；泛型类型构造器 = 返回 `pointer(shape)` 或构造原型的普通子程序。
 
 ## 六、阶段与可变性词汇表
@@ -55,7 +55,7 @@
 | 标注 | 作用目标 | 含义 | 缺省行为 |
 | :--- | :--- | :--- | :--- |
 | `compile` | 求值时机 / 模式约束 | 强制编译期求值完成 | 编译器尽力折叠，不作硬性保证 |
-| `mutable` | `location` 契约属性 | 允许槽位在初始化（进入 `live`）后再次调用 `%write` 覆写 | 默认 `immutable`（仅允许 `uninitialized → live` 单次写入） |
+| `mutable` | `location` 契约属性 | 允许槽位在初始化（进入 `live`）后再次调用 `%write` 覆写或 `%swap` 交换 | 默认 `immutable`（仅允许 `uninitialized → live` 单次写入） |
 
 - **废弃旧词**：`type`（统一为 `shape`）、`constant`（混淆时机与可变性）、`variant`（缺省状态无需标注）、`comptime`（改用自解释的 `compile`）、`static`（消除 C 系多义性）、`readonly`（缺省即为不可变）、`%seal`（单次初始化状态机已覆盖）。
 
@@ -80,6 +80,6 @@ x := allocate mutable;
 
 1. **编译期 `printf`**：在编译期解析格式串，并按参数 `shape` 生成对应的格式化 `prototype` 代码固化到运行期。
 2. **编译期生成只读查找表**：`compile` 块中用 `mutable` location 计算完美哈希表，经 `%freeze` 冻结为指向只读常量区的安全指针后跨阶段供运行期只读访问。
-3. **编译期反射 `derive(Serialize)`**：通过 `%shape`（或胖指针的 `ptr.shape_ptr`）读取任意对象的 `fields` 映射表（`LinkedHashMap` `FieldNode` 链表），生成并返回序列化代码 `prototype`。
+3. **编译期反射 `derive(Serialize)`**：通过 `%shape`（或胖指针的 `ptr.shape_ptr`）配合 `base_addr = 0` 的 `%field` 相对胖指针与 `%next_sym`/`%prev_sym` 游标遍历字段元数据，生成并返回序列化代码 `prototype`。
 4. **编译期构造栈/堆 `location` 指针试图直接跨阶段固化**：编译器静态拒绝；POD `value`、只读常量区 `pointer`（含闭合 `shape` 与 `frozen` 对象）、`prototype` 正常固化。
 5. **编译期 RAII**：`compile` 块内创建的资源与 `defer` 守卫在编译期块结束时按与运行期完全相同的标准库逆序规则执行 `destroy`。

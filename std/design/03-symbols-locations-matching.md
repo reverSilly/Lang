@@ -12,16 +12,16 @@
    - **所有 `value` 均无身份、无生命周期、无所有权，永远可自由按位复制（`memcpy`）**。
    - **内置基础 `value` 类别**：
      - **`byte` / `bytes(N)`**：最小寻址单位（8 bits）及定长字节序列，是一切算术类型与内联缓冲区的物理底座；
-     - **算术与逻辑值**：`integer`、`usize`、`boolean` 等；
+     - **算术与逻辑值**：`integer`、`usize`、`boolean` 等（关于基础类型的具体集合及其操作究竟采用内核原语、黑魔法还是经由 `compile` capability 导入标准库实现，见 [06-stdlib-foundations.md](06-stdlib-foundations.md) §5 待办议题）；
      - **`symbol`**：一等原子值（类似 Lisp symbol）。源码中的裸标识符 token `a` 即 `symbol` 字面量；
      - **`prototype`**：`^Expr` 产生的不透明纯代码值；
      - **`handle`**：专指协程句柄（`new` 返回值、`\^`）；
-     - **`pointer`**：指向某个 `location`（或只读常量区对象）的普通胖指针值（**无独立的“帧指针”类型**，`\this`、`\in`、`%parent` 返回的均是普通 `pointer`），逻辑结构固定为三元组 **`(addr, shape_ptr, mutability)`**。
+     - **`pointer`**：指向某个 `location`（或只读常量区对象）的普通胖指针值（**无独立的“帧指针”类型**，`\this`、`\in`、`%parent` 返回的均是普通 `pointer`），逻辑结构固定为三元组 **`(addr, shape_ptr, mutability)`**（绝不存储 `parent`）。
 2. **`location` 是纯内部存储节点（不直接作为表达式结果出现）**：
    - `location` 是“一段内存及其所有权”的内部抽象，只存在于 `block` 的所有权树中，由 `allocate [mutable]` 或子 `block` 创建。
    - **表达式中从不直接持有 `location` 实体，而是持有指向该 `location` 的 `pointer` value**。所有操作 `location` 的内核原语均接收和返回 `pointer` value。
 
-## 二、内存零 Header 模型、胖指针三元组与 `%shape` 区分
+## 二、内存零 Header 模型、胖指针三元组与 Shape 零投影内省
 
 ### 2.1 内存零 Header 与胖指针 `(addr, shape_ptr, mutability)`
 
@@ -38,42 +38,22 @@
 - **`frozen` 对象 = 指向只读常量区的安全 `pointer`**：
   - 不存在独立的 `frozen` 类型；编译期固化或 `%freeze` 产生的只读对象住在常量区（`.rodata`），直接以 `mutability = immutable` 的安全 `pointer` 表示，永不悬垂且允许跨阶段固化。
 
-### 2.2 描述性 Shape、侵入式双向符号链与第 2 层自指不动点
+### 2.2 描述性 Shape、消除 `s.fields` 投影与单步符号游标
 
 - **Shape 是纯粹描述性的（Descriptive）只读对象**：
   - 每个具体存在的对象都有唯一确定的描述性 `shape`（不存在模糊的 `any` shape 或并集 shape；形状约束与多态匹配属于标准库 Pattern 的职责）。
   - 所有闭合对象与基础类型的 `shape` 描述表都驻留在只读 `frozen` 区（全局去重/Interned）。
-- **底层 `LinkedHashMap` 与 `s.fields` 零投影合一**：
-  - 在运行时内部，复合 `shape` 的字段表是一张侵入式 `LinkedHashMap<symbol, FieldNode>`（支持 $O(1)$ 按 `symbol` 哈希/Trie 查找、构建期 $O(1)$ `%bind` 插入、以及沿双向符号链 $O(n)$ 正/逆序遍历，**无需在内核引入 Array 或 Tuple**）。
-  - 复合 `shape` 对象暴露的结构为：
-    ```
-    Shape := {
-        size      : usize,
-        align     : usize,
-        first_sym : symbol,   !- 第一个字段的 symbol；空对象为特殊空符号 none -!
-        last_sym  : symbol,   !- 最后一个字段的 symbol，供逆序遍历/析构使用 -!
-        fields    : FieldsMap !- 底层 LinkedHashMap 本尊 -!
-    }
-    ```
-  - 其中每个字段节点 `FieldNode` 的内存布局与语言层暴露的只读结构完全一致（不含运行期 `status`，纯静态布局描述）：
-    ```
-    FieldNode := {
-        offset     : usize,
-        sub_shape  : pointer, !- 指向子字段 shape 的只读指针 -!
-        mutability : boolean,
-        prev_sym   : symbol,  !- 前驱字段 symbol（首字段前驱为 none） -!
-        next_sym   : symbol   !- 后继字段 symbol（末字段后继为 none） -!
-    }
-    ```
-- **统一 `%field(ptr, sym)`（`.`）查询与 `contains` 语义**：
-  - **作用于普通对象指针 `obj_ptr`**：在 `obj_ptr.shape_ptr` 指向的底层 `LinkedHashMap` 中以 $O(1)$ 查找 `sym`：
-    - 若不存在（或构建期槽处于 `uninitialized`/`empty`），返回 **`null` 指针**（天然兼作 $O(1)$ 的 `contains` 判别）；
-    - 若存在，取得 `FieldNode` 中的 `(offset, sub_shape, field_mut)`，直接通过胖指针加法返回：
-      **`(obj_ptr.addr + offset, sub_shape, min(obj_ptr.mutability, field_mut))`**。
-  - **作用于 `s.fields`**：复用同一个 `%field` 原语，在底层 `LinkedHashMap` 中查到 `sym` 对应的 `FieldNode` 后，直接返回指向该 `FieldNode` C 结构体的只读胖指针 `(node_addr, S_node, immutable)`，零运行时投影开销！
-  - **消解 `\sym` 原语**：当前帧符号解析 `\sym` 纯粹是 **`%field(%this, sym)`** 的语法糖。
-- **严格数学性质：第 2 层自指不动点 $\mathcal{S}(\mathcal{F}(\mathcal{S}(\mathcal{F}(s_0)))) \equiv \mathcal{S}(\mathcal{F}(s_0))$**：
-  设任意对象 $O$（含字段 $k_1, \dots, k_n$）的形状为 $s_0 = \mathcal{S}(O)$。由于 `FieldNode` 的 5 个字段类型均为编译期固定的内置原子类型，其自身形状 $S_{\text{node}}$ 是全局唯一的常量。在 $s_1 = \mathcal{S}(s_0.\text{fields})$ 中，每个字段 $k_i$ 的偏移量归一为常数 $(i-1)\cdot\text{sizeof}(\text{FieldNode})$，子形状归一为常数 $S_{\text{node}}$，可变性归一为 `false`。因此求第 2 层形状 $s_2 = \mathcal{S}(s_1.\text{fields})$ 时，其所有字段的 `FieldNode` 与 $s_1$ 逐比特完全相等，在常量区驻留下满足 **$s_2 \equiv s_1$**，只需将 $s_1.\text{fields}$ 的形状指针指向 $s_1$ 自身即构成有限闭环。
+- **消除 `s.fields` 伪对象投影（基于代数同构的直接反射）**：
+  - 在运行时底层，复合 `shape` 的 `LinkedHashMap` / `Trie` 中每个字段条目存储的 `(offset, sub_shape_ptr, field_mutability)`，在物理结构上就是一个**以 `0` 为基地址的相对胖指针（Relative Fat-Pointer）**！
+  - 回看 `%field(ptr, sym)` 的定义：
+    $$\%\text{field}((base\_addr, s, parent\_mut), sym) = (base\_addr + offset, sub\_shape, \min(parent\_mut, field\_mut))$$
+  - 因此，**完全不需要在内存中构造 `s.fields` 这一层伪对象投影或生成第 2 层伴生形状 `sf`**：只需对一个 `base_addr = 0`、形状为 `s` 的基准胖指针直接调用现成的 `%field` 原语，它返回的胖指针 **`(0 + offset, sub_shape, field_mut)` 本身就已经完整携带了该字段在底层 HashMap 中的全部三元信息**（通过指针读取原语即可直接取出 `offset`、`sub_shape` 与 `mutability`）！
+  - 若字段 `sym` 不存在于 `s`（或构建期槽处于 `uninitialized`/`empty`），`%field` 返回 **`null` 指针**（天然兼作 $O(1)$ 的 `contains` 判别）。
+- **遍历字段名：首尾符号与单步游标原语**：
+  - 底层 `LinkedHashMap` / `Trie` 只需在 `shape` 上暴露 `size`、`align`、`first_sym`、`last_sym`，并提供两个单步符号游标原语：
+    - **`%next_sym(shape_ptr, sym) -> symbol`**：返回字段 `sym` 在定义序下的后继字段符号（末字段后继为特殊空符号 `none`）；
+    - **`%prev_sym(shape_ptr, sym) -> symbol`**：返回字段 `sym` 在定义序下的前驱字段符号（首字段前驱为 `none`，供逆序析构遍历使用）。
+  - 这一设计彻底省去了构造 `s.fields` 投影对象和伴生形状 `sf` 的开销，100% 贴合底层 C++ `Trie` / `LinkedHashMap` 的真实结构，且完全无需在内核引入 Array 或 Tuple。
 
 ### 2.3 内联多态（`Union` / `Optional`）与自定义 POD
 
@@ -97,23 +77,23 @@
 | `\p.a` | `%field(%field(%this, p), a)` | 子字段 `a` 的指针 | `pointer` |
 | `$\a` | `$(\a)` → 经 Stdlib POD 检查调 `%deref(\a)` | 从 POD 槽中按位读出 `value` 副本 | 目标类型的 `value` |
 
-### 3.2 编译器内建原语最小全集（Core Primitives）
+### 3.2 编译器内建原语最小全集（Core Primitives — 01-05 闭环版）
 
-判据：**凡是需要触碰求值器私有结构（延迟代码、帧树、构建期槽分配与状态位、按字节内存读写、协程栈、常量段）的必须入核；凡是 RAII 析构（`\destroy`）、移动（`move`）、交换（`swap`）、深拷贝（`clone`）、模式匹配与语法糖全部归标准库（[06-stdlib-foundations.md](06-stdlib-foundations.md)）。**
+判据：**凡是需要触碰求值器私有结构（延迟代码、构建栈帧、槽分配与状态位、按字节内存读写与交换、协程栈、常量段）的必须入核；凡是 RAII 析构（`\destroy`）、多层 `break` 展开、深拷贝（`clone`）、模式匹配与语法糖全部归标准库（[06-stdlib-foundations.md](06-stdlib-foundations.md)）。**
 
-| 分类 | 内核原语 | 签名与语义简述 |
+| 分类 | Core 原语 | 签名与语义 |
 | :--- | :--- | :--- |
-| **代码与序列** | `^Expr` / `a ; b` | 唯一特殊形式生成 `prototype` / 顺序求值并丢弃前值（无析构） |
-| **环境求值** | `evaluate` / `block` / `new` | 就地展开 `prototype` / 建子帧对象返回 `self root` `ptr` / 惰性建协程返回 `handle` |
-| **帧与协程标识** | `%this` / `%caller` / `%in` | 当前块 `self root` 指针（`\this`）/ 恢复者协程 `handle`（`\^`）/ 本协程来信槽指针（`\in`） |
-| **槽分配与状态** | `allocate [mutable]` / `%bind(sym, val) -> bool` / `%drop(slot_ptr)` | 在当前构建块分配 `uninitialized` 直接子槽返回 `ptr` / 若 `val` 为当前块未绑定直接子槽 `ptr` 则绑定入符号表并返回 `true`，否则返回 `false` / 将构建期直接子槽置为 `empty`（不调 `\destroy`，闭合时自动剥离，兼作 `unbind`） |
-| **按位内存读写** | `%write(dst_ptr, val)` / `%deref(ptr) -> val` | 将 `val` 的字节按位 `memcpy` 拷入可写目标槽 `dst_ptr`（`uninitialized`、`empty` 或 `mutable live`）并置 `live` / 从 `live` 槽无条件按 `ptr.shape_ptr.size` 按位读出 `val` |
-| **导航与形状** | `%field(ptr, sym)` / `%parent` / `%shape(val)` / `%recast(ptr, shape_ptr)` / `%freeze(ptr)` | 相对胖指针加法访问子字段（不存在返 `null`）/ 零元原语返回当前块直接父帧指针 / 取 `val` 自身 `shape` 只读指针（指针所指对象之 `shape` 由 `ptr.shape_ptr` 即 `%shape(%deref(ptr))` 读取）/ 重解释指针形状 / 冻结为常量区只读指针 |
-| **控制与切换** | `%branch(cond, then_p, else_p)` / `%break(target_ptr, val)` / `%resume(coro, src_ptr)` | 透明二分支 / 物理回退栈帧至 `target_ptr` 并将 `val` 写入其 `self root`（不调 `\destroy`）/ 原子将 `src_ptr` 移入目标 `%in` 并切换协程 |
-| **基础运算** | 基础类型算术与按位相等 | 在 `byte`、`integer`、`boolean`、`symbol`、`pointer`、`handle` 上的内建按位运算与判等 |
+| **1. 延迟与序列** | `^Expr` / `a ; b` | 唯一特殊形式生成 `prototype` / 顺序求值并丢弃前值（无析构） |
+| **2. 环境求值** | `evaluate p` / `block p` / `new p` | 当前帧就地求值 / 开辟子构建帧并在闭合时剥离非 `live` 槽、压平为连续对象 / 惰性创建独立协程返回 `handle` |
+| **3. 环境标识（皆零参）** | `%this` / `%parent` / `%caller` / `%in` | 当前构建帧指针（`\this`）/ 构建栈直接父帧指针 / 恢复者协程 `handle`（`\^`）/ 本协程来信槽指针（`\in`） |
+| **4. 槽分配与三态演进** | `allocate [mutable]` / `%bind(sym, val)` / `%move(dst, src)` / `%drop(ptr)` | 分配构建期子槽 / 绑定未命名直接子槽（返回 `boolean`）/ 移入空槽（支持从活跃 `%parent` 移入并将源置 `empty`）/ 将构建期直接子槽置为 `empty`（零 RAII，要求子槽已全空） |
+| **5. 比特读写与交换** | `%write(dst, val)` / `%deref(ptr)` / `%swap(p1, p2)` | 向空槽按位写入 `val` 并置 `live` / 从槽按位读出 `val` / 交换两个同 `shape` 的 `live` 槽内容（用于操作已闭合对象的可变字段，零空洞、零析构） |
+| **6. 导航与形状反射** | `%field(ptr, sym)` / `%shape(val)` / `%next_sym(s, sym)` / `%prev_sym(s, sym)` / `%recast(ptr, s)` / `%freeze(ptr)` | 胖指针偏移寻址（不存在返 `null`；对 `base_addr = 0` 直接得相对胖指针）/ 取 `shape` 只读指针 / 符号链正逆序游标 / 重解释胖指针形状 / 冻结至只读常量区 |
+| **7. 控制流与协程切换** | `%branch(c, p1, p2)` / `%break(src_ptr)` / `%resume(coro, src_ptr)` | 透明二路分支 / **仅退出当前最内层构建帧 `%this`** 并将 `src_ptr` 移入结果槽（零 RAII）/ 原子移入目标 `%in` 并切换协程 |
+| **8. 基础类型与运算** | 待定（见 [06-stdlib-foundations.md](06-stdlib-foundations.md) §5） | 基础数据类型算术/比较操作究竟采用内核原语还是由标准库从 `compile` capability 获取对应 `prototype` 固化分派，待进一步收敛 |
 
 ## 四、验收用例（自检清单）
 
-1. `s := (\p).shape_ptr`（或 `%shape(%deref(\p))`）取得指针 `\p` 所指向对象的 `shape`：`s.first_sym` 为首字段名，`s.fields.c` 在 `c` 不存在时返回 `null` 指针；且 `%shape((%shape(s.fields)).fields) == %shape(s.fields)`。
+1. **零投影字段反射**：对形状 `s := (\p).shape_ptr` 构造 `base_addr = 0` 的基准胖指针 `z_ptr` 并调用 `%field(z_ptr, a)`，直接获得携带 `(offset, sub_shape, field_mut)` 的相对胖指针；配合 `%next_sym(s, a)` 与 `%prev_sym(s, b)` 即可正逆序遍历全部字段，无需 `s.fields` 投影对象。
 2. `\a` 展开为 `%field(%this, a)`，若当前块未绑定 `a` 或 `\a` 已被 `%drop` 置为 `empty`，则返回 `null` 指针。
 3. `%bind(x, rhs)` 在 `rhs` 为当前块未绑定直接子槽指针（如 `allocate` 或 `{...}`）时绑定并返回 `true`；在 `rhs` 为普通整数 `42` 或已绑定指针 `\a` 时不产生副作用并返回 `false`。
