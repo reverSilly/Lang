@@ -12,7 +12,7 @@
    - **闭合期（Closed Contiguous Object）**：一旦 `block` 求值完成闭合，所有未 `%bind` 槽及处于 `empty`/`uninitialized` 的槽被**直接剥离丢弃**，唯有处于 `live` 状态的已 `%bind` 直接子槽被压平（flatten）为**连续内存布局**。**任何已闭合对象的所有字段在其整个存活期内 100% 永远处于 `live` 状态（绝不存在已闭合对象的 `empty` 字段）**，从而保证 `%field` 与 `%deref` 永远是零状态检查开销的硬件级访问！
 4. **单次初始化（Write-Once）与可变覆写（`mutable`）分离**：
    - 任何处于构建期 `uninitialized` 状态的直接子槽（无论默认 `immutable` 还是 `mutable`）都允许通过 `%write` 填入一次内容以获得初始 `shape` 并转入 `live`；
-   - 唯有声明了 `mutable` 的槽，才允许在进入 `live` 后（或构建期经 `%drop` 变为 `empty` 后）再次调用 `%write` 写入新内容。
+   - **进入 `live` 后（或构建期经 `%drop` 变为 `empty` 后），唯有契约声明为 `mutable`（且指针具有 `mutable` 权限）的槽，才允许再次调用 `%write` 写入新内容**；对 `immutable` 的 `live` 或 `empty` 槽调用 `%write` 直接报错。
 5. **内核状态机与标准库 RAII（`\destroy`）彻底解耦**：
    - **内核完全不认识 `\destroy`**，也不内置 `%move` 或 `%swap` 原语；
    - 内核仅提供针对构建期直接子槽的置空原语 **`%drop(slot_ptr)`**（将构建期直接子槽置为 `empty`，在 `%field` 查找时视为不存在并在块闭合时自动剥离，天然兼任 `unbind`）；
@@ -24,7 +24,7 @@
 - **R2（闭合对象完整性）**：任何已闭合对象的所有字段恒为 `live`，不允许将已闭合对象的单个内部子字段单独掏空为 `empty`（业务可空字段显式使用标准库 `Optional(T)`）。
 - **R3（无环性）**：owned `location` 森林不存在环；引用环只能经由 GC 协程 `handle` 或裸 `pointer` 产生。
 - **R4（构建期槽可转移与摘除）**：在构建期块（`%this` 或活跃父帧 `%parent`）中，直接子槽可通过标准库 `move`（`%write` + `%deref` + `%drop`）转移内容并将原槽置为 `empty`（闭合时自动剥离）。
-- **R5（禁止隐式复制非 POD 对象）**：POD `value` 永远按位复制；含 `\destroy` 的复合对象（非 POD）被标准库 `$` 拒绝按位读出，深拷贝必须调用显式的标准库 `clone`。
+- **R5（禁止隐式复制非 POD 对象）**：POD `value` 永远按位复制；含 `\destroy` 的复合对象（非 POD）被标准库 `$` 拒绝按位读出（仅标准库内部的 `move`/`swap` 使用底层无检查 `%deref` 搬运字节并配合 `%drop` 维护所有权唯一性），深拷贝必须调用显式的标准库 `clone`。
 - **R6（非活跃槽禁读）**：构建期处于 `uninitialized` 或 `empty` 的槽不可读取（`%deref`）。
 - **R7（`%bind` 与 `%drop` 职责正交）**：`%bind(symbol, val)` 仅负责将当前块未绑定的直接子槽挂入符号表；`%drop(slot_ptr)` 仅负责将构建期直接子槽状态置为 `empty`（因 `%field` 与块闭合自动忽略 `empty` 槽，从而自然达成 `unbind` 效果，无需独立的 `%unbind` 原语）。
 - **R8（安全只读共享与借用）**：跨协程只读共享经由指向只读常量区（`frozen` 区）的安全 `immutable` 指针完成；跨帧临时只读访问经由叠加了 `immutable` 掩码的胖指针完成。
@@ -35,8 +35,8 @@
 
 | 状态（仅存在于构建期栈帧） | 含义 | Shape 状态 | 允许的内核原语操作 |
 | :--- | :--- | :--- | :--- |
-| **`uninitialized`** | 刚由 `allocate` 创建，尚未装入内容 | `sub_shape == null` | `%write` 填入初值（获初始 `shape` 并转入 `live`）；`%drop`（直接转入 `empty`）；`%bind` 命名 |
-| **`live`** | 持有有效内容（构建期槽及所有已闭合对象字段均处于此态） | 持有确定 `shape` | `%deref` 按位读取；若为 `mutable` 则允许 `%write` 按位覆写；若为构建期直接子槽则允许 `%drop`（转入 `empty`） |
+| **`uninitialized`** | 刚由 `allocate` 创建，尚未装入内容 | `sub_shape == null` | **`%write` 填入初值**（无论 `immutable` 或 `mutable` 均允许单次写入，获初始 `shape` 并转入 `live`）；`%drop`（直接转入 `empty`）；`%bind` 命名 |
+| **`live`** | 持有有效内容（构建期槽及所有已闭合对象字段均处于此态） | 持有确定 `shape` | `%deref` 按位读取；**仅当契约为 `mutable` 时**允许 `%write` 按位覆写（若父块已闭合，新值 `shape` 必须严格等于字段 `sub_shape`）；若为构建期直接子槽则允许 `%drop`（转入 `empty`） |
 | **`empty`** | 构建期直接子槽曾被 `%drop`（因销毁或移动）置空 | 无内容（`%field` 查找返 `null`） | 块闭合时被直接剥离丢弃；**仅当契约为 `mutable` 时**允许再次通过 `%write` 填入内容转回 `live` |
 
 ### 3.2 为什么“仅构建期直接子槽有 `empty`、闭合对象字段恒 `live`”是终极解？

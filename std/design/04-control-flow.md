@@ -26,7 +26,7 @@
 ```
 
 - **当前环境透明执行**：被选中的 `prototype` 通过 `evaluate` 在**当前 `%this` 环境**直接执行，**不分配新的 `self root`、不切换 `%this` 或 `%parent`**，求值结果 `value` 原样透传。
-- **支撑块内分支初始化与父帧访问**：正因为 `%branch` 不产生嵌套 `block`，在分支内部执行的 `allocate`、`%bind`、`%write` 直接作用于外层块，且分支内的 `%parent` 直接指向外层块的父块：
+- **支撑块内分支初始化与父帧访问**：正因为 `%branch` 不产生嵌套 `block`，在分支内部执行的 `allocate`、`%bind`、`%write` 直接作用于外层块，且分支内的零元 `%parent` 直接指向外层块的父块：
   ```
   outer := {
       val := allocate;
@@ -48,9 +48,9 @@
 %break(target_ptr, val)
 ```
 
-- **目标帧定位（无独立 Frame Handle）**：`target_ptr` 是通过 `%this`（`\this`）获得的活跃祖先块 `self root` 指针（普通 `pointer` value，可复制、传参或被原型捕获）。目标必须是当前协程调用链上的活跃祖先帧；向非祖先或已结束的过期帧指针执行 `%break` 触发运行时错误（静态可证时编译期拒绝）。
+- **目标帧定位（普通 `pointer`，无独立 Frame Handle）**：`target_ptr` 是通过 `%this`（`\this`）或 `%parent` 获得的活跃祖先块 `self root` 指针（即普通的胖指针 `pointer` value，可复制、传参或被原型捕获）。目标必须是当前协程调用链上的活跃祖先帧；向非祖先或已结束的过期帧指针执行 `%break` 触发运行时错误（静态可证时编译期拒绝）。
 - **纯粹的物理回退（Zero-RAII Kernel Unwind）**：
-  - 内核 `%break(target_ptr, val)` **不执行任何 `\destroy` 回调**（所有途经帧与目标帧已有局部变量的逆序 `destroy` 由标准库 `break` 包装器在调用 `%break` 之前沿 `%this -> %parent` 链显式执行完毕，见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）；
+  - 内核 `%break(target_ptr, val)` **不执行任何 `\destroy` 回调**（途经帧与目标帧已有局部变量的逆序 `destroy` 由标准库 `break` 包装器在调用 `%break` 之前执行，见 [06-stdlib-foundations.md](06-stdlib-foundations.md) §3.3）；
   - 内核直接将当前协程栈从 `%this` 回退至 `target_ptr`，丢弃途经帧与 `target_ptr` 原有的构建期子槽，将 `val` 填入 `target_ptr` 的 `self root` 并锁定其 `shape`，使 `target_ptr` 对应的 `block` 求值即刻完成并返回指向该 `self root` 的 `pointer`。
 - **与协程根帧无缝焊接**：
   若 `target_ptr` 是本协程的根帧，则本协程求值结束（状态转为 `Dead`），内核原子地将 `val` 填入恢复者 `\^` 的 `\in` 槽、释放本协程根帧并恢复 `\^` 执行。**协程内跳转 = `%break`，协程间切换 = `%resume`，两者在协程根帧无缝焊接。**
@@ -58,5 +58,5 @@
 ## 五、验收用例（自检清单）
 
 1. `%branch` 经 `evaluate` 透明执行选中分支，不额外产生嵌套的 `self root` location，分支内的 `%parent` 保持不变。
-2. 内核 `%break(target_ptr, val)` 仅接受祖先块的 `\this` 指针与结果 `val`，以 $O(1)$ 物理回退栈帧并改写 `target_ptr` 的 `self root`。
+2. 内核 `%break(target_ptr, val)` 仅接受祖先块的 `\this` 普通指针与结果 `val`，以 $O(1)$ 物理回退栈帧并改写 `target_ptr` 的 `self root`。
 3. 对本协程根帧执行 `%break` 自动将结果送入 `\^` 的 `\in` 槽并终止本协程。
