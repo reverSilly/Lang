@@ -63,7 +63,7 @@
 所有求值发生在当前协程的构建栈（Construction Stack）与帧树上：
 - **通用 `Pointer` 不存储 `parent`**：普通胖指针固定为 `{ addr, shape_ptr, mutability, __ptr_tag }`，不包含父指针；**唯有当前协程构建栈上尚未闭合的 `block` 才具有父子链关系**（由协程运行时维护）。
 - **内核只提供确定性的单步导航原语（全部返回普通 `Pointer` value）**：
-  - 向下访问子字段：`%field(ptr, symbol)`（语法记作 `ptr.symbol`；当前帧 `\sym` 即 `%field(%this, sym)`；若字段不存在或处于构建期 `empty`/`uninitialized`，返回 `null` 指针）；
+  - 向下访问子字段：`%field(ptr, symbol)`（语法记作 `ptr.symbol`；当前帧 `\sym` 即 `%field(%this, sym)`）；
   - 向上访问直接父构建帧：**零参原语 `%parent`**（仅返回当前栈顶构建帧 `%this` 在协程构建栈中的直接父构建帧指针）。
 - **跨多层构建帧的逐步递归上溯（零闭合内存开销）**：
   - 每个由标准库 `{ ... }`（或函数/循环块）开启的构建帧，在进入块时自动绑定一个指向直接父帧的隐式父链槽位：`__parent := %parent`；

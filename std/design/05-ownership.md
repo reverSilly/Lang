@@ -25,23 +25,23 @@
 - **R2（闭合对象无内部空洞）**：已闭合对象压平为零 Header 连续内存后，子字段指针 `\p.q` 只是指向 `p.addr + offset` 的胖指针，没有指向父对象 `p` 的反向指针；因此不允许单方面掏空已闭合对象的内部子字段留下 `empty` 空洞：
   1. **闭合对象的整体移动与销毁**：闭合对象 `p` 本身作为外层构建帧的一个直接子槽，依然可以整体 `%move` 或整体 `drop(\p)`；
   2. **闭合对象内部 `mutable` 字段的提取与修改**：若要零拷贝提取或替换已闭合对象 `p` 的可变字段 `\p.q`，只需通过对称的 **`%swap(\p.q, \tmp_slot)`** 与构建期槽交换内容（交换后双方依然都是 `live`），再在当前构建帧对换出的 `\tmp_slot` 调用 `drop(\tmp_slot)`；
-  3. **业务可空字段**：若用户确实需要闭合对象内有“可空字段”，直接使用标准库的内联 `Optional(T)`（基于 `%bytes(N, A)` + `tag` 的内联 `Union`），在连续内存中显式表达空状态。
+  3. **业务可空字段与容器缓冲区移动**：若用户需要闭合对象内有“可空字段”或动态数组缓冲区，直接使用标准库基于 `%bytes(N, A)` 的内联 `Union` / `Optional(T)` / `DynamicArray(T)`；向未初始化的 `recast` 缓冲区移入非 POD 对象只需执行 **`%swap(buf_elem_ptr, \src_slot); %drop(\src_slot)`**（利用零 RAII 的 Core `%drop` 直接丢弃换出的未初始化字节）。
 - **R3（无环性）**：owned `location` 森林不存在环；引用环只能经由 GC 协程 `Handle` 或裸 `Pointer` 产生。
 - **R4（允许从活跃构建链 `%parent` 移动 Location）**：当内层块 `{ ... }` 正在运行时，外层块 `%parent` 依然处于栈上的**构建期（Constructing）**。只要源槽属于当前协程活跃构建帧链（`%this` 或其任意层 `%parent`）的直接子槽，且该槽本身不是正在运行的活跃子帧根，**`%move(dst_ptr, src_ptr)` 允许将其从 `%parent` 移走并将外层构建帧中的源槽状态置为 `empty`**（等到外层块最终闭合时，该 `empty` 绑定会被自动静默剥离）。这是将外层块变量移入内层块（如函数调用帧、返回对象）最基础的所有权传递路径。
 - **R5（禁止隐式复制非 POD 对象）**：POD `value` 永远按位复制；含 `\destroy` 的复合对象（非 POD）被标准库 `$` 拒绝按位读出，深拷贝必须调用显式的标准库 `clone`。
-- **R6（非活跃槽禁读）**：构建期处于 `uninitialized` 或 `empty` 的槽不可读取（`%deref`）、不可作为 `%move` 的源或 `%swap` 的操作数。
-- **R7（`%bind` 与 `%drop` 职责正交）**：`%bind(symbol, val)` 仅负责将当前块未绑定的直接子槽挂入符号表；`%drop(slot_ptr)` 仅负责将构建期直接子槽状态置为 `empty`（块闭合时自动静默剥离 `empty` 槽，从而自然取消字段导出）。
+- **R6（非活跃槽禁读）**：构建期处于 `uninitialized` 或 `empty` 的槽（其指针表现为 `addr ~= 0, shape_ptr == 0`）不可读取（`%deref`）、不可作为 `%move` 的源或 `%swap` 的操作数。
+- **R7（`%bind` 与 `%drop` 职责正交）**：`%bind(symbol, val)` 负责将当前块未绑定的直接子槽挂入符号表（若同名旧绑定已处于 `empty` 态则允许直接覆盖重绑）；`%drop(slot_ptr)` 仅负责将构建期直接子槽状态置为 `empty`（块闭合时自动静默剥离 `empty` 槽，从而自然取消字段导出）。
 - **R8（安全只读共享与借用）**：跨协程只读共享经由指向只读常量区（`frozen` 区）的安全 `immutable` 指针完成；跨帧临时只读访问经由将 `Pointer.mutability` 置为 `0`（`immutable`）的胖指针完成。
 
 ## 三、构建期三态机与内核原语对照
 
 ### 3.1 构建期直接子槽的三个状态
 
-| 状态（仅属于构建期帧直接子槽） | 含义 | Shape 状态 | 允许的内核原语操作 |
+| 状态（仅属于构建期帧直接子槽） | 含义 | `%field(%this, sym)` 返回的指针特征 | 允许的内核原语操作 |
 | :--- | :--- | :--- | :--- |
-| **`uninitialized`** | 刚由 `allocate` 创建，尚未装入内容 | `sub_shape == null` | **`%write` 或 `%move` 填入初值**（无论 `immutable` 或 `mutable` 均允许单次填入，获初始 `Shape` 并转入 `live`）；`%drop`（直接转入 `empty`）；`%bind` 命名 |
-| **`live`** | 持有有效内容（构建期槽及所有已闭合对象字段均处于此态） | 持有确定 `Shape` | `%deref` 按位读取；若可写（`mutable`）则允许 **`%swap(p1, p2)`** 与同 `Shape` 的可写 `live` 槽交换内容；若为构建期直接子槽则允许作为 **`%move` 的源**或调用 **`%drop`**（转入 `empty`） |
-| **`empty`** | 构建期直接子槽曾被 `%move` 移走或被 `%drop` 置空 | 无内容（`%field` 查找返 `null`） | 块闭合时被直接静默剥离；**仅当契约为 `mutable` 时**允许再次作为 `%write` 或 `%move` 的目标填入新内容转回 `live` |
+| **`uninitialized`** | 刚由 `allocate` 创建，尚未装入内容 | `addr ~= 0, shape_ptr == 0` | **`%write` 或 `%move` 填入初值**（无论 `immutable` 或 `mutable` 均允许单次填入，获初始 `Shape` 并转入 `live`）；`%drop`（直接转入 `empty`）；`%bind` 命名 |
+| **`live`** | 持有有效内容（构建期槽及所有已闭合对象字段均处于此态） | `addr ~= 0, shape_ptr ~= 0` | `%deref` 按位读取；若可写（`mutable`）则允许 **`%swap(p1, p2)`** 与同 `Shape` 的可写 `live` 槽交换内容；若为构建期直接子槽则允许作为 **`%move` 的源**或调用 **`%drop`**（转入 `empty`） |
+| **`empty`** | 构建期直接子槽曾被 `%move` 移走或被 `%drop` 置空 | `addr ~= 0, shape_ptr == 0` | 块闭合时被直接静默剥离；同名符号可被新 `%bind` 覆盖；**仅当契约为 `mutable` 时**允许再次作为 `%write` 或 `%move` 的目标填入新内容转回 `live` |
 
 ### 3.2 内核状态与读写原语总结
 
@@ -51,7 +51,7 @@
 | **`%move(dst_ptr, src_ptr)`** | `src_ptr` 为活跃构建帧链（`%this` 或 `%parent`）上的 `live` 直接子槽；`dst_ptr` 处于 `uninitialized` 或 `mutable empty` | 将 `src_ptr` 的内容移入 `dst_ptr`（`dst_ptr` 转为 `live`），并将 `src_ptr` 在其所属构建帧中置为 `empty` |
 | **`%drop(slot_ptr)`** | `slot_ptr` 为活跃构建帧链上的直接子槽（要求其下无未清空的构建期子槽），处于 `live` 或 `uninitialized` | 将 `slot_ptr` 在所属构建帧中的状态标记为 `empty`（零 RAII，对已 `empty` 报错） |
 | **`%swap(ptr1, ptr2)`** | `ptr1` 与 `ptr2` 均为可写（`mutable`）的 `live` 指针（含已闭合对象的可变子字段），且 `ptr1.shape_ptr == ptr2.shape_ptr` | 按字节原地交换两槽的内容，交换后双方仍为 `live`（零空洞、零析构） |
-| **`%deref(ptr) -> val`** | `ptr` 指向任意处于 `live` 状态的槽 | 按 `ptr.shape_ptr` 指向的 `Shape.size` 无条件读出字节返回 `val` |
+| **`%deref(ptr) -> val`** | `ptr` 指向任意处于 `live` 状态的槽（`ptr.shape_ptr ~= 0`） | 按 `ptr.shape_ptr` 指向的 `Shape.size` 无条件读出字节返回 `val` |
 
 ## 四、`block` 对象构造、剥离与连续内存闭合
 

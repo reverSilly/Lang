@@ -69,7 +69,7 @@ f32 := { __raw := %bytes(4, 4); __f32_tag := {} };
 | **`Symbol`** | `{ __raw: bytes(4, 4), __sym_tag: {} }`<br>（全 0 字节保留给 `null_sym`） | `4B` / `4B` | 源码标识符即 4 字节唯一 Intern ID；运行期比较仅为单条 4 字节相等比较 |
 | **`Boolean`** | `{ __raw: bytes(1, 1), __bool_tag: {} }` | `1B` / `1B` | 供内核 `%branch` 与 `%bind` 使用，同时与 `u8`/`i8` 保持严格的类型区分 |
 | **`Shape`** | `{ size: bytes(8, 8), align: bytes(8, 8), first_sym: Symbol, last_sym: Symbol, __shape_tag: {} }` | `24B` / `8B` | `Shape` 自身也是普通只读对象，其 `shape_ptr` 指向只读常量区中的 `ShapeMeta`（即 `Shape` 自身的形状，形成不动点闭环） |
-| **`Pointer`** | `{ addr: bytes(8, 8), shape_ptr: bytes(8, 8), mutability: bytes(1, 1), __ptr_tag: {} }` | `24B` / `8B`<br>（瘦化后 `8B`） | **彻底消灭指针拆包原语与 `%recast`**：直接读写 `.addr`、`.shape_ptr`、`.mutability` 即可在标准库完成反射基准指针构造、形状重解释与数组偏移寻址 |
+| **`Pointer`** | `{ addr: bytes(8, 8), shape_ptr: bytes(8, 8), mutability: bytes(1, 1), __ptr_tag: {} }` | `24B` / `8B`<br>（瘦化后 `8B`） | **彻底消灭指针拆包原语与 `%recast`**：将指针装入槽位 `\p` 后直接读写 `\p.addr`、`\p.shape_ptr`、`\p.mutability`，在标准库即可完成反射基准指针构造、形状重解释与数组偏移寻址 |
 | **`Prototype`** | `{ __raw: bytes(8, 8), __proto_tag: {} }` | `8B` / `8B` | 指向编译期或运行期只读代码段入口的纯代码值 |
 | **`Handle`** | `{ __raw: bytes(8, 8), __handle_tag: {} }` | `8B` / `8B` | 指向 GC 托管协程控制块的句柄值 |
 
@@ -127,6 +127,6 @@ sext_i16_i64_raw := compile capabilities.intrinsics.ext_int(true, 2, 8, x);
 ## 六、验收用例（自检清单）
 
 1. **`%bytes(N, align)` 与 `null_sym` 判别**：`%bytes(8, 8)` 返回 `Shape` 满足 `size == 8`、`align == 8`、`first_sym == null_sym` 的未指定内容 `value`（运行期写入槽位零清零开销）；包含它的 `u64`（`{ __raw: bytes(8, 8), __u64_tag: {} }`）自动继承 `align == 8`，且因 `first_sym == __raw ~= null_sym` 与裸 `bytes(8, 8)` 严格区分。
-2. **透明 `Pointer` 消除 `%recast`**：对任意胖指针 `p`，直接通过 `p.addr`、`p.shape_ptr`、`p.mutability` 读取其内部字段，并在标准库中直接构造新 `Pointer` 完成 `recast` 与 `z_ptr` 反射。
+2. **透明 `Pointer` 消除 `%recast`**：将胖指针 `p` 装入槽位后，直接通过 `\p.addr`、`\p.shape_ptr`、`\p.mutability` 读取其内部字段，并在标准库中直接构造新 `Pointer` 完成 `recast` 与 `z_ptr` 反射。
 3. **全阶段符号池 `Trie` 互转**：运行期调用 `%sym_bytes(sym)` 以 $O(1)$ 取得字段名 UTF-8 字节胖指针用于 JSON 序列化；调用 `%intern_sym(ptr, len)` 动态驻留外部字段名并与编译期静态符号共享同一套 `Symbol` ID。
 4. **参数化 `capabilities.intrinsics` 裸 `bytes` 运算**：`compile capabilities.intrinsics.add_int(4, a, b)` 与 `ext_int(true, 2, 8, x)` 直接在裸 `bytes` 槽位上完成硬件运算，标准库经 `.__raw` 拆封与重装，全程无需内核认识 `i32` 或提供修改 `Shape` 原语。
