@@ -17,19 +17,23 @@
 
 ## 二、物理底座 `bytes(N, align)` 与零尺寸标记机制
 
-### 2.1 `bytes(N, align = 1)` 的构造、`Shape` 表示与 `null_sym` 唯一判别
+### 2.1 `%bytes(N, align)` 原语、`Shape` 表示与 `null_sym` 唯一判别
 
-内核提供原子字节块构造原语 **`%bytes(N, align)`**（当在标准库中省略 `align` 时缺省为 `1`，要求 `align` 为 $2$ 的幂；当写入目标槽位时直接原地零初始化），其对应的 `Shape` 对象为：
-
-```
-{
-    size        : N,         !- 字节长度（bytes(8, 8)） -!
-    align       : align,     !- 字节对齐（bytes(8, 8)） -!
-    first_sym   : null_sym,  !- 原子字节块无子字段 -!
-    last_sym    : null_sym,  !- 原子字节块无子字段 -!
-    __shape_tag : {}
-}
-```
+内核提供原子字节值产生原语 **`%bytes(N, align) -> value`**（当在标准库中省略 `align` 时缺省为 `1`，要求 `align` 为 $2$ 的幂）：
+- **返回未指定字节内容的 `value`（默认不保证零初始化）**：
+  - `%bytes(N, align)` 的求值结果是一个 `shape = bytes(N, align)` 的普通 POD `value`，**语义上不保证其字节内容为零（内容未指定）**；
+  - 因为对裸 `bytes` 而言任何比特模式均为合法值，当通过 `%write(\slot, %bytes(N, align))` 将其写入槽位时，该槽位即刻获得 `bytes(N, align)` 形状并转入 `live` 状态，**运行期无需执行 `memset(0)` 清零（真正 $O(1)$ 零开销，非常适合 `Union` 内联载荷、未初始化容器缓冲区与类型占位）**；
+  - **编译期确定性**：在 `compile` 期求值或跨阶段固化（Reification）进 `.rodata` 时，求值器内部统一填零，确保编译期求值 100% 确定且可缓存。
+- **`bytes(N, align)` 的 `Shape` 对象结构**：
+  ```
+  {
+      size        : N,         !- 字节长度（bytes(8, 8)） -!
+      align       : align,     !- 字节对齐（bytes(8, 8)） -!
+      first_sym   : null_sym,  !- 原子字节块无子字段 -!
+      last_sym    : null_sym,  !- 原子字节块无子字段 -!
+      __shape_tag : {}
+  }
+  ```
 
 - **为什么 `bytes(N, align)` 需要 `align`**：
   - 复合结构体闭合时的对齐要求由其所有子字段的对齐推导得出：
@@ -122,7 +126,7 @@ sext_i16_i64_raw := compile capabilities.intrinsics.ext_int(true, 2, 8, x);
 
 ## 六、验收用例（自检清单）
 
-1. **`bytes(N, align)` 与 `null_sym` 判别**：`%bytes(8, 8)` 的 `Shape` 满足 `size == 8`、`align == 8`、`first_sym == null_sym`；包含它的 `u64`（`{ __raw: bytes(8, 8), __u64_tag: {} }`）自动继承 `align == 8`，且因 `first_sym == __raw ~= null_sym` 与裸 `bytes(8, 8)` 严格区分。
+1. **`%bytes(N, align)` 与 `null_sym` 判别**：`%bytes(8, 8)` 返回 `Shape` 满足 `size == 8`、`align == 8`、`first_sym == null_sym` 的未指定内容 `value`（运行期写入槽位零清零开销）；包含它的 `u64`（`{ __raw: bytes(8, 8), __u64_tag: {} }`）自动继承 `align == 8`，且因 `first_sym == __raw ~= null_sym` 与裸 `bytes(8, 8)` 严格区分。
 2. **透明 `Pointer` 消除 `%recast`**：对任意胖指针 `p`，直接通过 `p.addr`、`p.shape_ptr`、`p.mutability` 读取其内部字段，并在标准库中直接构造新 `Pointer` 完成 `recast` 与 `z_ptr` 反射。
 3. **全阶段符号池 `Trie` 互转**：运行期调用 `%sym_bytes(sym)` 以 $O(1)$ 取得字段名 UTF-8 字节胖指针用于 JSON 序列化；调用 `%intern_sym(ptr, len)` 动态驻留外部字段名并与编译期静态符号共享同一套 `Symbol` ID。
 4. **参数化 `capabilities.intrinsics` 裸 `bytes` 运算**：`compile capabilities.intrinsics.add_int(4, a, b)` 与 `ext_int(true, 2, 8, x)` 直接在裸 `bytes` 槽位上完成硬件运算，标准库经 `.__raw` 拆封与重装，全程无需内核认识 `i32` 或提供修改 `Shape` 原语。
