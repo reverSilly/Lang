@@ -5,64 +5,71 @@
 
 ## 一、核心裁决总览
 
-1. **表达式皆为无所有权的 `value`；所有权唯一绑定在内部逻辑存储节点 `location` 上。** `location` 是唯一可被拥有、写入（`%write`）、移动（`%move`）、交换（`%swap`）和置空（`%drop`）的实体，在表达式中统一通过指向它的 `Pointer` value 进行操作；且 `location` 作为逻辑槽位抽象，不强制在任意时刻都对应物理内存（寄存器与内存均可承载 `location`）。
-2. **单拥有者森林（Single-Owner Forest）**：每个 `block`（即对象 `self root`）拥有其直接子 `location`，子 `location` 再拥有其下属子 `location`。owned 对象图永远是无环森林。
-3. **动态构建期 vs 静态闭合期（闭合对象无内部 `empty` 空洞铁律）**：
-   - **构建期（Constructing Block）**：`uninitialized` / `live` / `empty` 三态**仅属于“构建期栈帧的直接子槽（Frame Slot）”**（状态仅维护在当前活跃构建帧上）；
-   - **闭合期（Closed Contiguous Object）**：一旦 `block` 求值完成闭合压平为连续内存对象，所有未 `%bind` 槽及处于 `empty`/`uninitialized` 的槽被**直接静默剥离**，唯有处于 `live` 状态的已 `%bind` 直接子槽被压平（flatten）为**零 Header 连续内存布局**。**任何已闭合对象的所有内部子字段在其整个存活期内 100% 永远处于 `live` 状态（严禁单方面掏空已闭合对象的某个内部字段留下 `empty` 空洞）**，从而保证 `%field` 与 `%deref` 永远是零状态检查开销的硬件级访问！
-4. **单次初始化（Write-Once）与可变操作（`mutable`）分离**：
-   - 任何处于构建期 `uninitialized` 状态的直接子槽（无论默认 `immutable` 还是 `mutable`）都允许通过 `%write` 或 `%move` 填入一次内容以获得初始 `Shape` 并转入 `live`；
-   - 进入 `live` 后（或构建期经 `%drop`/`%move` 变为 `empty` 后），唯有契约声明为 `mutable`（且指针具有 `mutable` 权限）的槽，才允许再次填入新内容或通过 `%swap` 交换内容。
-5. **内核状态机与标准库 RAII（`\destroy`）彻底解耦**：
-   - **内核完全不知道 `\destroy` 的存在**，所有 RAII 析构均由标准库管理（见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）；
-   - 内核原语 **`%write(dst_ptr, val)`** 与 **`%move(dst_ptr, src_ptr)`** 严格要求目标槽 `dst_ptr` 处于 `uninitialized` 或 `empty` 空态；
-   - 内核原语 **`%drop(slot_ptr)`** 仅作用于构建期帧的直接子槽（要求其下无未清空的构建期子槽），仅负责将该槽在当前构建帧中的状态标记为 `empty`（闭合时自动剥离，兼作取消字段导出）；
-   - 内核原语 **`%swap(ptr1, ptr2)`** 对称交换两个同 `Shape` 的可写 `live` 槽内容（交换后双方依然都是 `live`，零空洞、零析构），专用于零拷贝提取或修改已闭合对象的 `mutable` 子字段！
+1. **表达式皆为无所有权的 `value`；所有权唯一绑定在内部逻辑存储节点 `location` 上。** `location` 是唯一可被拥有、分配（`%allocate` / `%allocate_val`）、写入（`%write`）、触活（`%touch`）和置空（`%drop`）的实体，在表达式中统一通过指向它的真 `Pointer` value 进行操作；且 `location` 作为逻辑槽位抽象，不强制在任意时刻都对应物理内存（寄存器与内存均可承载 `location`）。
+2. **单个 `location` 终身 `Shape` 固定**：每个 `location` 在由 `%allocate [mutable] shape_ptr` 或 `%allocate_val [mutable] val` 创建时即确定 `Shape` 并分配好存储空间；未闭合块中改变变量类型通过标准库 **`drop(\x)` 释放旧槽 + 分配新 `Shape` 槽 + `%bind` 重绑（Rebind）** 实现。
+3. **单拥有者森林（Single-Owner Forest）**：每个 `block`（即对象 `self root`）拥有其直接子 `location`，子 `location` 再拥有其下属子 `location`。owned 对象图永远是无环森林。
+4. **动态构建期 vs 静态闭合期（闭合对象无内部 `empty` 空洞铁律）**：
+   - **构建期（Constructing Block）**：`uninitialized` / `live` / `empty` 三态**仅属于“构建期栈帧的直接子槽（Frame Slot）”**；
+   - **闭合期（Closed Contiguous Object）**：一旦 `block` 求值完成闭合（且未命名临时槽已由标准库通过 `%unbound` 清理完毕），内核自动静默剥离所有处于 `empty` 或 `uninitialized` 的直接子槽，唯有处于 **`live`** 状态的已 `%bind` 直接子槽被压平（flatten）为**零 Header 连续内存布局**。**任何已闭合对象的所有内部子字段在其整个存活期内 100% 永远处于 `live` 状态（严禁对已闭合对象的内部字段调用 `%drop` 留下 `empty` 空洞）**！
+5. **单次初始化（Write-Once）与可变操作（`mutable`）分离**：
+   - 任何处于构建期 `uninitialized` 状态的直接子槽（无论默认 `immutable` 还是 `mutable`）都允许通过 `%write` 或 `%touch` 完成一次初始化转入 `live`；
+   - 一旦进入 `live`（或构建期经 `%drop` 变为 `empty` 后），唯有契约声明为 `mutable`（且指针具有 `mutable` 权限）的位置，才允许再次调用 **`%write(dst_ptr, val)`** 覆写新内容！
+6. **内核状态机与标准库 RAII（`\destroy`）/ POD / `move` / `swap` 彻底解耦**：
+   - **内核完全不知道 `\destroy` 或 POD 的存在**，也不内置 `%move` 或 `%swap` 原语；
+   - **`%deref(ptr)`** 与 **`%write(dst_ptr, val)`** 是纯粹的按位读写原语（不检查 POD、不触发 `\destroy`）；
+   - **`%drop(slot_ptr)`** 仅作用于活跃构建帧链（`%this` 或 `%parent`）的直接子槽，仅负责将该槽状态标记为 `empty` 并从 `live` 链中摘除（零 RAII）；
+   - **`move` 与 `swap` 全部在标准库中由 `%allocate`/`%allocate_val`、`%deref`、`%write`、`%drop` 与 `destroy` 组合导出**（见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）！
 
 ## 二、所有权不变量（R1–R8）
 
 - **R1（唯一拥有者）**：每个 `location` 恰有一个直接拥有者（父 `block`/对象，或协程根帧）。
-- **R2（闭合对象无内部空洞）**：已闭合对象压平为零 Header 连续内存后，子字段指针 `\p.q` 只是指向 `p.addr + offset` 的胖指针，没有指向父对象 `p` 的反向指针；因此不允许单方面掏空已闭合对象的内部子字段留下 `empty` 空洞：
-  1. **闭合对象的整体移动与销毁**：闭合对象 `p` 本身作为外层构建帧的一个直接子槽，依然可以整体 `%move` 或整体 `drop(\p)`；
-  2. **闭合对象内部 `mutable` 字段的提取与修改**：若要零拷贝提取或替换已闭合对象 `p` 的可变字段 `\p.q`，只需通过对称的 **`%swap(\p.q, \tmp_slot)`** 与构建期槽交换内容（交换后双方依然都是 `live`），再在当前构建帧对换出的 `\tmp_slot` 调用 `drop(\tmp_slot)`；
-  3. **业务可空字段与容器缓冲区移动**：若用户需要闭合对象内有“可空字段”或动态数组缓冲区，直接使用标准库基于 `%bytes(N, A)` 的内联 `Union` / `Optional(T)` / `DynamicArray(T)`；向未初始化的 `recast` 缓冲区移入非 POD 对象只需执行 **`%swap(buf_elem_ptr, \src_slot); %drop(\src_slot)`**（利用零 RAII 的 Core `%drop` 直接丢弃换出的未初始化字节）。
+- **R2（闭合对象无内部空洞）**：已闭合对象压平为零 Header 连续内存后，不允许对其内部子字段调用 `%drop` 留下 `empty` 空洞：
+  1. **闭合对象的整体移动与销毁**：闭合对象 `p` 本身作为外层构建帧的一个直接子槽，依然可以整体 `move` 或整体 `drop(\p)`；
+  2. **闭合对象内部 `mutable` 字段的直接覆写与移动**：由于 `%write(dst_ptr, val)` 直接支持任何具有 `mutable` 权限且形状匹配的 `dst_ptr`（含已闭合对象的 `mutable live` 子字段 `\p.q`），修改 `\p.q` 只需在标准库执行 **`destroy(\p.q); %write(\p.q, new_val)`**（若从构建槽 `\src` 移入 `\p.q`，则执行 **`destroy(\p.q); %write(\p.q, %deref(\src)); %drop(\src)`**），全程 `\p.q` 100% 保持 `live` 无空洞！
+  3. **业务可空字段**：使用标准库的内联 `Optional(T)` / `Union`（通过 `%allocate mutable (bytes_shape(N, A))` + `%touch` 构造始终处于 `live` 状态的未初始化字节载荷）。
 - **R3（无环性）**：owned `location` 森林不存在环；引用环只能经由 GC 协程 `Handle` 或裸 `Pointer` 产生。
-- **R4（允许从活跃构建链 `%parent` 移动 Location）**：当内层块 `{ ... }` 正在运行时，外层块 `%parent` 依然处于栈上的**构建期（Constructing）**。只要源槽属于当前协程活跃构建帧链（`%this` 或其任意层 `%parent`）的直接子槽，且该槽本身不是正在运行的活跃子帧根，**`%move(dst_ptr, src_ptr)` 允许将其从 `%parent` 移走并将外层构建帧中的源槽状态置为 `empty`**（等到外层块最终闭合时，该 `empty` 绑定会被自动静默剥离）。这是将外层块变量移入内层块（如函数调用帧、返回对象）最基础的所有权传递路径。
-- **R5（禁止隐式复制非 POD 对象）**：POD `value` 永远按位复制；含 `\destroy` 的复合对象（非 POD）被标准库 `$` 拒绝按位读出，深拷贝必须调用显式的标准库 `clone`。
-- **R6（非活跃槽禁读）**：构建期处于 `uninitialized` 或 `empty` 的槽（其指针表现为 `addr ~= 0, shape_ptr == 0`）不可读取（`%deref`）、不可作为 `%move` 的源或 `%swap` 的操作数。
-- **R7（`%bind` 与 `%drop` 职责正交）**：`%bind(symbol, val)` 负责将当前块未绑定的直接子槽挂入符号表（若同名旧绑定已处于 `empty` 态则允许直接覆盖重绑）；`%drop(slot_ptr)` 仅负责将构建期直接子槽状态置为 `empty`（块闭合时自动静默剥离 `empty` 槽，从而自然取消字段导出）。
+- **R4（允许对活跃构建链 `%parent` 的直接子槽执行 `%drop` 以支撑跨帧 `move`）**：当内层块 `{ ... }` 正在运行时，外层块 `%parent` 依然处于栈上的**构建期（Constructing）**。只要源槽 `src_ptr` 属于当前协程活跃构建帧链（`%this` 或其任意层 `%parent`）的直接子槽，且该槽本身不是正在运行的活跃子帧根，**`%drop(src_ptr)` 允许将其在外层构建帧中的状态置为 `empty`**（等到外层块最终闭合时，该 `empty` 槽被内核自动静默剥离）。标准库的 `move` 正是通过 `%write(dst, %deref(src)); %drop(src)` 实现将外层变量移入内层块。
+- **R5（标准库把关非 POD 拷贝）**：Core `%deref` 与 `%write` 不检查 POD；面向用户的标准库 `$` 算子与 `=` 算子通过递归检查 `Shape`（以 `first_sym == null_sym` 为终点，且不含 `\destroy`）拦截非 POD 对象的隐式按位复制。
+- **R6（非活跃槽禁读）**：构建期处于 `uninitialized` 或 `empty` 的槽不可读取（`%deref` 报错）。
+- **R7（`%bind`、`%touch` 与 `%drop` 职责正交）**：
+  - `%bind(symbol, val)` 仅负责将当前块未绑定的直接子槽挂入符号表（若同名旧绑定已处于 `empty` 态则直接覆盖重绑）；
+  - 唯有当已绑定槽处于 `live` 状态（由 `%allocate_val` 创建，或经 `%write`/`%touch` 激活）时，其符号才出现在 `(%this).shape_ptr` 的 `first_sym .. last_sym` 游标链中；
+  - `%drop(slot_ptr)` 将构建期直接子槽置为 `empty`，并立即将其从 `first_sym .. last_sym`（或 `%unbound`）中摘除。
 - **R8（安全只读共享与借用）**：跨协程只读共享经由指向只读常量区（`frozen` 区）的安全 `immutable` 指针完成；跨帧临时只读访问经由将 `Pointer.mutability` 置为 `0`（`immutable`）的胖指针完成。
 
 ## 三、构建期三态机与内核原语对照
 
 ### 3.1 构建期直接子槽的三个状态
 
-| 状态（仅属于构建期帧直接子槽） | 含义 | `%field(%this, sym)` 返回的指针特征 | 允许的内核原语操作 |
+| 状态（仅属于构建期帧直接子槽） | 产生方式 | 是否在 `first_sym..last_sym` 或 `%unbound` 中 | 允许的内核原语操作 |
 | :--- | :--- | :--- | :--- |
-| **`uninitialized`** | 刚由 `allocate` 创建，尚未装入内容 | `addr ~= 0, shape_ptr == 0` | **`%write` 或 `%move` 填入初值**（无论 `immutable` 或 `mutable` 均允许单次填入，获初始 `Shape` 并转入 `live`）；`%drop`（直接转入 `empty`）；`%bind` 命名 |
-| **`live`** | 持有有效内容（构建期槽及所有已闭合对象字段均处于此态） | `addr ~= 0, shape_ptr ~= 0` | `%deref` 按位读取；若可写（`mutable`）则允许 **`%swap(p1, p2)`** 与同 `Shape` 的可写 `live` 槽交换内容；若为构建期直接子槽则允许作为 **`%move` 的源**或调用 **`%drop`**（转入 `empty`） |
-| **`empty`** | 构建期直接子槽曾被 `%move` 移走或被 `%drop` 置空 | `addr ~= 0, shape_ptr == 0` | 块闭合时被直接静默剥离；同名符号可被新 `%bind` 覆盖；**仅当契约为 `mutable` 时**允许再次作为 `%write` 或 `%move` 的目标填入新内容转回 `live` |
+| **`uninitialized`** | 刚由 `%allocate [mutable] s` 创建（已分配好内存且 `shape_ptr == s`） | **否**（`\x` 可寻址，但游标不遍历它；若直到块闭合仍为 `uninit`，由内核直接静默剥离） | **`%write(\x, val)` 填入初值**或 **`%touch(\x)` 零开销激活用作缓冲区**（无论 `immutable` 或 `mutable` 均允许一次 `uninit → live`）；`%drop`（转入 `empty`）；`%bind` 命名 |
+| **`live`** | 由 `%allocate_val` 创建，或经 `%write` / `%touch` 激活（所有已闭合对象字段恒处于此态） | **是**（已命名槽在 `first_sym..last_sym` 中；未命名槽在 `%unbound` 栈中） | `%deref` 按位读取；**若 `mutability == mutable` 则允许直接调用 `%write(ptr, val)` 覆写新字节**；若为构建链直接子槽则允许调用 **`%drop(ptr)`**（转入 `empty`） |
+| **`empty`** | 构建期直接子槽被 `%drop` 置空 | **否**（已从游标链摘除；`\x` 查找返 `null` 或仅允許 `mutable` 槽原地 `%write` 复活；块闭合时由内核静默剥离） | 同名符号可被新 `%bind` 覆盖重绑（Rebind）；若契约为 `mutable` 亦可直接通过保存的槽指针再次 `%write` 或 `%touch` 转回 `live` |
 
-### 3.2 内核状态与读写原语总结
+### 3.2 内核状态与读写原语总结（共 7 个，无 `%move` / `%swap`）
 
 | 内核原语 | 前置条件 | 动作与状态转换 |
 | :--- | :--- | :--- |
-| **`%write(dst_ptr, val)`** | `dst_ptr` 为构建期直接子槽，且处于 `uninitialized` 或 `mutable empty` | 将 `val` 的 `bytes` 按位拷入 `dst_ptr`，赋予 `val` 的 `Shape` 并置为 `live` |
-| **`%move(dst_ptr, src_ptr)`** | `src_ptr` 为活跃构建帧链（`%this` 或 `%parent`）上的 `live` 直接子槽；`dst_ptr` 处于 `uninitialized` 或 `mutable empty` | 将 `src_ptr` 的内容移入 `dst_ptr`（`dst_ptr` 转为 `live`），并将 `src_ptr` 在其所属构建帧中置为 `empty` |
-| **`%drop(slot_ptr)`** | `slot_ptr` 为活跃构建帧链上的直接子槽（要求其下无未清空的构建期子槽），处于 `live` 或 `uninitialized` | 将 `slot_ptr` 在所属构建帧中的状态标记为 `empty`（零 RAII，对已 `empty` 报错） |
-| **`%swap(ptr1, ptr2)`** | `ptr1` 与 `ptr2` 均为可写（`mutable`）的 `live` 指针（含已闭合对象的可变子字段），且 `ptr1.shape_ptr == ptr2.shape_ptr` | 按字节原地交换两槽的内容，交换后双方仍为 `live`（零空洞、零析构） |
-| **`%deref(ptr) -> val`** | `ptr` 指向任意处于 `live` 状态的槽（`ptr.shape_ptr ~= 0`） | 按 `ptr.shape_ptr` 指向的 `Shape.size` 无条件读出字节返回 `val` |
+| **`%allocate [mutable] s -> ptr`** | `s` 为有效 `Pointer(Shape)` | 在当前块 `%this` 分配大小与对齐为 `(s.size, s.align)` 的直接子槽，状态置为 `uninitialized`，返回真 `Pointer` |
+| **`%allocate_val [mutable] val -> ptr`** | `val` 为任意 `value` | 在当前块 `%this` 分配形状为 `%shape(val)` 的直接子槽，拷入 `val` 字节，状态直接置为 `live`（挂入 `%unbound`），返回真 `Pointer` |
+| **`%touch(slot_ptr)`** | `slot_ptr` 为 `%this` 的直接子槽，处于 `uninitialized` 或 `mutable empty` | **不改动任何内存字节**，直接将该槽状态置为 `live`（用于 `Optional`/`Union` 未初始化载荷） |
+| **`%bind(sym, val) -> Boolean`** | `sym` 为 `Symbol` | 若 `val` 为 `%this` 下未绑定的直接子槽指针（且 `sym` 未绑定或原绑定已 `empty`），将其从 `%unbound` 移入具名符号表并返回 `true`；否则返回 `false` |
+| **`%write(dst_ptr, val)`** | `$dst_ptr.shape_ptr == (%shape(val)).addr`，且 `dst_ptr` 为 `uninitialized` 直接子槽 **或** `dst_ptr.mutability == mutable`（含已闭合对象的 `mutable live` 字段） | 将 `val` 的字节无条件按位拷入 `dst_ptr.addr`，并将槽状态置为/保持为 `live`（零 POD/RAII 检查） |
+| **`%deref(ptr) -> val`** | `ptr` 指向任意处于 `live` 状态的槽 | 按 `ptr.shape_ptr` 指向的 `Shape.size` 无条件读出字节返回 `val`（零 POD/RAII 检查） |
+| **`%drop(slot_ptr)`** | `slot_ptr` 为活跃构建帧链（`%this` 或 `%parent`）上的直接子槽（要求其下无未清空子槽），处于 `live` 或 `uninitialized` | 将 `slot_ptr` 状态标记为 `empty` 并从 `first_sym..last_sym` 或 `%unbound` 中摘除（零 RAII，对已 `empty` 或已闭合对象内部字段报错） |
 
 ## 四、`block` 对象构造、剥离与连续内存闭合
 
 设 `block ^p` 在父块 `P` 中求值，其隐式分配的 `self root` 为 `R_B`：
 
-1. **归属父块与就地构造**：`R_B` 是父块 `P` 的直接子 `location`，`block ^p` 求值完毕后返回指向 `R_B` 的 `Pointer` value，父块 `P` 可用 `%bind(x, ...)`（即 `x := { ... }`）将其命名到 `P` 的符号表（物理上直接在 `P` 的槽位中就地构造）。
+1. **归属父块与就地构造**：`R_B` 是父块 `P` 的直接子 `location`，`block ^p` 求值完毕后返回指向 `R_B` 的未绑定 `live` `Pointer` value（挂入 `P` 的 `%unbound`），父块 `P` 可用 `%bind(x, ...)`（即 `x := { ... }`）将其命名到 `P` 的符号表。
 2. **构建期动态性（Constructing）**：在 `p` 执行期间，`R_B` 处于构建状态，块内可通过 `%this`（`\this`）及 `\field`（即 `%field(%this, field)`）读写字段。
 3. **闭合相变（Constructing → Closed Contiguous Object）**：
-   - 当 `p` 执行到底闭合时：
-     1. `R_B` 下所有**未经 `%bind` 命名**的直接子槽，以及虽经 `%bind` 命名但此时处于 **`empty` 或 `uninitialized`** 状态的直接子槽（例如块内用完即被 `%move` 走或 `drop` 掉的具名中间变量、已清理的 `__parent` 槽及 `__defer_k` 守卫）**被直接静默剥离**；
-     2. 剩余所有处于 **`live`** 状态的已 `%bind` 直接子槽按各自的 `align` 对齐并紧密压平（flatten）为一块连续的字节内存，生成驻留在只读常量区的不可变复合 `Shape`（其 `align = max(1, field.align)`；若包含零尺寸字段 `{}`，其 `size = 0` 但符号仍记录在 `first_sym .. last_sym` 链中），`R_B` 状态定格为 `live` 且整体形状永久锁定。
+   - 当 `{ ... }` 块准备闭合时：
+     1. 标准库包裹层先循环检查 **`%unbound`**，对所有未命名的临时 `live` 子槽按 LIFO 逆序调用 `drop(%unbound)`（执行 `destroy` + `%drop`），并逆序 `drop` 所有 `__defer_k` 守卫、调用 `%drop(\__parent)`；
+     2. 内核 `block` 闭合逻辑自动将所有处于 **`empty` 或 `uninitialized`** 状态的直接子槽**静默剥离**；
+     3. 剩余所有处于 **`live`** 状态的已 `%bind` 直接子槽按各自的 `align` 对齐并紧密压平（flatten）为一块连续的字节内存，生成驻留在只读常量区的不可变复合 `Shape`，`R_B` 状态定格为 `live` 且整体形状永久锁定。
 
 ## 五、只读冻结（`%freeze`）与跨阶段/跨协程共享
 
@@ -74,6 +81,6 @@
 
 ## 六、验收用例（自检清单）
 
-1. **从 `%parent` 移动构建期槽与自动剥离**：`p := { tmp := open("x"); a := { f := allocate; %move(\f, %parent.tmp) } }` 中，内层块通过 `%move` 将外层正在构建的 `%parent.tmp` 移入 `f`，使外层的 `tmp` 变为 `empty`；当外层块闭合时，`tmp` 被自动静默剥离，最终对象 `p` 的 `Shape` 仅含字段 `a`。
-2. **闭合对象内部 `mutable` 字段的 `%swap` 修改**：`p := { f := allocate mutable; %write(\f, open("x")) }` 闭合后，对 `\p.f = open("y")` 赋值时，标准库在当前块分配临时槽 `\tmp` 装入新文件，调用 `%swap(\p.f, \tmp)` 将新文件换入 `\p.f`、旧文件换出到 `\tmp`，再调用 `drop(\tmp)` 销毁旧文件，全程 `p.f` 保持 `live` 无空洞。
-3. **单次分支初始化**：`x := allocate; (\x = 1) if c else (\x = 2)` 中不可变槽 `x` 通过 `uninitialized → live` 完成初始化；此后写 `\x = 3` 因 `x` 非 `mutable` 而报错。
+1. **标准库无损实现跨帧 `move`**：`p := { tmp := open("x"); a := { f := move(%parent.tmp) } }` 中，`move` 展开为 `dst := %allocate (target_shape(%parent.tmp)); %write(dst, %deref(%parent.tmp)); %drop(%parent.tmp)`，将外层 `tmp` 置为 `empty`；当外层块闭合时，`tmp` 被内核自动静默剥离，最终对象 `p` 的 `Shape` 仅含字段 `a`。
+2. **闭合对象内部 `mutable` 字段的直接覆写**：`p := { f := %allocate_val mutable (open("x")) }` 闭合后，对 `\p.f = open("y")` 赋值时，标准库先对新值求值，再调用 `destroy(\p.f)` 就地析构旧文件，随后直接调用 **`%write(\p.f, new_file)`** 原地写入新文件，全程 `p.f` 保持 `live` 无空洞，且无需 `%swap` 原语！
+3. **单次分支初始化**：`x := %allocate i32; (\x = 1) if c else (\x = 2)` 中不可变槽 `x` 通过 `uninitialized → live` 完成初始化；此后写 `\x = 3` 因 `x` 非 `mutable` 而报错。

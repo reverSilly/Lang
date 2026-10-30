@@ -1,4 +1,4 @@
-# 07 - 基础数据类型、透明内建形状与 `compile` 算术能力
+# 07 - 基础数据类型、透明自解释形状与 `compile` 算术能力
 
 前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)、[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)、[06-stdlib-foundations.md](06-stdlib-foundations.md)
 
@@ -6,53 +6,64 @@
 
 为了在保持语言内核（Core）极简与正交的同时拥有完整的静态/动态类型表达力，基础数据类型遵循四条核心设计公理：
 
-1. **`bytes(N, align = 1)` 是全语言唯一的物理数据原子**：
-   - 内核不内置 `i32`、`u64`、`f64` 乃至独立的 `usize` 算术类型；一切标量、内建句柄与复合对象在物理层均由 `bytes(N, align)` 组合而成。
+1. **`bytes(N, align = 1)` 是全语言唯一的物理数据原子（且无需 `%bytes` 原语）**：
+   - 内核不内置 `i32`、`u64`、`f64` 乃至独立的 `usize` 算术类型；一切标量、内建句柄与复合对象在物理层均由 `bytes(N, align)` 组合而成；
+   - `bytes(N, align)` 自身没有任何黑魔法，它只是一个 `first_sym = last_sym = null_sym` 且 `fields` 映射为空的普通 `Shape` 对象；需要未初始化字节槽时直接调用 `%allocate [mutable] (bytes_shape(N, align))`（配合 `%touch` 激活为 `live`）。
 2. **零尺寸标记（ZST Marker）区分同尺寸描述性 `Shape`**：
    - 由于 `Shape` 是纯粹描述性的（Descriptive），两个同样包装 `bytes(4, 4)` 的类型（如 `i32` 与 `u32`）通过在结构中嵌入不同符号名的零尺寸空对象字段（如 `__i32_tag : {}` vs `__u32_tag : {}`）实现零内存开销的 `Shape` 区分与多态分派；且这些 `Shape` 直接由标准库构造，无需特殊元层能力。
-3. **全内建类型透明化（Exposed Layout）**：
-   - `Shape`、`Pointer`、`Symbol`、`Boolean`、`Prototype`、`Handle` 不再是黑盒幻影类型，而是直接以裸 `bytes(N, align)` 为字段底座并带专属 ZST Marker 的普通 POD 结构。这不仅消除了 Core 对标准库 `usize` 的反向依赖，还直接消去了读取指针分量或指针重解释（`%recast`）等专用内核原语。
-4. **`capabilities.intrinsics` 只操作裸 `bytes(N, N)`，不认识标准库算术类型**：
-   - `capabilities.intrinsics` 接收位宽参数 `N`、符号性 `signed` 及槽位符号名，直接读写裸 `bytes(N, N)` 并返回裸 `bytes` 结果；标准库通过访问包装结构的 `.__raw` 字段传入操作数，并将返回的 `bytes` 直接装回 `{ __raw := ..., __<type>_tag := {} }`，**完全无需任何“修改值的 shape”原语**。
+3. **全内建类型透明化与 `Shape` 自解释化**：
+   - `Shape`、`Pointer`、`Symbol`、`Boolean`、`Prototype`、`Handle` 全部是以裸 `bytes(N, align)` 为字段底座并带专属 ZST Marker 的透明结构；其中 `Shape` 显式包含 `fields: compile capabilities.map` 字段，消除内部符号表的黑盒魔法。
+4. **Core 零 POD 概念，`capabilities.intrinsics` 只操作裸 `bytes(N, N)`**：
+   - Core 原语（`%deref`、`%write`）不判断 POD；标准库 `is_pod` 以 `first_sym == null_sym` 为递归终点判断 POD（决定 `=` 走 `%write` 还是自定义 copy）；
+   - `capabilities.intrinsics` 接收位宽参数 `N`、符号性 `signed` 及槽位符号名，直接读写裸 `bytes(N, N)` 并返回裸 `bytes` 结果；标准库通过 `.__raw` 字段拆封与重装，**完全无需任何“修改值的 shape”原语**。
 
-## 二、物理底座 `bytes(N, align)` 与零尺寸标记机制
+## 二、物理底座 `bytes(N, align)`、自解释 `Shape` 与零尺寸标记机制
 
-### 2.1 `%bytes(N, align)` 原语、`Shape` 表示与 `null_sym` 唯一判别
+### 2.1 自解释 `Shape` 结构与 `bytes(N, align)` 的无魔法定义
 
-内核提供原子字节值产生原语 **`%bytes(N, align) -> value`**（当在标准库中省略 `align` 时缺省为 `1`，要求 `align` 为 $2$ 的幂）：
-- **返回未指定字节内容的 `value`（默认不保证零初始化）**：
-  - `%bytes(N, align)` 的求值结果是一个 `shape = bytes(N, align)` 的普通 POD `value`，**语义上不保证其字节内容为零（内容未指定）**；
-  - 因为对裸 `bytes` 而言任何比特模式均为合法值，当通过 `%write(\slot, %bytes(N, align))` 将其写入槽位时，该槽位即刻获得 `bytes(N, align)` 形状并转入 `live` 状态，**运行期无需执行 `memset(0)` 清零（真正 $O(1)$ 零开销，非常适合 `Union` 内联载荷、未初始化容器缓冲区与类型占位）**；
-  - **编译期确定性**：在 `compile` 期求值或跨阶段固化（Reification）进 `.rodata` 时，求值器内部统一填零，确保编译期求值 100% 确定且可缓存。
-- **`bytes(N, align)` 的 `Shape` 对象结构**：
-  ```
-  {
-      size        : N,         !- 字节长度（bytes(8, 8)） -!
-      align       : align,     !- 字节对齐（bytes(8, 8)） -!
-      first_sym   : null_sym,  !- 原子字节块无子字段 -!
-      last_sym    : null_sym,  !- 原子字节块无子字段 -!
-      __shape_tag : {}
-  }
-  ```
+`Shape` 对象显式暴露其字段映射表 `fields`（由 `compile capabilities.map` 提供底层查表支持）：
+
+```
+Shape := {
+    size        : bytes(8, 8),               !- 字节总大小 -!
+    align       : bytes(8, 8),               !- 字节对齐（2 的幂） -!
+    first_sym   : Symbol,                    !- 首字段符号（无字段时为 null_sym） -!
+    last_sym    : Symbol,                    !- 末字段符号（无字段时为 null_sym） -!
+    fields      : compile capabilities.map,  !- 符号 -> 相对胖指针 (offset, sub_shape, mut) 映射 -!
+    __shape_tag : {}
+}
+```
+
+在此结构下，任意定长字节块形状 **`bytes(N, align = 1)`** 没有任何特殊原语或黑魔法，直接表示为：
+
+```
+bytes_shape(N, align) := %freeze({
+    size        := N;
+    align       := align;
+    first_sym   := null_sym;
+    last_sym    := null_sym;
+    fields      := empty_map;
+    __shape_tag := {}
+})
+```
 
 - **为什么 `bytes(N, align)` 需要 `align`**：
   - 复合结构体闭合时的对齐要求由其所有子字段的对齐推导得出：
     $$\text{struct.align} = \max\left(1, \max_{f \in \text{fields}} f.\text{align}\right)$$
-  - 将 `align` 作为 `bytes(N, align)` 的基础属性后，普通字符/字节数组 `bytes(64, 1)` 保持 $1$ 字节对齐（嵌入结构体时不产生填充浪费），而标量底层存储如 `bytes(4, 4)`、`bytes(8, 8)` 则自动将 $4$ 字节或 $8$ 字节硬件对齐要求传染给包含它的任何上层结构体！
-- **为什么无需特殊标示符即可唯一识别 `bytes(N, align)`（`null_sym` 完备性定理）**：
-  - **当 $N > 0$ 时**：任何复合对象 `{ ... }` 的 `size` 均来自其内部字段。若一个复合对象没有任何字段（`first_sym == null_sym`），其 `size` 必然为 `0`；反之，任何 `size > 0` 的复合对象（或含 ZST 标记的包装类型）必然至少拥有一个字段，故其 `first_sym ~= null_sym`。因此 **`first_sym == null_sym`（且 `last_sym == null_sym`）已 100% 唯一标识了原子 `bytes(N, align)`**，绝不会与任何复合结构体发生碰撞！
-  - **当 $N = 0, \text{align} = 1$ 时**：`bytes(0, 1)` 的形状为 `{ size: 0, align: 1, first_sym: null_sym, last_sym: null_sym }`，这与空块 `{}`（`block ^()`）闭合出的空对象形状**完全同一**。将 `bytes(0, 1)` 与空对象 `{}` 统一为同一个零尺寸单位形状，消除了多余的边界特例。
+  - 普通字符/字节数组 `bytes(64, 1)` 保持 $1$ 字节对齐（嵌入结构体时不产生填充浪费），而标量底层存储如 `bytes(4, 4)`、`bytes(8, 8)` 则自动将 $4$ 字节或 $8$ 字节硬件对齐要求传染给包含它的任何上层结构体！
+- **`null_sym` 唯一判别定理与 POD 递归终点**：
+  - **当 $N > 0$ 时**：任何复合对象 `{ ... }` 必有至少一个字段（`first_sym ~= null_sym`）；因此 **`first_sym == null_sym`（且 `last_sym == null_sym`）100% 唯一标识了无子字段的原子 `bytes(N, align)`**！
+  - **当 $N = 0, \text{align} = 1$ 时**：`bytes(0, 1)` 与空块 `{}`（`block ^()`）闭合出的空对象形状**完全同一**。
+  - **天然作为标准库 POD 判定的递归基底**：当标准库递归检查一个 `Shape` 是否为 POD（不含 `\destroy` 且所有子字段递归为 POD）时，遇到 `first_sym == null_sym` 即到达叶子节点并直接返回 `true`，彻底消除了“内置基础类型白名单”！
 
 ### 2.2 零尺寸标记（ZST Marker）与描述性 Shape 区分
 
-在纯描述性 `Shape` 体系中，若 `i32` 与 `u32` 都仅定义为 `{ __raw : bytes(4, 4) }`，两者的字段名、偏移量与子形状完全相同，全局 Intern 后会坍缩为同一个 `Shape`。
-
-解决方案是在标准库中直接用空对象 `{}`（`size = 0, align = 1`）作为**零尺寸名义标记字段（ZST Marker）**：
+在纯描述性 `Shape` 体系中，标准库直接用空对象 `{}`（`size = 0, align = 1`）作为**零尺寸名义标记字段（ZST Marker）**区分同尺寸类型：
 
 ```
-i32 := { __raw := %bytes(4, 4); __i32_tag := {} };
-u32 := { __raw := %bytes(4, 4); __u32_tag := {} };
-f32 := { __raw := %bytes(4, 4); __f32_tag := {} };
+i32 := %shape($({ __raw := $%allocate(bytes_shape(4, 4)); __i32_tag := {} }));
+u32 := %shape($({ __raw := $%allocate(bytes_shape(4, 4)); __u32_tag := {} }));
+f32 := %shape($({ __raw := $%allocate(bytes_shape(4, 4)); __f32_tag := {} }));
 ```
 
 - **物理零开销**：`__i32_tag` 的 `size = 0, align = 1`，因此在闭合对象中 `size` 仍为严格 $4$ 字节、`align` 仍为 $4$ 字节，物理内存与裸 `bytes(4, 4)` 100% 相同；
@@ -68,7 +79,7 @@ f32 := { __raw := %bytes(4, 4); __f32_tag := {} };
 | :--- | :--- | :--- | :--- |
 | **`Symbol`** | `{ __raw: bytes(4, 4), __sym_tag: {} }`<br>（全 0 字节保留给 `null_sym`） | `4B` / `4B` | 源码标识符即 4 字节唯一 Intern ID；运行期比较仅为单条 4 字节相等比较 |
 | **`Boolean`** | `{ __raw: bytes(1, 1), __bool_tag: {} }` | `1B` / `1B` | 供内核 `%branch` 与 `%bind` 使用，同时与 `u8`/`i8` 保持严格的类型区分 |
-| **`Shape`** | `{ size: bytes(8, 8), align: bytes(8, 8), first_sym: Symbol, last_sym: Symbol, __shape_tag: {} }` | `24B` / `8B` | `Shape` 自身也是普通只读对象，其 `shape_ptr` 指向只读常量区中的 `ShapeMeta`（即 `Shape` 自身的形状，形成不动点闭环） |
+| **`Shape`** | `{ size: bytes(8, 8), align: bytes(8, 8), first_sym: Symbol, last_sym: Symbol, fields: capabilities.map, __shape_tag: {} }` | `32B` / `8B` | 完全自解释的普通只读对象，其 `shape_ptr` 指向只读常量区中的 `ShapeMeta`（即 `Shape` 自身的形状，形成不动点闭环） |
 | **`Pointer`** | `{ addr: bytes(8, 8), shape_ptr: bytes(8, 8), mutability: bytes(1, 1), __ptr_tag: {} }` | `24B` / `8B`<br>（瘦化后 `8B`） | **彻底消灭指针拆包原语与 `%recast`**：将指针装入槽位 `\p` 后直接读写 `\p.addr`、`\p.shape_ptr`、`\p.mutability`，在标准库即可完成反射基准指针构造、形状重解释与数组偏移寻址 |
 | **`Prototype`** | `{ __raw: bytes(8, 8), __proto_tag: {} }` | `8B` / `8B` | 指向编译期或运行期只读代码段入口的纯代码值 |
 | **`Handle`** | `{ __raw: bytes(8, 8), __handle_tag: {} }` | `8B` / `8B` | 指向 GC 托管协程控制块的句柄值 |
@@ -76,7 +87,7 @@ f32 := { __raw := %bytes(4, 4); __f32_tag := {} };
 ### 3.2 全阶段统一符号池（`Trie` 动态驻留与 `Symbol <=> bytes` 双向转换）
 
 为什么符号池能力应当**同时支持编译期与运行期**（作为内核基础原语），而非仅限编译期？
-1. **“单一求值器”哲学**：编译期与运行期共享同一个求值模型。若动态反射序列化（如运行期将任意对象序列化为 JSON、或从外部配置动态 `%bind` 构造对象）以及**动态加载外部 `prototype` / 动态模块 `import`** 需要在运行期对齐符号 ID，运行时本来就需要维护全局唯一的符号 `Trie` 树。
+1. **“单一求值器”哲学**：编译期与运行期共享同一个求值模型。若动态反射序列化（如运行期将任意对象序列化为 JSON、或从外部配置动态 `%bind` 构造对象）以及**动态加载外部 `Prototype` / 动态模块 `import`** 需要在运行期对齐符号 ID，运行时本来就需要维护全局唯一的符号 `Trie` 树。
 2. **静态零开销 + 动态按需驻留**：
    - 编译期已知的所有静态符号在编译结束时直接固化入二进制 `.rodata` 段的静态符号表，运行期符号比较（`sym1 == sym2`）与字段查找永远只是 $4$ 字节 ID 操作；
    - 运行时全局符号池由静态表初始化，并通过 `Trie` 树维护动态新增符号的唯一性（Uniqueness），提供两个全阶段通用的轻量原语：
@@ -126,7 +137,7 @@ sext_i16_i64_raw := compile capabilities.intrinsics.ext_int(true, 2, 8, x);
 
 ## 六、验收用例（自检清单）
 
-1. **`%bytes(N, align)` 与 `null_sym` 判别**：`%bytes(8, 8)` 返回 `Shape` 满足 `size == 8`、`align == 8`、`first_sym == null_sym` 的未指定内容 `value`（运行期写入槽位零清零开销）；包含它的 `u64`（`{ __raw: bytes(8, 8), __u64_tag: {} }`）自动继承 `align == 8`，且因 `first_sym == __raw ~= null_sym` 与裸 `bytes(8, 8)` 严格区分。
+1. **`bytes(N, align)` 无魔法 `Shape` 与 POD 递归终点**：`bytes_shape(8, 8)` 是 `size == 8`、`align == 8`、`first_sym == null_sym`、`fields == empty_map` 的普通 `Shape`；标准库 `is_pod` 递归检查子字段时以 `first_sym == null_sym` 为叶子终点，无需内核认识 POD。
 2. **透明 `Pointer` 消除 `%recast`**：将胖指针 `p` 装入槽位后，直接通过 `\p.addr`、`\p.shape_ptr`、`\p.mutability` 读取其内部字段，并在标准库中直接构造新 `Pointer` 完成 `recast` 与 `z_ptr` 反射。
 3. **全阶段符号池 `Trie` 互转**：运行期调用 `%sym_bytes(sym)` 以 $O(1)$ 取得字段名 UTF-8 字节胖指针用于 JSON 序列化；调用 `%intern_sym(ptr, len)` 动态驻留外部字段名并与编译期静态符号共享同一套 `Symbol` ID。
 4. **参数化 `capabilities.intrinsics` 裸 `bytes` 运算**：`compile capabilities.intrinsics.add_int(4, a, b)` 与 `ext_int(true, 2, 8, x)` 直接在裸 `bytes` 槽位上完成硬件运算，标准库经 `.__raw` 拆封与重装，全程无需内核认识 `i32` 或提供修改 `Shape` 原语。

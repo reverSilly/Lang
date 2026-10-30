@@ -16,7 +16,7 @@
 | **程序层（静态）** | 编译期（编译器尽力） | 常量折叠成功；`compile` 标注强制 | 单态化、静态连续内存布局推导、指针瘦化（消去静态已知的 `shape_ptr` 与 `mutability`） |
 | **程序层（动态）** | 运行期 | 默认；静态未知时保留运行期描述信息 | 常规程序执行、胖指针动态寻址与分派 |
 
-- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、Parser 与 AST 操弄接口、底层指令集 `intrinsics`）通过显式的 `capabilities` 对象传入，默认沙箱化（详见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
+- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、Parser 与 AST 操弄接口、字段映射 `map`、底层指令集 `intrinsics`）通过显式的 `capabilities` 对象传入，默认沙箱化（详见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
 - **轻量语法重写层（Parser Pattern + `compile` 处理函数）**：
   - 语言内核不内置复杂的语法糖、数字字面量解析或 RAII 调度逻辑；算符、语法结构（如 `{ ... }`、`block1`、`:=`、`=`、`$`、`@`、`if ... else ...`、`while`、`defer`、`break`、`try`）以及数字/浮点字面量（`word` 与 `word.word`）均在 `compile` 元层注册（见 [06-stdlib-foundations.md](06-stdlib-foundations.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）；
   - 编译器 Parser 支持以动态字符串模式声明语法规则与优先级（如 `.'if'.('else'.)?`），匹配成功后将捕获的 AST 节点传入 `compile` 期处理函数，展开为纯粹的内核原语序列（结合 `evaluate` 在调用方当前 `block` 就地生效）；
@@ -34,19 +34,19 @@
 
 1. **固化（Reification）**：编译期求值结果跨阶段进入运行期时，只允许以下不可变 `value` 跨越边界：
    - **非指针 POD `value`**（底层为 `bytes(N, align)` 的值，如各类整数、浮点数、`Boolean`、`Symbol` 等）：按位深拷贝为二进制常量数据；
-   - **指向只读常量区（`frozen` 区）的安全只读 `pointer`**：包括已闭合对象的 `Shape` 指针（`%shape(val)`）、编译期冻结的模块与只读对象快照（`%freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
-   - **`prototype`（纯代码值）**：包括由 `^Expr` 构造或由 `capabilities.intrinsics` 生成的底层算术/比较 `prototype`，固化为可序列化的中间表示（IR）/机器码并参与后续编译。
-   - **严禁固化**：指向编译期栈或协程堆上普通 `location` 的 `pointer`、外部 OS 资源句柄、活跃块指针（`%this`）及协程 `handle`（`\^`）。
+   - **指向只读常量区（`frozen` 区）的安全只读 `Pointer`**：包括已闭合对象的 `Shape` 指针（`%shape(val)`）、编译期冻结的模块与只读对象快照（`%freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
+   - **`Prototype`（纯代码值）**：包括由 `^Expr` 构造或由 `capabilities.intrinsics` 生成的底层算术/比较 `Prototype`，固化为可序列化的中间表示（IR）/机器码并参与后续编译。
+   - **严禁固化**：指向编译期栈或协程堆上普通 `location` 的 `Pointer`、外部 OS 资源句柄、活跃块指针（`%this`）及协程 `Handle`（`\^`）。
 2. **阶段结束清理**：单次 `compile` 求值结束时，其创建的局部资源按 [06-stdlib-foundations.md](06-stdlib-foundations.md) 的标准库 RAII 协议完整执行清理，仅固化值留存。
 3. **单向性**：`compile` → `runtime` 单向不可逆。运行期值绝不能流回编译期（语言内核显式排除运行期 JIT）。
 4. **步数上限**：编译期求值不追求理论可判定性；编译器设置求值步数上限，超限时报错并输出调用栈。
 
 ## 五、形状（Shape）系统接口
 
-- **唯一类型概念 `shape`**：全语言用 `shape` 统一替代传统的 `type`。
-  - **构建期动态性**：尚处于构建期（Constructing）的 `block` 在内部维护可变的 `shape` 构建器随 `%bind` 与 `%drop` 演进；
-  - **闭合对象与基础值的 `shape` 驻留常量区**：任何基础 `value` 与已闭合（Closed）对象的 `shape` 描述表均驻留在只读常量区（`frozen` 区），通过指向它的只读指针 `pointer(Shape)` 表示，且 `Shape` 自身也是暴露了 `{ size, align, first_sym, last_sym, __shape_tag }` 的普通只读对象（见 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
-- **泛型即普通子程序**：泛型函数 = 参数中包含 `pointer(Shape)` 的普通子程序；泛型类型构造器 = 返回 `pointer(Shape)` 或构造原型的普通子程序。
+- **唯一类型概念 `Shape`**：全语言用 `Shape` 统一替代传统的 `type`。
+  - **构建期动态性**：尚处于构建期（Constructing）的 `block` 在内部维护槽状态机随 `%bind`、`%write`/`%touch` 与 `%drop` 演进；
+  - **闭合对象与基础值的 `Shape` 驻留常量区**：任何基础 `value` 与已闭合（Closed）对象的 `Shape` 描述表均驻留在只读常量区（`frozen` 区），通过指向它的只读指针 `Pointer(Shape)` 表示，且 `Shape` 自身也是暴露了 `{ size, align, first_sym, last_sym, fields, __shape_tag }` 的自解释只读对象（见 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
+- **泛型即普通子程序**：泛型函数 = 参数中包含 `Pointer(Shape)` 的普通子程序；泛型类型构造器 = 返回 `Pointer(Shape)` 或构造原型的普通子程序。
 
 ## 六、阶段与可变性词汇表
 
@@ -55,9 +55,9 @@
 | 标注 | 作用目标 | 含义 | 缺省行为 |
 | :--- | :--- | :--- | :--- |
 | `compile` | 求值时机 / 模式约束 | 强制编译期求值完成 | 编译器尽力折叠，不作硬性保证 |
-| `mutable` | `location` 契约属性 | 允许槽位在初始化（进入 `live`）后再次调用 `%write` 覆写或 `%swap` 交换 | 默认 `immutable`（仅允许 `uninitialized → live` 单次写入） |
+| `mutable` | `location` 契约属性 | 允许槽位在初始化（进入 `live`）后再次调用 `%write` 原地覆写 | 默认 `immutable`（仅允许 `uninitialized → live` 单次写入） |
 
-- **废弃旧词**：`type`（统一为 `shape`）、`constant`（混淆时机与可变性）、`variant`（缺省状态无需标注）、`comptime`（改用自解释的 `compile`）、`static`（消除 C 系多义性）、`readonly`（缺省即为不可变）、`%seal`（单次初始化状态机已覆盖）。
+- **废弃旧词**：`type`（统一为 `Shape`）、`constant`（混淆时机与可变性）、`variant`（缺省状态无需标注）、`comptime`（改用自解释的 `compile`）、`static`（消除 C 系多义性）、`readonly`（缺省即为不可变）、`%seal`（单次初始化状态机已覆盖）。
 
 用法示例：
 
@@ -72,14 +72,14 @@ n : compile usize
 size := compile f(x)
 
 !- 4. 编译期求初值、运行期可反复修改的位置 -!
-x := allocate mutable;
+x := %allocate mutable i32;
 \x = compile f()
 ```
 
 ## 七、验收用例（自检清单）
 
-1. **编译期 `printf`**：在编译期解析格式串，并按参数 `shape` 生成对应的格式化 `prototype` 代码固化到运行期。
+1. **编译期 `printf`**：在编译期解析格式串，并按参数 `Shape` 生成对应的格式化 `Prototype` 代码固化到运行期。
 2. **编译期生成只读查找表**：`compile` 块中用 `mutable` location 计算完美哈希表，经 `%freeze` 冻结为指向只读常量区的安全指针后跨阶段供运行期只读访问。
-3. **编译期反射 `derive(Serialize)`**：通过 `%shape`（或胖指针的 `ptr.shape_ptr`）配合 `addr = 0` 的 `%field` 相对胖指针与 `%next_sym`/`%prev_sym` 游标遍历字段元数据，生成并返回序列化代码 `prototype`。
-4. **编译期构造栈/堆 `location` 指针试图直接跨阶段固化**：编译器静态拒绝；POD `value`、只读常量区 `pointer`（含闭合 `shape` 与 `frozen` 对象）、`prototype` 正常固化。
+3. **编译期反射 `derive(Serialize)`**：通过 `%shape`（或胖指针的 `ptr.shape_ptr`）配合 `addr = 0` 的 `%field` 相对胖指针与 `%next_sym`/`%prev_sym` 游标遍历字段元数据，生成并返回序列化代码 `Prototype`。
+4. **编译期构造栈/堆 `location` 指针试图直接跨阶段固化**：编译器静态拒绝；POD `value`、只读常量区 `Pointer`（含闭合 `Shape` 与 `frozen` 对象）、`Prototype` 正常固化。
 5. **编译期 RAII**：`compile` 块内创建的资源与 `defer` 守卫在编译期块结束时按与运行期完全相同的标准库逆序规则执行 `destroy`。
