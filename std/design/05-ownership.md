@@ -1,11 +1,11 @@
 # 05 - 所有权、可变性与构建期状态机
 
 前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)、[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)
-后续：[06-stdlib-foundations.md](06-stdlib-foundations.md)
+后续：[06-stdlib-foundations.md](06-stdlib-foundations.md)、[07-types-and-intrinsics.md](07-types-and-intrinsics.md)
 
 ## 一、核心裁决总览
 
-1. **表达式皆为无所有权的 `value`；所有权唯一绑定在内部存储节点 `location` 上。** `location` 是唯一可被拥有、写入（`%write`）、移动（`%move`）、交换（`%swap`）和置空（`%drop`）的实体，在表达式中统一通过指向它的 `pointer` value 进行操作。
+1. **表达式皆为无所有权的 `value`；所有权唯一绑定在内部逻辑存储节点 `location` 上。** `location` 是唯一可被拥有、写入（`%write`）、移动（`%move`）、交换（`%swap`）和置空（`%drop`）的实体，在表达式中统一通过指向它的 `pointer` value 进行操作；且 `location` 作为逻辑槽位抽象，不强制在任意时刻都对应物理内存（寄存器与内存均可承载 `location`）。
 2. **单拥有者森林（Single-Owner Forest）**：每个 `block`（即对象 `self root`）拥有其直接子 `location`，子 `location` 再拥有其下属子 `location`。owned 对象图永远是无环森林。
 3. **动态构建期 vs 静态闭合期（闭合对象无内部 `empty` 空洞铁律）**：
    - **构建期（Constructing Block）**：`uninitialized` / `live` / `empty` 三态**仅属于“构建期栈帧的直接子槽（Frame Slot）”**（状态仅维护在当前活跃构建帧上）；
@@ -25,7 +25,7 @@
 - **R2（闭合对象无内部空洞）**：已闭合对象压平为零 Header 连续内存后，子字段指针 `\p.q` 只是指向 `p.addr + offset` 的胖指针，没有指向父对象 `p` 的反向指针；因此不允许单方面掏空已闭合对象的内部子字段留下 `empty` 空洞：
   1. **闭合对象的整体移动与销毁**：闭合对象 `p` 本身作为外层构建帧的一个直接子槽，依然可以整体 `%move` 或整体 `drop(\p)`；
   2. **闭合对象内部 `mutable` 字段的提取与修改**：若要零拷贝提取或替换已闭合对象 `p` 的可变字段 `\p.q`，只需通过对称的 **`%swap(\p.q, \tmp_slot)`** 与构建期槽交换内容（交换后双方依然都是 `live`），再在当前构建帧对换出的 `\tmp_slot` 调用 `drop(\tmp_slot)`；
-  3. **业务可空字段**：若用户确实需要闭合对象内有“可空字段”，直接使用标准库的内联 `Optional(T)`（基于 `bytes(N)` + `tag` 的内联 `Union`），在连续内存中显式表达空状态。
+  3. **业务可空字段**：若用户确实需要闭合对象内有“可空字段”，直接使用标准库的内联 `Optional(T)`（基于 `bytes(N, A)` + `tag` 的内联 `Union`），在连续内存中显式表达空状态。
 - **R3（无环性）**：owned `location` 森林不存在环；引用环只能经由 GC 协程 `handle` 或裸 `pointer` 产生。
 - **R4（允许从活跃构建链 `%parent` 移动 Location）**：当内层块 `{ ... }` 正在运行时，外层块 `%parent` 依然处于栈上的**构建期（Constructing）**。只要源槽属于当前协程活跃构建帧链（`%this` 或其任意层 `%parent`）的直接子槽，且该槽本身不是正在运行的活跃子帧根，**`%move(dst_ptr, src_ptr)` 允许将其从 `%parent` 移走并将外层构建帧中的源槽状态置为 `empty`**（等到外层块最终闭合时，该 `empty` 绑定会被自动静默剥离）。这是将外层块变量移入内层块（如函数调用帧、返回对象）最基础的所有权传递路径。
 - **R5（禁止隐式复制非 POD 对象）**：POD `value` 永远按位复制；含 `\destroy` 的复合对象（非 POD）被标准库 `$` 拒绝按位读出，深拷贝必须调用显式的标准库 `clone`。
@@ -51,7 +51,7 @@
 | **`%move(dst_ptr, src_ptr)`** | `src_ptr` 为活跃构建帧链（`%this` 或 `%parent`）上的 `live` 直接子槽；`dst_ptr` 处于 `uninitialized` 或 `mutable empty` | 将 `src_ptr` 的内容移入 `dst_ptr`（`dst_ptr` 转为 `live`），并将 `src_ptr` 在其所属构建帧中置为 `empty` |
 | **`%drop(slot_ptr)`** | `slot_ptr` 为活跃构建帧链上的直接子槽（要求其下无未清空的构建期子槽），处于 `live` 或 `uninitialized` | 将 `slot_ptr` 在所属构建帧中的状态标记为 `empty`（零 RAII，对已 `empty` 报错） |
 | **`%swap(ptr1, ptr2)`** | `ptr1` 与 `ptr2` 均为可写（`mutable`）的 `live` 指针（含已闭合对象的可变子字段），且 `ptr1.shape_ptr == ptr2.shape_ptr` | 按字节原地交换两槽的内容，交换后双方仍为 `live`（零空洞、零析构） |
-| **`%deref(ptr) -> val`** | `ptr` 指向任意处于 `live` 状态的槽 | 按 `ptr.shape_ptr.size` 无条件读出字节返回 `val` |
+| **`%deref(ptr) -> val`** | `ptr` 指向任意处于 `live` 状态的槽 | 按 `ptr.shape_ptr` 指向的 `Shape.size` 无条件读出字节返回 `val` |
 
 ## 四、`block` 对象构造、剥离与连续内存闭合
 
@@ -62,7 +62,7 @@
 3. **闭合相变（Constructing → Closed Contiguous Object）**：
    - 当 `p` 执行到底闭合时：
      1. `R_B` 下所有**未经 `%bind` 命名**的直接子槽，以及虽经 `%bind` 命名但此时处于 **`empty` 或 `uninitialized`** 状态的直接子槽（例如块内用完即被 `%move` 走或 `drop` 掉的具名中间变量、已清理的 `__parent` 槽及 `__defer_k` 守卫）**被直接静默剥离**；
-     2. 剩余所有处于 **`live`** 状态的已 `%bind` 直接子槽被紧密压平（flatten）为一块连续的字节内存，生成驻留在只读常量区的不可变复合 `shape`，`R_B` 状态定格为 `live` 且整体形状永久锁定。
+     2. 剩余所有处于 **`live`** 状态的已 `%bind` 直接子槽按各自的 `align` 对齐并紧密压平（flatten）为一块连续的字节内存，生成驻留在只读常量区的不可变复合 `Shape`（其 `align = max(1, field.align)`；若包含零尺寸字段 `{}`，其 `size = 0` 但符号仍记录在 `first_sym .. last_sym` 链中），`R_B` 状态定格为 `live` 且整体形状永久锁定。
 
 ## 五、只读冻结（`%freeze`）与跨阶段/跨协程共享
 

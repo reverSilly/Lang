@@ -1,6 +1,7 @@
 # 06 - 标准库基石：三层销毁切分、单次求值 `:=`、多层 `break` 接力与模式匹配
 
 前置：[01-comptime.md](01-comptime.md)、[02-evaluation.md](02-evaluation.md)、[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)
+后续：[07-types-and-intrinsics.md](07-types-and-intrinsics.md)
 
 ## 一、核心原则：Core 彻底零 RAII 化 × 标准库接管高层协议
 
@@ -12,13 +13,13 @@
 
 | 层级与函数 | 作用对象 | 核心职责 | 典型场景 |
 | :--- | :--- | :--- | :--- |
-| **Stdlib `destroy(ptr)`** | **任意 `pointer`**（含已闭合对象内部、或 `bytes(N)` 经 `%recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `\destroy` 字段（`%field(z_ptr, destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 顺着 `s := ptr.shape_ptr` 的 `last_sym -> %prev_sym(s, sym)` 逆序遍历所有字段，递归调用 `destroy(%field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；容器扩容/缩容销毁缓冲区内对象；被 `drop(ptr)` 调用 |
+| **Stdlib `destroy(ptr)`** | **任意 `pointer`**（含已闭合对象内部、或 `bytes(N, A)` 经 `%recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `\destroy` 字段（`%field(z_ptr, destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 顺着 `s := ptr.shape_ptr` 的 `last_sym -> %prev_sym(s, sym)` 逆序遍历所有字段，递归调用 `destroy(%field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；容器扩容/缩容销毁缓冲区内对象；被 `drop(ptr)` 调用 |
 | **Core `%drop(ptr)`** | **构建期帧（Constructing Block）的直接子槽 `pointer`** | 要求 `ptr` 下无未清空的构建期子槽，仅负责将该槽在当前构建帧中的状态标记为 `empty`（闭合时由 `block` 静默剥离） | 释放构建期局部变量槽位、取消字段导出 |
 | **Stdlib `drop(ptr)`** | **构建期帧的直接子槽 `pointer`** | 先调用 `destroy(ptr)` 完成递归析构，再调用 Core `%drop(ptr)` 将槽位置为 `empty` | 局部资源提前销毁、`=` / `move` 覆写非空 `mutable` 构建期槽前的清理 |
 
 - **带来的核心好处**：
   1. **Core 完全不知道 `\destroy` 的存在**：`\destroy` 不再需要是内核特殊对待的裸 `prototype`，也不需要内核在 `%drop` 时为其构造特殊的 `%parent` 临时帧。它就是一个再普通不过的标准库函数/方法约定（接收 `ptr` 作为参数），在里面拥有完整的标准库调用与词法环境。
-  2. **`DynamicArray` 等底层容器一等公民化**：容器管理的是 `bytes(N)` 缓冲区而非构建帧的直接子槽，`pop_back` 时只需对元素胖指针调用 `destroy(elem_ptr)` 即可完整执行析构，无需也不必调用 `%drop`，location 生命周期由 `DynamicArray` 自身管理。
+  2. **`DynamicArray` 等底层容器一等公民化**：容器管理的是 `bytes(N, A)` 缓冲区而非构建帧的直接子槽，`pop_back` 时只需对元素胖指针调用 `destroy(elem_ptr)` 即可完整执行析构，无需也不必调用 `%drop`，location 生命周期由 `DynamicArray` 自身管理。
 
 ### 2.2 `x := rhs` 的单次求值展开闭环
 
@@ -41,7 +42,7 @@
 | :--- | :--- | :--- | :--- |
 | **`box(val) -> ptr`** | 任意 `value` | 在调用方当前块 `evaluate`：分配匿名直接子槽 `p`（`allocate`）、执行 `%write(p, val)` 并返回 `p` | 在当前块分配未绑定的不可变直接子槽、按位写入 `val` 并返回该槽指针 |
 | **`x := rhs`** | 符号 `x` 与任意 `rhs` | 见 §2.2 的 `__tmp` 暂存展开 | `rhs` 严格求值一次；若为未绑定直接子槽则直接绑定，否则 `box` 装箱后绑定 |
-| **`$ptr`** | 任意 `live` 槽指针 | 读取胖指针的 `s := ptr.shape_ptr`，通过 `base_addr = 0` 的 `%field` 与 `%next_sym` 检查 `s` 是否为 POD（builtin POD 或不含 `\destroy` 且子字段皆 POD 的复合 shape）：若是则 `%deref(ptr)`，否则报错 | 面向用户的安全 POD 读取算子（支持自定义小结构体如 `Point` 直接按值读取与传参） |
+| **`$ptr`** | 任意 `live` 槽指针 | 读取胖指针的 `s := ptr.shape_ptr`，通过 `addr = 0` 的 `%field` 与 `%next_sym` 检查 `s` 是否为 POD（原子 `bytes` 或不含 `\destroy` 且子字段皆 POD 的复合 `Shape`）：若是则 `%deref(ptr)`，否则报错 | 面向用户的安全 POD 读取算子（支持自定义小结构体如 `Point` 直接按值读取与传参） |
 | **`move(dst_ptr, src_slot)`** | `dst_ptr` 可写；`src_slot` 为活跃构建帧链（`%this` 或 `%parent`）的 `live` 直接子槽 | 1. 若 `dst_ptr` 为构建期空槽（`uninitialized` 或 `mutable empty`），直接调 **`%move(dst_ptr, src_slot)`**；<br>2. 若 `dst_ptr` 已处于 `live`（必为 `mutable`）：若 `dst_ptr` 为构建期直接子槽，先调 `drop(dst_ptr)` 置空再调 `%move(dst_ptr, src_slot)`；若 `dst_ptr` 为已闭合对象的 `mutable` 子字段，直接调 **`%swap(dst_ptr, src_slot)`** 再调 **`drop(src_slot)`**！ | 统一支持向空槽移动、覆写构建期可变槽、以及覆写已闭合对象的 `mutable` 子字段（全程保持闭合对象无 `empty` 空洞） |
 | **`dst_ptr = val`** | `dst_ptr` 可写（`uninitialized`、`mutable empty` 或 `mutable live`） | 1. 若 `dst_ptr` 为构建期空槽，直接调 **`%write(dst_ptr, val)`**；<br>2. 若 `dst_ptr` 已处于 `live`（必为 `mutable`）：在当前块通过 `tmp := box(val)` 构造新值槽，调 **`%swap(dst_ptr, tmp)`** 原地交换，再调 **`drop(tmp)`** 销毁换出的旧值！ | 统一用 Copy-and-Swap 完成已初始化 `mutable` 槽（含闭合对象子字段 `\p.f = val`）的安全覆写，零空洞、异常安全 |
 | **`target @ rhs`** | `target` 为协程 `handle`，`rhs` 为任意表达式 | 若 `rhs` 已是当前块未绑定直接子槽指针 `src_ptr` 则直接传给 `%resume(target, src_ptr)`；否则经 `src_ptr := box(rhs)` 装入临时槽后调用 **`%resume(target, src_ptr)`**，返回本协程醒来时的 `\in` 指针 | 协程恢复与消息传递分派器 |
@@ -133,12 +134,7 @@ match(pattern, subject) -> Bindings | fail
 
 ## 五、待办议题（Open Items — 下一步 Brainstorm 重点）
 
-1. **基础数据类型及其操作的实现边界（Core 原语 vs Blackmagic vs `compile` Capability + Stdlib）**：
-   - 核心问题（来自 Talk 4 结尾）：那几个基础数据类型（如算术类型的 `+`、`-`、`*`、`/`、`%`、位运算与比较）应该怎么处理？
-   - 候选权衡：
-     - 若全部用内核原语实现，是否会导致 Core 原语过于杂乱？
-     - 若交给标准库实现：由标准库从 `compile` capability 获得对应底层操作的 `prototype`，固化（reify）到运行期后直接分派；同时需要一并界定 `compile` capability 的最小接口形态。
-2. **函数与 Lambda 的统一调用协议及闭包捕获细则**：
+1. **函数与 Lambda 的统一调用协议及闭包捕获细则**：
    - 如何利用 `block1` / `block`、`evaluate` 与模式匹配 `:` 定稿最简的 Lambda 字面量语法与函数调用传参协议（含 `\destroy(ptr)` 的标准调用形式）？
    - 闭包对象 `{ env, code }` 的自动捕获（Copy / Move / `cell` 协程）如何通过编译期宏与 `%parent` 链静态合成？
 

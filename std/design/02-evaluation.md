@@ -1,15 +1,15 @@
 # 02 - 求值模型、块与协程
 
 前置：[01-comptime.md](01-comptime.md)
-后续：[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)、[06-stdlib-foundations.md](06-stdlib-foundations.md)
+后续：[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)、[06-stdlib-foundations.md](06-stdlib-foundations.md)、[07-types-and-intrinsics.md](07-types-and-intrinsics.md)
 
 ## 一、核心原则
 
 语言在内核层面彻底解耦 **“延迟代码（`prototype`）”** 与 **“环境/栈帧分配（`block` / `new`）”**，且**一切表达式求值结果皆为 `value`（对 `location` 的引用统一表示为普通的胖指针 `pointer` value）**：
 
-1. **`^Expr`（Prototype）是全语言唯一拦截求值的语法特殊形式（Special Form）**：它把未求值的表达式 `Expr` 包装成一个不透明的纯代码值（`prototype` value），不携带任何环境或 AST 包袱。
+1. **`^Expr`（Prototype）是全语言唯一拦截求值的语法特殊形式（Special Form）**：它把未求值的表达式 `Expr` 包装成一个纯代码值（`prototype` value），不携带任何环境或 AST 包袱。
 2. **求值原语全是接收 `prototype` 值的普通操作符**：环境永远由触发求值的操作符提供——在当前环境就地展开用 `evaluate`，开辟子帧求值用 `block`，开辟独立协程求值用 `new`。
-3. **内核零高层概念**：内核不存在独立的“函数定义”、不认识 `\destroy` 钩子、不处理 RAII；标准库基础包装器（`{...}`、`block1`、`:=`、`=`、`$`、`@`、`destroy`、`drop`、`move`、`swap`）在 [06-stdlib-foundations.md](06-stdlib-foundations.md) 中由这组原语导出（注：基础算术与类型操作的内建原语 vs `compile` capability 设计、函数调用传参协议、Lambda 表面语法与闭包捕获细则列于 `06` 末节待办）。
+3. **内核零高层概念**：内核不存在独立的“函数定义”、不认识 `\destroy` 钩子、不处理 RAII、也不内置高层算术类型；标准库基础包装器与基础数据类型分别在 [06-stdlib-foundations.md](06-stdlib-foundations.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md) 中构建。
 
 ## 二、求值原语与特殊内建值
 
@@ -24,7 +24,7 @@
 | `new proto` | 内核协程原语 | **惰性（Lazy）**创建独立协程根帧（初始停在 `proto` 入口 PC=0，不执行代码） | 协程 `handle` |
 | `%resume(target, src_ptr)` | 内核切换原语 | 原子地将 `src_ptr` 指向的直接子槽内容移入 `target` 的 `%in` 槽（`src_ptr` 置 `empty`）、将 `target` 的 `\^` 设为本协程、挂起自身并恢复 `target` | 本协程下次被唤醒时指向自身 `%in` 槽的 `pointer` |
 | `{ Expr }` | 标准库语法糖 | 展开为带隐式父帧链与局部守卫清理的 `block ^(Expr)`；**空块 `{}` 直接展开为 `block ^()`**（返回空的闭合对象指针） | 同 `block`（返回 `pointer`） |
-| `target @ rhs` | 标准库分派器 | 将 `rhs` 装入或移入当前块临时直接子槽 `src_ptr`，调用 `%resume(target, src_ptr)`（详见 `06` §2.2） | 指向本协程 `%in` 槽的 `pointer` |
+| `target @ rhs` | 标准库分派器 | 将 `rhs` 装入或移入当前块临时直接子槽 `src_ptr`，调用 `%resume(target, src_ptr)`（详见 `06` §2.3） | 指向本协程 `%in` 槽的 `pointer` |
 
 ### 2.2 四个核心环境标识原语（皆为零参原语）
 
@@ -39,8 +39,8 @@
 
 ### 3.1 为什么解耦 `evaluate` 与 `block`
 
-- **`evaluate proto`（就地求值 / 分派器与 Mixin 引擎）**：
-  不创建新帧，也不隔离符号。`proto` 内部的 `allocate`、`%bind`、`%drop` 和 `%field(%this, ...)` 直接作用于调用方的当前 `self root`。这不仅支持多个 `prototype` 在同一个正在构建的 `block` 内顺序组合完成分段初始化，更让标准库的 `:=`、`box`、`if`、`while`、`defer`、`break` 等包装器能够直接在调用方当前 `block` 内就地生效：
+- **`evaluate proto`（就地求值 / 分派器与内建算术引擎）**：
+  不创建新帧，也不隔离符号。`proto` 内部的 `allocate`、`%bind`、`%drop` 和 `%field(%this, ...)` 直接作用于调用方的当前 `self root`。这不仅支持多个 `prototype` 在同一个正在构建的 `block` 内顺序组合完成分段初始化，更让标准库的 `:=`、`box`、`if`、`while`、`defer`、`break` 以及 `capabilities.intrinsics` 生成的算术 `prototype` 能够直接在调用方当前帧就地生效：
   ```
   obj := {
       evaluate $\init_part_a;
@@ -61,7 +61,7 @@
 ## 四、构建栈与逐步递归上溯导航
 
 所有求值发生在当前协程的构建栈（Construction Stack）与帧树上：
-- **通用 `pointer` 不存储 `parent`**：普通胖指针固定为 `(addr, shape_ptr, mutability)`，不包含父指针；**唯有当前协程构建栈上尚未闭合的 `block` 才具有父子链关系**（由协程运行时维护）。
+- **通用 `pointer` 不存储 `parent`**：普通胖指针固定为 `{ addr, shape_ptr, mutability, __ptr_tag }`，不包含父指针；**唯有当前协程构建栈上尚未闭合的 `block` 才具有父子链关系**（由协程运行时维护）。
 - **内核只提供确定性的单步导航原语（全部返回普通 `pointer` value）**：
   - 向下访问子字段：`%field(ptr, symbol)`（语法记作 `ptr.symbol`；当前帧 `\sym` 即 `%field(%this, sym)`；若字段不存在或处于构建期 `empty`/`uninitialized`，返回 `null` 指针）；
   - 向上访问直接父构建帧：**零参原语 `%parent`**（仅返回当前栈顶构建帧 `%this` 在协程构建栈中的直接父构建帧指针）。
