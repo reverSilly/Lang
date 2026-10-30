@@ -13,12 +13,12 @@
 
 | 层级与函数 | 作用对象 | 核心职责 | 典型场景 |
 | :--- | :--- | :--- | :--- |
-| **Stdlib `destroy(ptr)`** | **任意 `pointer`**（含已闭合对象内部、或 `bytes(N, A)` 经 `%recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `\destroy` 字段（`%field(z_ptr, destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 顺着 `s := ptr.shape_ptr` 的 `last_sym -> %prev_sym(s, sym)` 逆序遍历所有字段，递归调用 `destroy(%field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；容器扩容/缩容销毁缓冲区内对象；被 `drop(ptr)` 调用 |
-| **Core `%drop(ptr)`** | **构建期帧（Constructing Block）的直接子槽 `pointer`** | 要求 `ptr` 下无未清空的构建期子槽，仅负责将该槽在当前构建帧中的状态标记为 `empty`（闭合时由 `block` 静默剥离） | 释放构建期局部变量槽位、取消字段导出 |
-| **Stdlib `drop(ptr)`** | **构建期帧的直接子槽 `pointer`** | 先调用 `destroy(ptr)` 完成递归析构，再调用 Core `%drop(ptr)` 将槽位置为 `empty` | 局部资源提前销毁、`=` / `move` 覆写非空 `mutable` 构建期槽前的清理 |
+| **Stdlib `destroy(ptr)`** | **任意 `Pointer`**（含已闭合对象内部、或 `bytes(N, A)` 经标准库 `recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `\destroy` 字段（`%field(z_ptr, destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 顺着 `s := ptr.shape_ptr` 的 `last_sym -> %prev_sym(s, sym)` 逆序遍历所有字段，递归调用 `destroy(%field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；容器扩容/缩容销毁缓冲区内对象；被 `drop(ptr)` 调用 |
+| **Core `%drop(ptr)`** | **构建期帧（Constructing Block）的直接子槽 `Pointer`** | 要求 `ptr` 下无未清空的构建期子槽，仅负责将该槽在当前构建帧中的状态标记为 `empty`（闭合时由 `block` 静默剥离） | 释放构建期局部变量槽位、取消字段导出 |
+| **Stdlib `drop(ptr)`** | **构建期帧的直接子槽 `Pointer`** | 先调用 `destroy(ptr)` 完成递归析构，再调用 Core `%drop(ptr)` 将槽位置为 `empty` | 局部资源提前销毁、`=` / `move` 覆写非空 `mutable` 构建期槽前的清理 |
 
 - **带来的核心好处**：
-  1. **Core 完全不知道 `\destroy` 的存在**：`\destroy` 不再需要是内核特殊对待的裸 `prototype`，也不需要内核在 `%drop` 时为其构造特殊的 `%parent` 临时帧。它就是一个再普通不过的标准库函数/方法约定（接收 `ptr` 作为参数），在里面拥有完整的标准库调用与词法环境。
+  1. **Core 完全不知道 `\destroy` 的存在**：`\destroy` 不再需要是内核特殊对待的裸 `Prototype`，也不需要内核在 `%drop` 时为其构造特殊的 `%parent` 临时帧。它就是一个再普通不过的标准库函数/方法约定（接收 `ptr` 作为参数），在里面拥有完整的标准库调用与词法环境。
   2. **`DynamicArray` 等底层容器一等公民化**：容器管理的是 `bytes(N, A)` 缓冲区而非构建帧的直接子槽，`pop_back` 时只需对元素胖指针调用 `destroy(elem_ptr)` 即可完整执行析构，无需也不必调用 `%drop`，location 生命周期由 `DynamicArray` 自身管理。
 
 ### 2.2 `x := rhs` 的单次求值展开闭环
@@ -34,7 +34,7 @@
 %drop(\__tmp)                  !- 4. 将 __tmp 置为 empty；当前块闭合时自动静默剥离 __tmp！ -!
 ```
 
-因为 `allocate` 或 `{ ... }` 返回的 `pointer` 本身也是 POD `value`，将它暂存入 `\__tmp` 不会改变目标槽“未绑定直接子槽”的身份；而在最后 `%drop(\__tmp)` 将临时槽置为 `empty` 后，块闭合相变会自动将 `__tmp` 从最终对象的 `shape` 中抹去，不留任何痕迹。
+因为 `allocate` 或 `{ ... }` 返回的 `Pointer` 本身也是 POD `value`，将它暂存入 `\__tmp` 不会改变目标槽“未绑定直接子槽”的身份；而在最后 `%drop(\__tmp)` 将临时槽置为 `empty` 后，块闭合相变会自动将 `__tmp` 从最终对象的 `Shape` 中抹去，不留任何痕迹。
 
 ### 2.3 标准库基础包装器与分派器总表
 
@@ -42,10 +42,11 @@
 | :--- | :--- | :--- | :--- |
 | **`box(val) -> ptr`** | 任意 `value` | 在调用方当前块 `evaluate`：分配匿名直接子槽 `p`（`allocate`）、执行 `%write(p, val)` 并返回 `p` | 在当前块分配未绑定的不可变直接子槽、按位写入 `val` 并返回该槽指针 |
 | **`x := rhs`** | 符号 `x` 与任意 `rhs` | 见 §2.2 的 `__tmp` 暂存展开 | `rhs` 严格求值一次；若为未绑定直接子槽则直接绑定，否则 `box` 装箱后绑定 |
+| **`recast(ptr, s_ptr)`** | 任意 `Pointer` 与目标 `Shape` 指针 | 直接构造透明 `Pointer`：`{ addr := ptr.addr; shape_ptr := s_ptr.addr; mutability := ptr.mutability; __ptr_tag := {} }` | 零内核原语实现胖指针形状重解释（`Union` 与容器元素访问的核心工具） |
 | **`$ptr`** | 任意 `live` 槽指针 | 读取胖指针的 `s := ptr.shape_ptr`，通过 `addr = 0` 的 `%field` 与 `%next_sym` 检查 `s` 是否为 POD（原子 `bytes` 或不含 `\destroy` 且子字段皆 POD 的复合 `Shape`）：若是则 `%deref(ptr)`，否则报错 | 面向用户的安全 POD 读取算子（支持自定义小结构体如 `Point` 直接按值读取与传参） |
 | **`move(dst_ptr, src_slot)`** | `dst_ptr` 可写；`src_slot` 为活跃构建帧链（`%this` 或 `%parent`）的 `live` 直接子槽 | 1. 若 `dst_ptr` 为构建期空槽（`uninitialized` 或 `mutable empty`），直接调 **`%move(dst_ptr, src_slot)`**；<br>2. 若 `dst_ptr` 已处于 `live`（必为 `mutable`）：若 `dst_ptr` 为构建期直接子槽，先调 `drop(dst_ptr)` 置空再调 `%move(dst_ptr, src_slot)`；若 `dst_ptr` 为已闭合对象的 `mutable` 子字段，直接调 **`%swap(dst_ptr, src_slot)`** 再调 **`drop(src_slot)`**！ | 统一支持向空槽移动、覆写构建期可变槽、以及覆写已闭合对象的 `mutable` 子字段（全程保持闭合对象无 `empty` 空洞） |
 | **`dst_ptr = val`** | `dst_ptr` 可写（`uninitialized`、`mutable empty` 或 `mutable live`） | 1. 若 `dst_ptr` 为构建期空槽，直接调 **`%write(dst_ptr, val)`**；<br>2. 若 `dst_ptr` 已处于 `live`（必为 `mutable`）：在当前块通过 `tmp := box(val)` 构造新值槽，调 **`%swap(dst_ptr, tmp)`** 原地交换，再调 **`drop(tmp)`** 销毁换出的旧值！ | 统一用 Copy-and-Swap 完成已初始化 `mutable` 槽（含闭合对象子字段 `\p.f = val`）的安全覆写，零空洞、异常安全 |
-| **`target @ rhs`** | `target` 为协程 `handle`，`rhs` 为任意表达式 | 若 `rhs` 已是当前块未绑定直接子槽指针 `src_ptr` 则直接传给 `%resume(target, src_ptr)`；否则经 `src_ptr := box(rhs)` 装入临时槽后调用 **`%resume(target, src_ptr)`**，返回本协程醒来时的 `\in` 指针 | 协程恢复与消息传递分派器 |
+| **`target @ rhs`** | `target` 为协程 `Handle`，`rhs` 为任意表达式 | 若 `rhs` 已是当前块未绑定直接子槽指针 `src_ptr` 则直接传给 `%resume(target, src_ptr)`；否则经 `src_ptr := box(rhs)` 装入临时槽后调用 **`%resume(target, src_ptr)`**，返回本协程醒来时的 `\in` 指针 | 协程恢复与消息传递分派器 |
 | **`clone(dst_ptr, src_ptr)`** | 可写目标槽与源指针 | 若为 POD 则 `dst_ptr = $src_ptr`；若含自定义 `\clone` 则调用之；否则用 `%next_sym` 遍历 `src_ptr.shape_ptr` 各字段递归 `clone` | 显式深拷贝 |
 
 ## 三、块包装器、构建栈父链与多层 `break` 接力展开
@@ -120,7 +121,7 @@ match(pattern, subject) -> Bindings | fail
 ```
 
 1. **Pattern 的分派规则**：
-   - **裸 `symbol` 值 `a`**：匹配任意 `subject` 并产出绑定项 `(a, subject)`；
+   - **裸 `Symbol` 值 `a`**：匹配任意 `subject` 并产出绑定项 `(a, subject)`；
    - **普通 `value`（如字面量 `3` 或变量读取 `$\a`）**：按值相等（`==`）匹配，无需内置 `Exactly` 关键字；
    - **带 `matcher` 字段的自定义 Pattern 对象**：调用 `pattern.matcher(subject)`（支持形状比较 `<` / `>` / `=`、组合子 `|` / `&`、守卫 `If` 及可逆算术匹配 `a + 1 : 3`）。
 2. **`value : pattern`（可反驳约束）与 `pattern := rhs`**：
@@ -140,6 +141,6 @@ match(pattern, subject) -> Bindings | fail
 
 ## 六、验收用例（自检清单）
 
-1. **三层销毁与容器解耦**：`DynamicArray.pop_back()` 对缓冲区中经 `%recast` 取得的非 POD 元素指针调用 `destroy(elem_ptr)` 触发其 `\destroy`，无需调用 `%drop`；而块内局部变量 `drop(\p)` 则依次执行 `destroy(\p)` 与 `%drop(\p)`。
-2. **`x := rhs` 单次求值验证**：`x := side_effect_fn()` 展开为 `__tmp` 暂存序列，`side_effect_fn()` 严格只执行一次，且块闭合后 `__tmp` 被静默剥离，不在闭合对象 `shape` 中留下任何字段。
+1. **三层销毁与容器解耦**：`DynamicArray.pop_back()` 对缓冲区中经 `recast` 取得的非 POD 元素指针调用 `destroy(elem_ptr)` 触发其 `\destroy`，无需调用 `%drop`；而块内局部变量 `drop(\p)` 则依次执行 `destroy(\p)` 与 `%drop(\p)`。
+2. **`x := rhs` 单次求值验证**：`x := side_effect_fn()` 展开为 `__tmp` 暂存序列，`side_effect_fn()` 严格只执行一次，且块闭合后 `__tmp` 被静默剥离，不在闭合对象 `Shape` 中留下任何字段。
 3. **多层 `break` 展开信封接力**：在内层循环执行 `break $\outer 42` 时，内层块逆序 `drop` 自身局部变量后通过单层 `%break` 返回展开信封，外层块识别目标为自身后拆封得到 `42`。

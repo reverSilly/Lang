@@ -15,7 +15,7 @@
 2. **`location` 是纯内部逻辑存储节点（不直接作为表达式结果出现）**：
    - `location` 是“一个存储槽及其所有权”的内部逻辑抽象，只存在于 `block` 的所有权树中，由 `allocate [mutable]` 或子 `block` 创建。
    - **逻辑存储抽象（不强制绑定物理内存）**：语言规范仅定义 `location` 的逻辑状态转换与读写契约，**不要求所有 `location` 在任意时刻都严格对应一段物理内存（RAM）**——在逻辑上，“一段寄存器”与“一段物理内存”均可承载一个 `location`。
-   - **表达式中从不直接持有 `location` 实体，而是持有指向该 `location` 的 `pointer` value**。所有操作 `location` 的内核原语均接收和返回 `pointer` value。
+   - **表达式中从不直接持有 `location` 实体，而是持有指向该 `location` 的 `Pointer` value**。所有操作 `location` 的内核原语均接收和返回 `Pointer` value。
 
 ## 二、内存零 Header 模型、透明胖指针与 Shape 零投影内省
 
@@ -23,18 +23,18 @@
 
 - **内存中不存储 `[shape-reference]` 头**：每个已闭合 `location` 对应的物理存储中**只存放纯粹的数据字节（`bytes`）**，与 C 语言 `struct` 100% 相同，零额外 Header 或控制块开销。
 - **逻辑指针统一为透明复合结构 `Pointer`**：
-  - 指向任何 `location` 的 `pointer` value 自身也是一个暴露了内部字段的普通 POD 对象（详见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md) §2.2），逻辑结构由三个数据字段与一个零尺寸标记组成：
-    1. `ptr.addr`（`usize`，底层 `bytes(8, 8)`）：目标存储的字节起始地址（或相对偏移量）；
-    2. `ptr.shape_ptr`（`usize`，底层 `bytes(8, 8)`）：指向**目标 `location` 所存放对象之 `Shape`** 的只读地址；
-    3. `ptr.mutability`（`bytes(1, 1)`）：通过该指针访问目标的读写权限（`immutable` 或 `mutable`）；
+  - 指向任何 `location` 的 `Pointer` value 自身也是一个暴露了内部字段的普通 POD 对象（详见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md) §3），直接以裸 `bytes` 为底座（零标准库 `usize` 循环依赖）：
+    1. `ptr.addr`（`bytes(8, 8)`）：目标存储的字节起始地址（或相对偏移量）；
+    2. `ptr.shape_ptr`（`bytes(8, 8)`）：指向**目标 `location` 所存放对象之 `Shape`** 的只读地址；
+    3. `ptr.mutability`（`bytes(1, 1)`）：通过该指针访问目标的读写权限（`0` 为 `immutable`，`1` 为 `mutable`）；
     4. `ptr.__ptr_tag`（`{}`）：零尺寸类型区分标记。
-  - **直接字段读取，零专用原语**：由于 `Pointer` 自身具有公开的复合 `Shape`，读取指针的 `addr`、`shape_ptr` 或 `mutability` 直接使用常规字段访问，无需为指针提供专门的拆包内核原语。
+  - **直接字段读取与构造，消去专用指针原语**：由于 `Pointer` 自身是公开的复合 `Shape`，读取指针的 `addr`、`shape_ptr`、`mutability`，或者构造 `addr = 0` 的反射基准指针 `z_ptr`、实现指针重解释 `recast(ptr, target_shape)`、实现数组元素偏移寻址，全部在标准库中通过普通字段读写与对象构造完成！
   - **瘦指针作为编译期退化**：当编译器在编译期静态推导出目标的 `shape_ptr` 与 `mutability` 时，物理表示自动省去后两项，退化为 1 个机器字（`addr`）的瘦指针；只有在动态未知时才在运行期传递完整的胖指针。
 - **严格区分 `%shape(val)` 与 `ptr.shape_ptr`**：
-  - **`%shape(val) -> pointer(Shape)`**：取**任意 `value` 自身**的形状指针（例如 `%shape(x)` 返回 `x` 自身类型的 `Shape` 指针；对一个胖指针值 `ptr` 调用 `%shape(ptr)`，返回的是 `Pointer` 这一类型的 `Shape` 指针！）；
-  - **`ptr.shape_ptr`（等价于 `%shape(%deref(ptr))`）**：取**胖指针 `ptr` 所指向的目标 `location` 内容**的形状指针（直接读取胖指针结构中的 `shape_ptr` 字段，无需实际拷贝目标内存）。
-- **`frozen` 对象 = 指向只读常量区的安全 `pointer`**：
-  - 不存在独立的 `frozen` 类型；编译期固化或 `%freeze` 产生的只读对象住在常量区（`.rodata`），直接以 `mutability = immutable` 的安全 `pointer` 表示，永不悬垂且允许跨阶段固化。
+  - **`%shape(val) -> Pointer(Shape)`**：取**任意 `value` 自身**的形状指针（例如对一个胖指针值 `ptr` 调用 `%shape(ptr)`，返回的是 `Pointer` 这一类型的 `Shape` 指针！）；
+  - **`ptr.shape_ptr`（等价于 `%shape(%deref(ptr))` 的地址）**：取**胖指针 `ptr` 所指向的目标 `location` 内容**的形状地址（直接读取胖指针结构中的 `shape_ptr` 字段，无需实际拷贝目标内存）。
+- **`frozen` 对象 = 指向只读常量区的安全 `Pointer`**：
+  - 不存在独立的 `frozen` 类型；编译期固化或 `%freeze` 产生的只读对象住在常量区（`.rodata`），直接以 `mutability = 0`（`immutable`）的安全 `Pointer` 表示，永不悬垂且允许跨阶段固化。
 
 ### 2.2 描述性 `Shape`、`bytes(N, align)` 基底表示与零投影内省
 
@@ -43,11 +43,11 @@
   - `Shape` 自身也是普通只读对象，其公开布局为：
     ```
     Shape := {
-        size       : usize,   !- 字节总大小（bytes(8, 8)） -!
-        align      : usize,   !- 字节对齐要求（2 的幂，bytes(8, 8)） -!
-        first_sym  : Symbol,  !- 定义序首个字段符号（无字段时为 null_sym） -!
-        last_sym   : Symbol,  !- 定义序末个字段符号（无字段时为 null_sym） -!
-        __shape_tag: {}       !- 零尺寸 Shape 标记 -!
+        size       : bytes(8, 8), !- 字节总大小 -!
+        align      : bytes(8, 8), !- 字节对齐要求（2 的幂） -!
+        first_sym  : Symbol,      !- 定义序首个字段符号（无字段时为 null_sym） -!
+        last_sym   : Symbol,      !- 定义序末个字段符号（无字段时为 null_sym） -!
+        __shape_tag: {}           !- 零尺寸 Shape 标记 -!
     }
     ```
 - **原子 `bytes(N, align = 1)` 的 `Shape` 与 `null_sym` 唯一判别定理**：
@@ -61,7 +61,7 @@
   - 在运行时底层，复合 `Shape` 的 `LinkedHashMap` / `Trie` 中每个字段条目存储的 `(offset, sub_shape_ptr, field_mutability)`，在物理结构上就是一个**以 `0` 为基地址的相对胖指针（Relative Fat-Pointer）**！
   - 回看 `%field(ptr, sym)` 的定义：
     $$\\%\text{field}((base\\_addr, s, parent\\_mut), sym) = (base\\_addr + offset, sub\\_shape, \min(parent\\_mut, field\\_mut))$$
-  - 因此，**完全不需要在内存中构造 `s.fields` 这一层伪对象投影或生成第 2 层伴生形状 `sf`**：只需对一个 `addr = 0`、指向形状 `s` 的基准胖指针 `z_ptr` 直接调用现成的 `%field(z_ptr, sym)`，它返回的胖指针 **`(0 + offset, sub_shape, field_mut)` 本身就已经完整携带了该字段在底层 HashMap 中的全部三元信息**！
+  - 因此，**完全不需要在内存中构造 `s.fields` 这一层伪对象投影或生成第 2 层伴生形状 `sf`**：只需构造一个 `addr = 0`、指向形状 `s` 的基准胖指针 `z_ptr` 并直接调用现成的 `%field(z_ptr, sym)`，它返回的胖指针 **`(0 + offset, sub_shape, field_mut)` 本身就已经完整携带了该字段在底层 HashMap 中的全部三元信息**！
   - 若字段 `sym` 不存在于 `s`（或构建期槽处于 `uninitialized`/`empty`），`%field` 返回 **`null` 指针**（天然兼作 $O(1)$ 的 `contains` 判别）。
 - **遍历字段名：首尾符号与单步游标原语**：
   - 配合 `Shape` 上的 `first_sym` 与 `last_sym`，内核仅提供两个单步符号游标原语：
@@ -70,9 +70,9 @@
 
 ### 2.3 内联多态（`Union` / `Optional`）与自定义 POD
 
-1. **内联 `Union` 与 `Optional` = `bytes(N, A)` + `%recast`**：
-   - 已闭合对象的普通字段恒为 `live`；若业务需要可空字段或变体类型，标准库通过内联 `Union(ShapeA, ShapeB)` / `Optional(T)` 实现：在编译期计算 $N = \max(\text{ShapeA.size}, \text{ShapeB.size})$ 与 $A = \max(\text{ShapeA.align}, \text{ShapeB.align})$，构造普通闭合对象 `{ tag := ...; payload := allocate mutable bytes(N, A); \destroy := ... }`；
-   - 访问时核对 `tag`，并通过指针形状重解释原语 **`%recast(payload_ptr, target_shape_ptr)`** 生成携带目标 `shape` 的胖指针，零堆分配实现连续内联存储。
+1. **内联 `Union` 与 `Optional` = `bytes(N, A)` + 透明 `Pointer` 重解释**：
+   - 已闭合对象的普通字段恒为 `live`；若业务需要可空字段或变体类型，标准库通过内联 `Union(ShapeA, ShapeB)` / `Optional(T)` 实现：计算 $N = \max(\text{ShapeA.size}, \text{ShapeB.size})$ 与 $A = \max(\text{ShapeA.align}, \text{ShapeB.align})$，构造普通闭合对象 `{ tag := ...; payload := allocate mutable; %write(\payload, %bytes(N, A)); \destroy := ... }`；
+   - 访问时核对 `tag`，并通过标准库 `recast(payload_ptr, target_shape_ptr)`（直接替换透明 `Pointer` 的 `shape_ptr` 字段）生成携带目标 `Shape` 的胖指针，零堆分配实现连续内联存储。
 2. **自定义 POD 与 `$` 分派器**：
    - 内核提供无条件按位读取原语 **`%deref(ptr) -> value`**（不检查是否含 `\destroy`，直接按 `ptr.shape_ptr` 记录的 `size` 将目标槽内容读出为 `value`，供标准库在内部实现 `move`、`swap` 及 `$`）；
    - 标准库实现面向用户的读取算子 **`$ptr`**（见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）：通过 `ptr.shape_ptr` 检查目标是否为 POD（原子 `bytes` 或所有字段均为 POD 且不含 `\destroy` 字段的复合 `Shape`），若是则调用 `%deref(ptr)` 取出 `value`，否则报错拒绝。
@@ -91,20 +91,20 @@
 
 ### 3.2 编译器内建原语最小全集（Core Primitives — 全闭环版）
 
-判据：**凡是需要触碰求值器私有结构（延迟代码、构建栈帧、槽分配与状态位、按字节槽读写与交换、协程栈、常量段）的必须入核；凡是基础算术指令生成（归 `compile` `capabilities.intrinsics`）、RAII 析构（`\destroy`）、多层 `break` 展开、深拷贝（`clone`）、模式匹配与语法糖全部归元层能力或标准库（见 [06-stdlib-foundations.md](06-stdlib-foundations.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。**
+判据：**凡是需要触碰求值器私有结构（延迟代码、构建栈帧、原子字节构造、槽分配与状态位、按字节槽读写与交换、符号 Trie 池、协程栈、常量段）的必须入核；凡是基础算术指令生成（归 `compile` `capabilities.intrinsics`）、指针重解释 `recast`（归透明 `Pointer` 字段构造）、RAII 析构（`\destroy`）、多层 `break` 展开、深拷贝（`clone`）、模式匹配与语法糖全部归元层能力或标准库（见 [06-stdlib-foundations.md](06-stdlib-foundations.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。**
 
 | 分类 | Core 原语 | 签名与语义 |
 | :--- | :--- | :--- |
-| **1. 延迟与序列** | `^Expr` / `a ; b` | 唯一特殊形式生成 `prototype` / 顺序求值并丢弃前值（无析构） |
-| **2. 环境求值** | `evaluate p` / `block p` / `new p` | 当前帧就地求值 / 开辟子构建帧并在闭合时剥离非 `live` 槽、压平为连续对象 / 惰性创建独立协程返回 `handle` |
-| **3. 环境标识（皆零参）** | `%this` / `%parent` / `%caller` / `%in` | 当前构建帧指针（`\this`）/ 构建栈直接父帧指针 / 恢复者协程 `handle`（`\^`）/ 本协程来信槽指针（`\in`） |
-| **4. 槽分配与三态演进** | `allocate [mutable]` / `%bind(sym, val)` / `%move(dst, src)` / `%drop(ptr)` | 分配构建期子槽 / 绑定未命名直接子槽（返回 `Boolean`）/ 移入空槽（支持从活跃 `%parent` 移入并将源置 `empty`）/ 将构建期直接子槽置为 `empty`（零 RAII，要求子槽已全空） |
-| **5. 比特读写与交换** | `%write(dst, val)` / `%deref(ptr)` / `%swap(p1, p2)` | 向空槽按位写入 `val` 并置 `live` / 从槽按位读出 `val` / 交换两个同 `shape` 的 `live` 槽内容（用于操作已闭合对象的可变字段，零空洞、零析构） |
-| **6. 导航与形状反射** | `%field(ptr, sym)` / `%shape(val)` / `%next_sym(s, sym)` / `%prev_sym(s, sym)` / `%recast(ptr, s)` / `%freeze(ptr)` | 胖指针偏移寻址（不存在返 `null`；对 `addr = 0` 直接得相对胖指针）/ 取 `Shape` 只读指针 / 符号链正逆序游标 / 重解释胖指针形状 / 冻结至只读常量区 |
+| **1. 延迟与序列** | `^Expr` / `a ; b` | 唯一特殊形式生成 `Prototype` / 顺序求值并丢弃前值（无析构） |
+| **2. 环境求值** | `evaluate p` / `block p` / `new p` | 当前帧就地求值 / 开辟子构建帧并在闭合时剥离非 `live` 槽、压平为连续对象 / 惰性创建独立协程返回 `Handle` |
+| **3. 环境标识（皆零参）** | `%this` / `%parent` / `%caller` / `%in` | 当前构建帧指针（`\this`）/ 构建栈直接父帧指针 / 恢复者协程 `Handle`（`\^`）/ 本协程来信槽指针（`\in`） |
+| **4. 原子字节与槽演进** | `%bytes(N, align)` / `allocate [mutable]` / `%bind(sym, val)` / `%move(dst, src)` / `%drop(ptr)` | 构造零初始化 `bytes(N, align)`（写入槽位时原地构造）/ 分配构建期子槽 / 绑定未命名直接子槽（返 `Boolean`）/ 移入空槽 / 将构建期直接子槽置为 `empty` |
+| **5. 比特读写与交换** | `%write(dst, val)` / `%deref(ptr)` / `%swap(p1, p2)` | 向空槽按位写入 `val` 并置 `live` / 从槽按位读出 `val` / 交换两个同 `Shape` 的 `live` 槽内容（零空洞、零析构） |
+| **6. 导航、反射与符号池** | `%field(ptr, sym)` / `%shape(val)` / `%next_sym(s, sym)` / `%prev_sym(s, sym)` / `%freeze(ptr)` / `%sym_bytes(sym)` / `%intern_sym(ptr, len)` | 胖指针偏移寻址 / 取 `Shape` 只读指针 / 符号链正逆序游标 / 冻结至只读常量区 / 符号与字节序列双向转换（基于全局 `Trie` 符号池） |
 | **7. 控制流与协程切换** | `%branch(c, p1, p2)` / `%break(src_ptr)` / `%resume(coro, src_ptr)` | 透明二路分支 / **仅退出当前最内层构建帧 `%this`** 并将 `src_ptr` 移入结果槽（零 RAII）/ 原子移入目标 `%in` 并切换协程 |
 
 ## 四、验收用例（自检清单）
 
-1. **`bytes(N, align)` 唯一判别**：`bytes(4, 4)` 的 `Shape` 具有 `size = 4, align = 4, first_sym = null_sym, last_sym = null_sym`；而 `i32` 的 `Shape` `{ __raw: bytes(4, 4), __i32_tag: {} }` 具有 `size = 4, align = 4, first_sym = __raw, last_sym = __i32_tag`，无需特殊标示符即可由 `first_sym == null_sym` 区分裸字节与包装结构。
-2. **零投影字段反射**：对形状 `s := (\p).shape_ptr` 构造 `addr = 0` 的基准胖指针 `z_ptr` 并调用 `%field(z_ptr, a)`，直接获得携带 `(offset, sub_shape, field_mut)` 的相对胖指针；配合 `%next_sym(s, a)` 与 `%prev_sym(s, b)` 即可正逆序遍历全部字段，无需 `s.fields` 投影对象。
+1. **`bytes(N, align)` 唯一判别**：`%bytes(4, 4)` 的 `Shape` 具有 `size = 4, align = 4, first_sym = null_sym, last_sym = null_sym`；而 `i32` 的 `Shape` `{ __raw: bytes(4, 4), __i32_tag: {} }` 具有 `size = 4, align = 4, first_sym = __raw, last_sym = __i32_tag`，无需特殊标示符即可由 `first_sym == null_sym` 区分裸字节与包装结构。
+2. **零投影字段反射与标准库 `recast`**：由于 `Pointer` 是透明结构体 `{ addr, shape_ptr, mutability, __ptr_tag }`，标准库直接构造 `addr = 0` 的基准胖指针 `z_ptr` 并调用 `%field(z_ptr, a)` 即可反射字段；`recast(ptr, target_shape)` 直接替换 `shape_ptr` 字段即可完成，无需内核 `%recast` 原语。
 3. `\a` 展开为 `%field(%this, a)`，若当前块未绑定 `a` 或 `\a` 已被 `%drop` 置为 `empty`，则返回 `null` 指针。

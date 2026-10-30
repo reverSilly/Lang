@@ -12,11 +12,11 @@
 
 | 层级 | 执行时机 | 触发方式 | 核心职责 |
 | :--- | :--- | :--- | :--- |
-| **元层** | 编译期（必须） | 构建脚本入口、顶层 `compile` 块、编译器指令 | 构建配置、语法/算符/字面量注册、底层算术 `intrinsics` 获取、AST 重写、模块导入、编译期诊断 |
+| **元层** | 编译期（必须） | 构建脚本入口、顶层 `compile` 块、编译器指令 | 构建配置、语法/算符/字面量注册、底层 `bytes(N, N)` 算术 `intrinsics` 获取、AST 重写、模块导入、编译期诊断 |
 | **程序层（静态）** | 编译期（编译器尽力） | 常量折叠成功；`compile` 标注强制 | 单态化、静态连续内存布局推导、指针瘦化（消去静态已知的 `shape_ptr` 与 `mutability`） |
 | **程序层（动态）** | 运行期 | 默认；静态未知时保留运行期描述信息 | 常规程序执行、胖指针动态寻址与分派 |
 
-- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、Parser 与 AST 操弄接口、符号池 `symbols` 与底层指令集 `intrinsics`）通过显式的 `capabilities` 对象传入，默认沙箱化（详见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
+- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、Parser 与 AST 操弄接口、底层指令集 `intrinsics`）通过显式的 `capabilities` 对象传入，默认沙箱化（详见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
 - **轻量语法重写层（Parser Pattern + `compile` 处理函数）**：
   - 语言内核不内置复杂的语法糖、数字字面量解析或 RAII 调度逻辑；算符、语法结构（如 `{ ... }`、`block1`、`:=`、`=`、`$`、`@`、`if ... else ...`、`while`、`defer`、`break`、`try`）以及数字/浮点字面量（`word` 与 `word.word`）均在 `compile` 元层注册（见 [06-stdlib-foundations.md](06-stdlib-foundations.md) 与 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）；
   - 编译器 Parser 支持以动态字符串模式声明语法规则与优先级（如 `.'if'.('else'.)?`），匹配成功后将捕获的 AST 节点传入 `compile` 期处理函数，展开为纯粹的内核原语序列（结合 `evaluate` 在调用方当前 `block` 就地生效）；
@@ -28,13 +28,13 @@
 - 语言允许动态结构，因此语言层面“必须编译期已知”的语法位置趋近于零。
 - 类型/形状约束、泛型参数等位置**不强制要求**编译期已知；它们只是“若编译期可折叠则解锁单态化、内联连续布局与瘦指针退化”的优化机会。
 - **折叠成功** → 单态化 + 静态偏移计算 + 指针省去运行期 `shape_ptr` 与 `mutability` 字段（退化为单字瘦指针 `addr`）；**折叠失败** → 保留完整胖指针 `(addr, shape_ptr, mutability)` + 动态查表寻址。
-- **强制断言**：用户可用 `compile` 显式约束某位置必须在编译期求值完成（例如 `capabilities.intrinsics` 要求的编译期符号常量参数）；若折叠失败则直接报编译错误，绝不静默退化为运行期求值。
+- **强制断言**：用户可用 `compile` 显式约束某位置必须在编译期求值完成（例如 `capabilities.intrinsics` 要求的编译期常数参数）；若折叠失败则直接报编译错误，绝不静默退化为运行期求值。
 
 ## 四、阶段边界规则
 
 1. **固化（Reification）**：编译期求值结果跨阶段进入运行期时，只允许以下不可变 `value` 跨越边界：
-   - **非指针 POD `value`**（底层为 `bytes(N, align)` 的值，如各类整数、浮点数、`boolean`、`symbol` 等）：按位深拷贝为二进制常量数据；
-   - **指向只读常量区（`frozen` 区）的安全只读 `pointer`**：包括已闭合对象的 `shape` 指针（`%shape(val)`）、编译期冻结的模块与只读对象快照（`%freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
+   - **非指针 POD `value`**（底层为 `bytes(N, align)` 的值，如各类整数、浮点数、`Boolean`、`Symbol` 等）：按位深拷贝为二进制常量数据；
+   - **指向只读常量区（`frozen` 区）的安全只读 `pointer`**：包括已闭合对象的 `Shape` 指针（`%shape(val)`）、编译期冻结的模块与只读对象快照（`%freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
    - **`prototype`（纯代码值）**：包括由 `^Expr` 构造或由 `capabilities.intrinsics` 生成的底层算术/比较 `prototype`，固化为可序列化的中间表示（IR）/机器码并参与后续编译。
    - **严禁固化**：指向编译期栈或协程堆上普通 `location` 的 `pointer`、外部 OS 资源句柄、活跃块指针（`%this`）及协程 `handle`（`\^`）。
 2. **阶段结束清理**：单次 `compile` 求值结束时，其创建的局部资源按 [06-stdlib-foundations.md](06-stdlib-foundations.md) 的标准库 RAII 协议完整执行清理，仅固化值留存。
@@ -80,6 +80,6 @@ x := allocate mutable;
 
 1. **编译期 `printf`**：在编译期解析格式串，并按参数 `shape` 生成对应的格式化 `prototype` 代码固化到运行期。
 2. **编译期生成只读查找表**：`compile` 块中用 `mutable` location 计算完美哈希表，经 `%freeze` 冻结为指向只读常量区的安全指针后跨阶段供运行期只读访问。
-3. **编译期反射 `derive(Serialize)`**：通过 `%shape`（或胖指针的 `ptr.shape_ptr`）配合 `base_addr = 0` 的 `%field` 相对胖指针与 `%next_sym`/`%prev_sym` 游标遍历字段元数据，生成并返回序列化代码 `prototype`。
+3. **编译期反射 `derive(Serialize)`**：通过 `%shape`（或胖指针的 `ptr.shape_ptr`）配合 `addr = 0` 的 `%field` 相对胖指针与 `%next_sym`/`%prev_sym` 游标遍历字段元数据，生成并返回序列化代码 `prototype`。
 4. **编译期构造栈/堆 `location` 指针试图直接跨阶段固化**：编译器静态拒绝；POD `value`、只读常量区 `pointer`（含闭合 `shape` 与 `frozen` 对象）、`prototype` 正常固化。
 5. **编译期 RAII**：`compile` 块内创建的资源与 `defer` 守卫在编译期块结束时按与运行期完全相同的标准库逆序规则执行 `destroy`。
