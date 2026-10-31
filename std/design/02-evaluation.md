@@ -22,9 +22,9 @@
 | `evaluate proto` | 内核求值原语 | 在**当前环境（current env）**直接执行 `proto`；不新建 `self root`、不切换 env | 透传 `proto` 的结果 `value` |
 | `block proto` | 内核建帧原语 | 在当前 block 下隐式分配匿名 `self root` location 作为**新子 env**，执行 `proto`；闭合时由内核静默剥离处于 `empty`/`uninitialized` 的槽，仅将 `live` 绑定字段压平为连续内存并锁定 `Shape` | 指向该 `self root` location 的 `Pointer` |
 | `new proto` | 内核协程原语 | **惰性（Lazy）**创建独立协程根帧（初始停在 `proto` 入口 PC=0，不执行代码） | 协程 `Handle` |
-| `%resume(target, src_ptr)` | 内核切换原语 | 原子地将 `src_ptr` 指向的直接子槽内容移入 `target` 的 `%in` 槽（`src_ptr` 置 `empty`）、将 `target` 的 `\^` 设为本协程、挂起自身并恢复 `target` | 本协程下次被唤醒时指向自身 `%in` 槽的 `Pointer` |
+| `%resume(target, val)` | 内核切换原语 | 原子地将 `val` 直接装入 `target` 的 `%in` 槽（零 POD/RAII 检查）、将 `target` 的 `\^` 设为本协程、挂起自身并恢复 `target` | 本协程下次被唤醒时指向自身 `%in` 槽的 `Pointer` |
 | `{ Expr }` | 标准库语法糖 | 展开为带隐式父帧链、匿名临时槽清理与局部守卫清理的 `block ^(Expr)`；**空块 `{}` 直接展开为 `block ^()`**（返回空的闭合对象指针） | 同 `block`（返回 `Pointer`） |
-| `target @ rhs` | 标准库分派器 | 将 `rhs` 装入或移入当前块临时直接子槽 `src_ptr`，调用 `%resume(target, src_ptr)`（详见 `06` §2.3） | 指向本协程 `%in` 槽的 `Pointer` |
+| `target @ rhs` | 标准库分派器 | 经标准库 POD Gate 检验（或接收 `move` 转移来的槽并提取 `val` + `%drop` 置空）后，调用 `%resume(target, val)`（详见 `06` §2.4） | 指向本协程 `%in` 槽的 `Pointer` |
 
 ### 2.2 五个核心环境与槽游标原语（皆为零参原语）
 
@@ -34,7 +34,7 @@
 | `%parent` | `Pointer` | 零参原语，返回指向当前栈顶构建帧 `%this` 在协程构建栈（Construction Stack）上的直接父构建帧指针（通用 `Pointer` 不存储 parent，唯独构建栈上未闭合的 `block` 具有父子链） |
 | `%unbound` | `Pointer` | 零参原语，返回当前构建帧 `%this` 中**最新创建的、尚未 `%bind` 且处于 `live` 状态的匿名直接子槽指针**（若无则返回 `null`），供标准库按 LIFO 逆序调用 `drop(%unbound)` 清理未命名临时对象 |
 | `%caller`（记作 `\^`） | `Handle` | 指向最近一次唤醒本协程的那个协程的句柄（由 `%resume` 原子更新；`Handle` 唯一专指协程句柄） |
-| `%in`（记作 `\in`） | `Pointer` | 指向本协程根帧持有的来信槽 location 的普通胖指针，存放最近一次唤醒本协程时由对方移入的内容 |
+| `%in`（记作 `\in`） | `Pointer` | 指向本协程根帧持有的来信槽 location 的普通胖指针，存放最近一次唤醒本协程时由对方传入的内容 |
 
 ## 三、`evaluate` 与 `block` 的正交分工
 
@@ -50,7 +50,7 @@
   ```
 - **`block proto`（子帧隔离 / 连续内存对象构造与就地构造）**：
   - 只要定义方希望词法隔离或构造一个独立对象，就使用 `block`（标准库衍生出保留字段的对象构造块 `{ ... }` 与自动清理局部变量的求值块 `block1`，见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）。
-  - **就地构造（In-place Construct / RVO）**：当 `block proto` 作为初始化表达式（如 `x := { ... }` 或向空槽构造）时，编译期 AST 重写层或编译器后端可直接将父块的目标槽位作为该 `block` 的 `self root` 原地构造，消除中间临时槽拷贝与移动开销。
+  - **就地构造（In-place Construct / RVO）**：当 `block proto` 作为初始化表达式（如 `x := { ... }`、`b := move(\a)` 或向空槽构造）时，编译期 AST 重写层或编译器后端可直接将父块的目标槽位作为该 `block` 的 `self root` 原地构造，消除中间临时槽拷贝与移动开销。
 
 ### 3.2 严禁显式 `with <ptr> evaluate`
 
@@ -78,26 +78,26 @@
 
 ### 5.1 为什么 `%resume` 必须是内核原子原语
 
-将“移入 `\in` + 更新 `\^` + 切换协程控制流”合为单一内核原子原语 `%resume(target, src_ptr)`，是为了坚守三条内核安全不变量：
+将“写入 `\in` + 更新 `\^` + 切换协程控制流”合为单一内核原子原语 `%resume(target, val)`，是为了坚守三条内核安全不变量：
 1. **跨协程帧树隔离**：每个协程的帧树只归该协程自己所有，严禁外部协程通过普通指针直接改写目标协程内部的 location；
 2. **恢复者身份 `\^` 不可伪造**：`\^` 是代表“真正挂起自身并将控制权移交给本协程的恢复者”的内核凭证，不可在切换之外被外部篡改；
-3. **根帧终止焊接**：当协程根帧求值结束或 `%break` 弹出至根帧时，内核必须自动将最终结果移入 `\^` 的 `\in` 槽并恢复 `\^`。
+3. **根帧终止焊接**：当协程根帧求值结束或 `%break(val)` 弹出至根帧时，内核必须自动将最终结果 `val` 装入 `\^` 的 `\in` 槽并恢复 `\^`。
 
 ### 5.2 惰性创建与统一来信槽 `\in`
 
 1. **创建（`c := new proto`）**：
    `new` 是**惰性（Lazy）**的——仅分配新协程的根帧（含初始处于 `empty` 状态的来信槽 `\in`），将指令指针停在 `proto` 入口（PC=0），处于挂起态（Suspended），并立即返回协程 `Handle` 值。创建过程不执行 `proto` 的任何代码，不挂起创建者。
 2. **首次唤醒（`c @ v1`）**：
-   调用方通过标准库 `@` 将实参装入当前块直接子槽 `src_ptr` 并触发 `%resume(c, src_ptr)`：
-   - 内核原子地将 `src_ptr` 的内容移入协程 `c` 的 `\in` 槽（并将调用方的 `src_ptr` 置为 `empty`）；
+   调用方通过标准库 `@`（经 POD Gate 检验，或接收 `move` 转移槽提取出 `val`）触发 `%resume(c, v1)`：
+   - 内核原子地将 `v1` 装入协程 `c` 的 `\in` 槽；
    - 将 `c` 的 `\^` 设为调用方协程 `Handle`；
    - 挂起调用方，协程 `c` 从 `proto` 的第 0 行开始执行，直接通过 `$\in`（即 `$(%in)`）即可读取首次传入的 `v1`，**零预热（prime）、无首值丢失**。
 3. **中途挂起与再次唤醒（`\^ @ reply`）**：
-   协程 `c` 内部执行 `\^ @ reply` 时，将 `reply` 移入恢复者 `\^` 的 `\in` 并挂起自己；当未来某协程再次以 `c @ v2` 唤醒 `c` 时，原本挂起的 `%resume` 表达式求值完成并返回指向 `c` 自身 `\in` 槽的 `Pointer`。
+   协程 `c` 内部执行 `\^ @ reply` 时，将 `reply` 装入恢复者 `\^` 的 `\in` 并挂起自己；当未来某协程再次以 `c @ v2` 唤醒 `c` 时，原本挂起的 `%resume` 表达式求值完成并返回指向 `c` 自身 `\in` 槽的 `Pointer`（若旧 `\in` 槽含非 POD 资源，由标准库在下次挂起或协程结束时负责 `destroy`）。
 4. **根帧结束与终止**：
-   当协程 `c` 的根帧正常求值完毕，或 `%break(src_ptr)` 弹出至协程根帧时（见 [04-control-flow.md](04-control-flow.md)）：
+   当协程 `c` 的根帧正常求值完毕，或 `%break(val)` 弹出至协程根帧时（见 [04-control-flow.md](04-control-flow.md)）：
    - 协程 `c` 状态标记为已终止（Dead）；
-   - 内核将最终结果移入当前 `\^` 的 `\in` 槽，释放 `c` 的根帧，并恢复 `\^` 执行；
+   - 内核将最终结果装入当前 `\^` 的 `\in` 槽，释放 `c` 的根帧，并恢复 `\^` 执行；
    - 对已终止（Dead）或正处于运行链上（Running）的协程执行 `%resume` 是运行时错误（trap）。
 
 ```
@@ -127,4 +127,4 @@ c := $(gen @ ()); !- 3 -!
 1. `{ a := 1; b := 2 }` 展开后通过 `block` 返回指向包含连续字段 `a`、`b` 的 `self root` location 的 `Pointer`（块内产生的未绑定临时槽由 `%unbound` 逆序 `drop`，隐式绑定的 `__parent` 在闭合前被 `%drop` 置空并由内核剥离，最终对象零额外字节开销）；空块 `{}` 展开为 `block ^()` 返回空对象指针。
 2. 同一 `{ ... }` 内连续执行两次 `evaluate`，通过 `%this` 共同向当前构建中的 `self root` 绑定字段，闭合后一次性压平为完整连续对象。
 3. 在嵌套块内，零参 `%parent` 指向直接外层构建块，多层嵌套块（如双层 `while` 循环）通过 `$($(\__parent).__parent)` 逐步递归上溯访问外层函数帧，且透明 `if`（`%branch`）不产生额外帧层。
-4. `c := new proto` 惰性创建协程，首次 `c @ 10` 将 `10` 移入 `c` 的 `\in` 槽并从 `proto` 入口启动，无任何值丢失。
+4. `c := new proto` 惰性创建协程，首次 `c @ 10` 直接经 `%resume(c, 10)` 将 `10` 装入 `c` 的 `\in` 槽并从 `proto` 入口启动，无任何值丢失。
