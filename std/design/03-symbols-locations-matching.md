@@ -10,9 +10,9 @@
 1. **一切表达式求值结果皆为 `value`（内核不区分 POD 与非 POD）**：
    - 任何表达式求值的结果都是 `value`，在物理上仅由一段定长字节与其对应的形状描述指针（`#shape(val)`）构成。
    - **Core 原语（`#deref`、`#write`、`#allocate_val`、`#break`、`#resume`）完全不认识也不检查 POD 或 `__destroy`**：在内核视角下，任何 `value` 都只是长度为 `(#shape(val)).size` 的纯字节序列。
-   - **POD 是纯粹的标准库递归概念（以 `first_sym == null_sym` 为递归终点）**：
-     - 全语言所有 `Shape` 树的叶子节点都是 `first_sym == null_sym`（无子字段的 `bytes(N, align)` 或 `{}`）；
-     - 因此在标准库中，若形状 `s` 不含 `__destroy`（或自定义拷贝钩子），且其 `fields`（`capabilities.map`）中的所有子字段形状递归皆为 POD（当 `first_sym == null_sym` 时循环零次直接返回 `true`），则 `s` 为 POD。标准库算子 `$`、`=`、`break` 与 `@` 据此设置 POD Gate。
+   - **POD 是纯粹的标准库递归概念（以 `fields == empty_map` 为递归终点）**：
+     - 全语言所有 `Shape` 树的叶子节点都是 `fields == empty_map`（无子字段的裸字节块或 `{}`）；
+     - 因此在标准库中，若形状 `s` 不含 `__destroy`（或自定义拷贝钩子），且其 `fields`（`capabilities.map`）中的所有子字段形状递归皆为 POD（当 `fields` 为空时循环零次直接返回 `true`），则 `s` 为 POD。标准库算子 `$`、`=`、`break` 与 `@` 据此设置 POD Gate。
 2. **`location` 是纯内部逻辑存储节点（不直接作为表达式结果出现）**：
    - `location` 是“一个存储槽及其所有权”的内部逻辑抽象，只存在于 `block` 的所有权树中，由 `#allocate(shape_ptr, is_mut)`、`#allocate_val(val, is_mut)` 或子 `#block` 创建。
    - **单个 `location` 终身形状固定**：任何 `location` 在创建那一刻就确定了 `Shape`（含 `size` 与 `align`）并分配好真实存储空间；单个 `location` 绝不改变 `Shape`（构建期变量改类型通过标准库 `drop` 旧槽 + 分配新槽 + `#bind` 重绑实现）。
@@ -38,24 +38,24 @@
 
 ### 2.2 自解释 `Shape` 与 `#field` 的代数同构
 
-- **`Shape` 是完全自解释的透明只读对象**（完整结构见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md) §2.1）：包含 `size`、`align`、`first_sym`、`last_sym`、`fields: #compile(capabilities.map)` 与 `__shape_tag`。
+- **`Shape` 是完全自解释的透明只读对象**（完整结构见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md) §2.1）：仅包含 4 个字段 `{ size, align, fields: #compile(capabilities.map), __shape_tag }`（无冗余的 `first_sym`/`last_sym`）。
 - **相对胖指针寻址与零投影反射**：
   - 在 `Shape.fields` 映射表中，每个字段条目存储的 `(offset, sub_shape_ptr, field_mutability)` 在物理结构上就是一个**以 `0` 为基地址的相对胖指针**；
   - `#field((base_addr, s, parent_mut), sym) = (base_addr + offset, sub_shape, min(parent_mut, field_mut))`；
   - 因此，只需构造一个 `addr = 0`、指向形状 `s` 的基准胖指针 `z_ptr` 并调用 `#field(z_ptr, sym)`，返回的胖指针即携带该字段的全部三元信息（不存在时返回 `addr = 0, shape_ptr = 0` 的 `null` 指针）。
 - **字段正逆序遍历归属 `Shape.fields`（`capabilities.map`）**：
-  - Core 不再提供独立的 `%next_sym` / `%prev_sym` 原语；正逆序遍历当前 `live` 字段符号直接通过 `Shape.fields`（`capabilities.map`）提供的游标/迭代接口完成。
-  - 处于构建期的 `#this`，其 `first_sym .. last_sym` 及 `fields` 游标仅包含当前处于 `live` 状态的已绑定槽（`uninitialized` 槽经 `#write` 或 `#touch` 激活后挂入；经 `#drop` 置空后立即摘除）。
+  - Core 不提供独立的游标原语；判空与正逆序遍历当前 `live` 字段符号全部通过 `Shape.fields`（`capabilities.map`）提供的接口完成。
+  - 处于构建期的 `#this`，其 `fields` 游标仅包含当前处于 `live` 状态的已绑定槽（`uninitialized` 槽经 `#write` 或 `#touch` 激活后挂入；经 `#drop` 置空后立即摘除）。
 
 ### 2.3 内联多态（`Union` / `Optional`）与 `#touch` 原语
 
-- 标准库通过 `#allocate(bytes_shape(N, A), true)` 分配未初始化字节载荷，并调用 **`#touch(slot_ptr)`**（将构建期直接子槽的状态零开销翻转为 `live`，不改动内存字节）配合标准库 `recast` 实现零堆分配的内联 `Union` / `Optional`。
+- 标准库通过 `#allocate(raw_bytes_shape(N, A), true)` 分配未初始化字节载荷，并调用 **`#touch(slot_ptr)`**（将构建期直接子槽的状态零开销翻转为 `live`，不改动内存字节）配合标准库 `recast` 实现零堆分配的内联 `Union` / `Optional`。
 
 ## 三、编译器内建原语唯一全集（Core Primitives）
 
-判据：**凡是触碰求值器栈帧、槽三态机与内存读写的入核；凡是 RAII（`__destroy`）、POD Gate、`move`、`swap`、`recast`、字段 map 遍历（归 `capabilities.map`）、算术指令（归 `capabilities.intrinsics`）、多层 `break`、模式匹配与所有语法糖（`.`、`$`、`{}`、`""` 等）全部归元层能力或标准库。**
+判据：**凡是触碰求值器栈帧、槽三态机与内存读写的入核；凡是 RAII（`__destroy`）、POD Gate、`move`、`swap`、`recast`、字段 map 遍历（归 `capabilities.map`）、符号文本互转（归 `capabilities.symbols`）、算术指令（归 `capabilities.intrinsics`）、多层 `break`、模式匹配与所有语法糖（`.`、`$`、`{}`、`""` 等）全部归元层能力或标准库。**
 
-Core 共包含 **2 个语法级原语** + **24 个 `#` 前缀 Builtin（5 个零参 + 19 个带参）**：
+Core 共包含 **2 个语法级原语** + **22 个 `#` 前缀 Builtin（5 个零参 + 17 个带参）**：
 
 | 分类 | Core 原语 | 签名与语义 |
 | :--- | :--- | :--- |
@@ -64,11 +64,11 @@ Core 共包含 **2 个语法级原语** + **24 个 `#` 前缀 Builtin（5 个零
 | **3. 环境与槽游标（5，皆零参）** | `#this` / `#parent` / `#unbound` / `#caller` / `#in` | 当前构建帧指针 / 构建栈直接父帧指针 / 当前帧栈顶未 `#bind` 的匿名 `live` 子槽指针（无则 `null`）/ 恢复者协程 `Handle` / 本协程来信槽指针 |
 | **4. 槽分配与状态演进（5）** | `#allocate(s, is_mut)` / `#allocate_val(v, is_mut)` / `#touch(ptr)` / `#bind(sym, val)` / `#drop(ptr)` | 按 `Shape` `s` 分配 `uninitialized` 真槽 / 按 `v` 直接分配 `live` 真槽 / 将直接子槽零开销置为 `live` / 绑定未命名直接子槽（返 `Boolean`，若旧同名槽为 `empty` 则重绑）/ 将构建链直接子槽置为 `empty`（零 RAII） |
 | **5. 比特读写（2，零 POD/RAII 检查）** | `#deref(ptr)` / `#write(dst_ptr, val)` | 从 `live` 槽无条件按位读出 `val` / 当 `dst_ptr.shape_ptr == (#shape(val)).addr` 且 `dst_ptr` 为 `uninitialized` 或 `mutable`（含已闭合对象的 `mutable live` 字段）时，无条件按位写入并置为 `live` |
-| **6. 导航、反射与符号池（5）** | `#field(ptr, sym)` / `#shape(val)` / `#freeze(ptr)` / `#sym_bytes(sym)` / `#intern_sym(ptr, len)` | 胖指针偏移寻址 / 取 `Shape` 只读指针 / 冻结至只读常量区 / 符号与字节序列双向转换（全局 `Trie` 符号池） |
+| **6. 导航、反射与冻结（3）** | `#field(ptr, sym)` / `#shape(val)` / `#freeze(ptr)` | 胖指针偏移寻址 / 取 `Shape` 只读指针 / 冻结至只读常量区 |
 | **7. 控制流与协程切换（3）** | `#branch(c, p1, p2)` / `#break(val)` / `#resume(coro, val)` | 透明二路分支 / **仅退出当前最内层构建帧 `#this`** 并将 `val` 直接填入当前块 `self root` 结果槽（零 POD/RAII 检查）/ 原子地将 `val` 填入目标 `#in` 槽并切换协程（零 POD/RAII 检查） |
 
 ## 四、验收用例（自检清单）
 
-1. **Core 极简收敛**：`move`、`swap`、`recast`、`bytes` 与字段遍历游标全部移出 Core；全内核仅由上表 2 + 24 个原语构成。
-2. **POD 递归终点与 Stdlib Gate 自洽**：标准库检查 `Shape` 是否为 POD 时，以不含 `__destroy` 且 `first_sym == null_sym` 作为天然递归基底；`$`、`=`、`break`、`@` 在标准库入口通过 `is_pod` Gate 拦截未经 `move` 的非 POD 值。
+1. **Core 极简收敛**：`move`、`swap`、`recast`、`bytes`、字段遍历游标与符号文本互转全部移出 Core；全内核仅由上表 2 + 22 个原语构成。
+2. **POD 递归终点与 Stdlib Gate 自洽**：标准库检查 `Shape` 是否为 POD 时，以不含 `__destroy` 且 `fields == empty_map` 作为天然递归基底；`$`、`=`、`break`、`@` 在标准库入口通过 `is_pod` Gate 拦截未经 `move` 的非 POD 值。
 3. **全程真指针**：`x := #allocate(i32, false)` 执行后，`.x` 立即返回 `addr ~= 0, shape_ptr == Shape(i32)` 的真 `Pointer`；未执行 `#write(.x, 42)` 或 `#touch(.x)` 前，`x` 不进入 `live` 字段游标，且 `#deref(.x)` 报错拒绝读取。

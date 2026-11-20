@@ -15,7 +15,7 @@
 
 | 层级与函数 | 作用对象 | 核心职责 | 典型场景 |
 | :--- | :--- | :--- | :--- |
-| **Stdlib `destroy(ptr)`** | **任意 `live` `Pointer`**（含已闭合对象内部可变字段、或 `bytes(N, A)` 经标准库 `recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `__destroy` 字段（`#field(z_ptr, __destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 经 `s.fields`（`capabilities.map`）按定义逆序遍历所有 `live` 字段，递归调用 `destroy(#field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；`.p.f = val` 覆写已闭合对象可变字段前就地析构旧值；被 `drop(ptr)` 调用 |
+| **Stdlib `destroy(ptr)`** | **任意 `live` `Pointer`**（含已闭合对象内部可变字段、或经标准库 `recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `__destroy` 字段（`#field(z_ptr, __destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 经 `s.fields`（`capabilities.map`）按定义逆序遍历所有 `live` 字段，递归调用 `destroy(#field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；`.p.f = val` 覆写已闭合对象可变字段前就地析构旧值；被 `drop(ptr)` 调用 |
 | **Core `#drop(ptr)`** | **构建期帧（`#this` 或 `#parent`）的直接子槽 `Pointer`** | 要求 `ptr` 下无未清空子槽，仅负责将该槽状态标记为 `empty` 并从 `fields` 游标或 `#unbound` 链中摘除（闭合时由 `#block` 静默剥离） | 释放构建期局部变量槽位、取消字段导出、在 `move` 与 `swap` 中零 RAII 释放源槽/临时槽 |
 | **Stdlib `drop(ptr)`** | **构建期帧的 `live` 直接子槽 `Pointer`** | 先调用 `destroy(ptr)` 完成递归析构，再调用 Core `#drop(ptr)` 将槽位置为 `empty` | 局部资源提前销毁、块退出逆序清理、未闭合块同名变量跨类型 Rebind 前的旧槽清理 |
 
@@ -65,7 +65,7 @@
 
 | 标准库工具 / 算符 | 适用目标与前置条件 | 底层展开实现（全部基于 Core 原语与 `capabilities.map`） | 语义说明 |
 | :--- | :--- | :--- | :--- |
-| **`is_pod(s_ptr) -> Boolean`** | 任意 `Pointer(Shape)` | 若 `#field(z_ptr, __destroy) ~= null` 返回 `false`；否则经 `s.fields`（`capabilities.map`）递归检查所有子字段形状（当 `first_sym == null_sym` 时循环 0 次直接返回 `true`） | 以 `first_sym == null_sym` 为天然递归终点的纯标准库 POD 判定函数 |
+| **`is_pod(s_ptr) -> Boolean`** | 任意 `Pointer(Shape)` | 若 `#field(z_ptr, __destroy) ~= null` 返回 `false`；否则经 `s.fields`（`capabilities.map`）递归检查所有子字段形状（当 `s.fields == empty_map` 时循环 0 次直接返回 `true`） | 以 `fields == empty_map` 为天然递归终点的纯标准库 POD 判定函数 |
 | **`p.a` / `.a`** | `Pointer` 与 `Symbol` | 中缀 `p.a` 展开为 `#field(p, a)`（两侧为数字 `word` 时由元层分派为浮点字面量）；前缀 `.a` 展开为 `#field(#this, a)` | 统一的字段访问与当前帧符号解析算符（归属 Layer 1） |
 | **`x := rhs`** | 符号 `x` 与任意 `rhs` | 见 §2.3 的 `__tmp` 暂存展开（若未闭合块中欲重绑已存在的 `x`，先调 `drop(.x)` 再执行 `x := rhs`） | `rhs` 严格求值一次；支持未绑定子槽直绑（含 `move` 结果）、普通值装箱绑定及 `empty` 后的跨类型 Rebind |
 | **`recast(ptr, s_ptr)`** | 任意 `Pointer` 与目标 `Shape` 指针 | 将 `ptr` 装入临时槽 `.p`、目标形状指针装入 `.s`，构造并返回 `$({ addr := $.p.addr; shape_ptr := $.s.addr; mutability := $.p.mutability; __ptr_tag := {} })` | 零内核原语实现胖指针形状重解释（`Union` 与容器元素访问的核心工具） |

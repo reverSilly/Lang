@@ -23,8 +23,8 @@
 | **`WhiteSpace`** | 空格、`\t`、`\r`、`\n` 等空白符 | 分隔符，忽略 |
 | **`Comment`** | `! ... !`（内部支持 `\!` 转义） | 唯一注释语法（支持单行与多行），作为分隔符忽略 |
 | **`Escaped`** | `\` + 任意单字符 | 转义后字符失去原有语法含义，作为普通 `Char` 参与构成 `Word` |
-| **`Word`** | 一个或多个连续的字母、数字、`_`、非 ASCII 字节或 `Escaped` 字符 | 统一词元（标识符与数字文本在词法层不作区分）；Layer 0 中默认求值为 `Symbol` 值 |
-| **`Builtin`** | `#` 紧贴 `Word`（如 `#this`、`#write`） | 指代 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) §3 中的 24 个内置原语 |
+| **`Word`** | 一个或多个连续的字母、数字、`_`、非 ASCII 字节或 `Escaped` 字符 | 统一词元（标识符与数字文本在词法层不作区分）；Layer 0 中自动映射为编译期驻留的 4 字节 `Symbol` ID |
+| **`Builtin`** | `#` 紧贴 `Word`（如 `#this`、`#write`） | 指代 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) §3 中的 22 个内置原语 |
 
 ### 2.2 Layer 0 文法（仅 4 条产生式）
 
@@ -32,7 +32,7 @@
 Expr        := SeqExpr
 SeqExpr     := Primary ( ';' Primary )*
 Primary     := '^' Primary                             ! 唯一延迟特殊形式：生成 Prototype !
-             | Builtin '(' ArgList? ')'                ! 19 个带参 Core Builtin 调用 !
+             | Builtin '(' ArgList? ')'                ! 17 个带参 Core Builtin 调用 !
              | Builtin                                 ! 5 个零参 Core Builtin：#this #parent #unbound #caller #in !
              | '(' Expr? ')'                           ! 分组；空括号 () 表示空单元 !
              | Word                                    ! Symbol 字面量 !
@@ -52,7 +52,7 @@ ArgList     := Expr ( ',' Expr )*
 | :--- | :--- | :--- |
 | **整数字面量**（如 `42`、`0xFF`） | 单个 `Word` | 元层 `Word` 钩子识别数字格式，经编译期常量构造能力生成对应 `bytes` 并包装为 `{ __raw := ..., __i64_tag := {} }`；非数字则保持为普通 `Symbol` |
 | **浮点字面量**（如 `3.14`） | `Word . Word` | 元层 `.` 钩子检测到两侧均为纯数字 `Word` 时，合并解析为 IEEE 754 `f64`；否则展开为常规字段访问 `#field(lhs, rhs)` |
-| **字节串/字符串字面量**（`"..."`） | Stdlib 注册的 `"`...`"` 规则 | `BitsLiteral`（`""`）不再硬编码于 Layer 0；由标准库注册语法规则并处理转义，在 `#compile` 元层构造为 `bytes(N, 1)` 或标准库 `String` 切片 |
+| **字节串/字符串字面量**（`"..."`） | Stdlib 注册的 `"`...`"` 规则 | `BitsLiteral`（`""`）不再硬编码于 Layer 0；由标准库注册语法规则并处理转义，在 `#compile` 元层构造为字节段或标准库 `String` 切片 |
 
 ### 3.2 标准库核心运算符优先级参考表（数值越小优先级越高）
 

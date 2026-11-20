@@ -16,7 +16,7 @@
 | **程序层（静态）** | 编译期（编译器尽力） | 常量折叠成功；`#compile(...)` 强制 | 单态化、静态连续内存布局推导、指针瘦化（消去静态已知的 `shape_ptr` 与 `mutability`） |
 | **程序层（动态）** | 运行期 | 默认；静态未知时保留运行期描述信息 | 常规程序执行、胖指针动态寻址与分派 |
 
-- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、字段映射 `capabilities.map`、底层指令集 `capabilities.intrinsics`、语法注册 `capabilities.syntax` 与字节常量构造）通过显式的 `capabilities` 对象传入，默认沙箱化。
+- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、字段映射 `capabilities.map`、符号池互转 `capabilities.symbols`、底层指令集 `capabilities.intrinsics`、语法注册 `capabilities.syntax` 与字节常量构造）通过显式的 `capabilities` 对象传入，默认沙箱化。
 - **语法扩展与纯 `Prototype`**：AST 仅存在于编译期元层的语法重写阶段（见 [08-syntax.md](08-syntax.md)）；一旦生成 `Prototype`（`^Expr`），它在编译期与运行期都是不携带 AST 包袱的纯执行代码值，保证两阶段语义严格一致且运行期零 AST 开销。
 - **确定性与可缓存**：单次编译期求值内部允许拥有局部可变状态（`mutable` location）；但跨求值缓存与跨阶段传递只允许不可变的固化值（见第四节），因此编译期求值天然可缓存、可测试、IDE 可安全执行。
 
@@ -30,7 +30,7 @@
 ## 四、阶段边界规则
 
 1. **固化（Reification）**：编译期求值结果跨阶段进入运行期时，只允许以下不可变 `value` 跨越边界：
-   - **非指针 POD `value`**（底层为 `bytes(N, align)` 的值，如各类整数、浮点数、`Boolean`、`Symbol` 等）：按位深拷贝为二进制常量数据；
+   - **非指针 POD `value`**（底层为无子字段叶子 `Shape` 的值，如各类整数、浮点数、`Boolean`、`Symbol` 等）：按位深拷贝为二进制常量数据；
    - **指向只读常量区（`frozen` 区）的安全只读 `Pointer`**：包括已闭合对象的 `Shape` 指针（`#shape(val)`）、编译期冻结的模块与只读对象快照（`#freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
    - **`Prototype`（纯代码值）**：包括由 `^Expr` 构造或由 `capabilities.intrinsics` 生成的底层算术/比较 `Prototype`，固化为可序列化的中间表示（IR）/机器码并参与后续编译。
    - **严禁固化**：指向编译期栈或协程堆上普通 `location` 的 `Pointer`、外部 OS 资源句柄、活跃块指针（`#this`）及协程 `Handle`（`#caller`）。

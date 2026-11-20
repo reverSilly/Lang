@@ -24,10 +24,10 @@
 - **R2（闭合对象无内部空洞）**：已闭合对象压平为零 Header 连续内存后，不允许对其内部子字段调用 `#drop` 留下 `empty` 空洞：
   1. **闭合对象的整体移动与销毁**：闭合对象 `p` 本身作为外层构建帧的一个直接子槽，依然可以整体 `move(.p)` 或整体 `drop(.p)`；
   2. **闭合对象内部 `mutable` 字段的直接覆写与移动**：由于 `#write(dst_ptr, val)` 直接支持任何具有 `mutable` 权限且形状匹配的 `dst_ptr`（含已闭合对象的 `mutable live` 子字段 `.p.q`），修改 `.p.q` 只需在标准库执行 **`destroy(.p.q); #write(.p.q, new_val)`**（若从构建槽 `.src` 移入 `.p.q`，则执行 **`destroy(.p.q); #write(.p.q, #deref(.src)); #drop(.src)`**），全程 `.p.q` 100% 保持 `live` 无空洞；
-  3. **业务可空字段**：使用标准库的内联 `Optional(T)` / `Union`（通过 `#allocate(bytes_shape(N, A), true)` + `#touch` 构造始终处于 `live` 状态的未初始化字节载荷）。
+  3. **业务可空字段**：使用标准库的内联 `Optional(T)` / `Union`（通过 `#allocate(raw_bytes_shape(N, A), true)` + `#touch` 构造始终处于 `live` 状态的未初始化字节载荷）。
 - **R3（无环性）**：owned `location` 森林不存在环；引用环只能经由 GC 协程 `Handle` 或裸 `Pointer` 产生。
 - **R4（允许对活跃构建链 `#parent` 的直接子槽执行 `#drop` 以支撑跨帧 `move`）**：当内层块 `{ ... }` 正在运行时，外层块 `#parent` 依然处于栈上的**构建期（Constructing）**。只要源槽 `src_ptr` 属于当前协程活跃构建帧链（`#this` 或其任意层 `#parent`）的直接子槽，且该槽本身不是正在运行的活跃子帧根，**`#drop(src_ptr)` 允许将其在外层构建帧中的状态置为 `empty`**（等到外层块最终闭合时，该 `empty` 槽被内核自动静默剥离）。
-- **R5（标准库 POD Gate 把关非 POD 拷贝）**：Core `#deref`、`#write`、`#break`、`#resume` 不检查 POD；面向用户的标准库 `$`、`=`、`break` 与 `@` 包装器通过递归检查 `Shape`（以 `first_sym == null_sym` 为终点，且不含 `__destroy`）设置 POD Gate，拦截未经 `move` 的非 POD 对象被隐式按位复制。
+- **R5（标准库 POD Gate 把关非 POD 拷贝）**：Core `#deref`、`#write`、`#break`、`#resume` 不检查 POD；面向用户的标准库 `$`、`=`、`break` 与 `@` 包装器通过递归检查 `Shape`（以 `fields == empty_map` 为终点，且不含 `__destroy`）设置 POD Gate，拦截未经 `move` 的非 POD 对象被隐式按位复制。
 - **R6（非活跃槽禁读）**：构建期处于 `uninitialized` 或 `empty` 的槽不可读取（`#deref` 报错）。
 - **R7（`#bind`、`#touch` 与 `#drop` 职责正交）**：
   - `#bind(symbol, val)` 仅负责将当前块未绑定的直接子槽挂入符号表（若同名旧绑定已处于 `empty` 态则直接覆盖重绑）；
