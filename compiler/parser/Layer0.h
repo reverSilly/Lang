@@ -26,11 +26,10 @@ inline const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table() 
         {"caller", {K::Caller, 0}},
         {"in", {K::In, 0}},
 
-        // 4 evaluation & stage primitives
+        // 3 evaluation & coroutine entry primitives
         {"evaluate", {K::Evaluate, 1}},
         {"block", {K::Block, 1}},
         {"new", {K::New, 1}},
-        {"compile", {K::Compile, 1}},
 
         // 5 allocation & slot state-machine primitives
         {"allocate", {K::Allocate, 2}},
@@ -69,9 +68,9 @@ inline std::string unescape_word(std::string_view raw) {
     return out;
 }
 
-// Unified extensible Frontend: Layer 0 is the bootstrap rule set;
-// Layer 1 (and future user syntax) extends the exact same Grammar & Evaluator
-// via iteration (PostfixOp) and precedence layers (wrap_rule) — zero left-recursion, strict O(N * R).
+// Unified extensible Frontend:
+// Layer 0 has 5 hardcoded symbols (\, !...!, #, (,), ;) and 21 Core builtins.
+// Layer 1+ (including ^Expr) extends this exact same Grammar & Evaluator via capabilities.syntax.
 class Frontend {
 public:
     Peg::Grammar grammar;
@@ -91,7 +90,6 @@ public:
         return evaluator.evaluate(grammar, source, *cst);
     }
 
-    // Convenience helper for Layer 1 / user syntax: register an iterative postfix extension (e.g. `.field`).
     Peg::RuleId register_postfix(std::string_view rule_name, Peg::PegExprPtr expr, PostfixFolder folder) {
         Peg::RuleId id = grammar.define(rule_name, std::move(expr));
         grammar.prepend_choice("PostfixOp", grammar.ref(id));
@@ -106,9 +104,10 @@ private:
     void register_layer0() {
         using namespace Peg;
 
+        // 5 hardcoded Layer 0 symbols: \, !...!, #, ( , ), ;
         grammar.define("Escaped", seq({ch('\\'), any_byte()}), /*hidden=*/true, /*cacheable=*/false);
         grammar.define("WhiteSpace", char_set(" \t\r\n\f\v"), /*hidden=*/true, /*cacheable=*/false);
-        grammar.define("Delimiter", char_set(" \t\r\n\f\v!#(),^;"), /*hidden=*/true, /*cacheable=*/false);
+        grammar.define("Delimiter", char_set(" \t\r\n\f\v!#(),;"), /*hidden=*/true, /*cacheable=*/false);
 
         grammar.define(
             "Comment",
@@ -155,6 +154,7 @@ private:
                 opt(seq({grammar.ref("_"), grammar.ref("BuiltinArgs")})),
             }));
 
+        // Pure grouping: (Expr) — strictly non-nullable (no empty ())
         grammar.define(
             "Group",
             seq({ch('('), grammar.ref("_"), grammar.ref("Expr"), grammar.ref("_"), ch(')')}));
@@ -169,13 +169,11 @@ private:
                 zero_or_more(seq({grammar.ref("_"), grammar.ref("PostfixOp")})),
             }));
 
-        RuleId proto_id = grammar.define(
-            "Proto",
-            seq({ch('^'), grammar.ref("_"), grammar.ref("Prefix")}));
-
-        grammar.define("Prefix", choice({grammar.ref(proto_id), grammar.ref(postfix_id)}));
+        // Extensible prefix & infix tiers (Layer 0 pass-through; Layer 1 adds ^, ., $, *, +, etc.)
+        grammar.define("Prefix", grammar.ref(postfix_id));
         grammar.define("Infix", grammar.ref("Prefix"));
 
+        // Strictly non-nullable sequence: a ; b
         RuleId seq_id = grammar.define(
             "Seq",
             seq({
@@ -228,10 +226,6 @@ private:
                 acc = postfix_folders[op_node.rule_id](std::move(acc), ctx, op_node);
             }
             return acc;
-        });
-
-        evaluator.on(proto_id, [](const auto& ctx) -> Ast::ExprPtr {
-            return Ast::make_expr<Ast::PrototypeExpr>(ctx.evaluate_child(0));
         });
 
         evaluator.on(seq_id, [](const auto& ctx) -> Ast::ExprPtr {

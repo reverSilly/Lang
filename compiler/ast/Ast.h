@@ -18,11 +18,10 @@ enum class BuiltinKind : uint8_t {
     Caller,
     In,
 
-    // 4 evaluation & stage primitives
+    // 3 evaluation & coroutine entry primitives
     Evaluate,
     Block,
     New,
-    Compile,
 
     // 5 allocation & slot state-machine primitives
     Allocate,
@@ -60,17 +59,12 @@ struct BuiltinExpr {
     std::vector<ExprPtr> args;
 };
 
-// Layer 0 unique lazy special form: ^Expr -> Prototype
-struct PrototypeExpr {
-    ExprPtr body;
-};
-
 // Layer 0 sequence: a ; b (evaluates left, discards value, returns right)
 struct SequenceExpr {
     std::vector<ExprPtr> items;
 };
 
-// Reified constant Value node (produced by Layer 1 literal hooks or #compile folding)
+// Constant Value node (carries any embedded Value, including Shape and Prototype values)
 struct ValueExpr {
     Runtime::Value value;
 };
@@ -79,7 +73,6 @@ struct Expr {
     using Variant = std::variant<
         WordExpr,
         BuiltinExpr,
-        PrototypeExpr,
         SequenceExpr,
         ValueExpr>;
 
