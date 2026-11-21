@@ -49,7 +49,7 @@ enum class BuiltinKind : uint8_t {
 struct Expr;
 using ExprPtr = std::shared_ptr<const Expr>;
 
-// Layer 0 Word: automatically mapped to a 4-byte Symbol ID in Core.
+// Layer 0 Word: delayed interning (resolved to 4-byte SymbolId in RuntimeContext).
 struct WordExpr {
     std::string text;
 };
@@ -70,11 +70,6 @@ struct SequenceExpr {
     std::vector<ExprPtr> items;
 };
 
-// Layer 0 grouping: (Expr) or () for empty unit
-struct GroupExpr {
-    ExprPtr inner; // nullptr represents empty unit ()
-};
-
 // Reified constant Value node (produced by Layer 1 literal hooks or #compile folding)
 struct ValueExpr {
     Runtime::Value value;
@@ -86,7 +81,6 @@ struct Expr {
         BuiltinExpr,
         PrototypeExpr,
         SequenceExpr,
-        GroupExpr,
         ValueExpr>;
 
     Variant node;
