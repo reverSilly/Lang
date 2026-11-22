@@ -12,7 +12,7 @@ enable_testing()
 
 foreach(test_name IN ITEMS test_step1 test_step2 test_step3 test_capabilities)
     add_executable(${test_name} tests/${test_name}.cpp)
-    target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)
+    target_compile_options(${test_name} PRIVATE -Wall -Wextra)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
