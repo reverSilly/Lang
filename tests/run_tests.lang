@@ -14,8 +14,10 @@
 #drop(#field(#this, path)) ;
 
 #bind(fe, #allocate_val(#deref(#field(#this, fe0)), #deref(#field(#this, F)))) ;
-#bind(boot_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, fe)) ; #drop(#field(#this, src)) ; #drop(#field(#this, F)) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, fe)) ; #drop(#field(#this, src)) ;
+#bind(boot_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ; #drop(#field(#this, F)) ;
 
 ! Run full boot0 -> boot1 -> layer1 bootstrap (binds fe_layer1 & returns it) !
 #evaluate(#deref(#field(#this, boot_p))) ;
@@ -28,8 +30,10 @@
 #bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, path)) ;
 
-#bind(test_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))), #deref(#field(#this, F)))) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, src)) ;
+#bind(test_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
 
 ! Run tests/test_layer1.lang directly (assertions inside test_layer1.lang abort on any mismatch) !
 #block(#deref(#field(#this, test_p)))

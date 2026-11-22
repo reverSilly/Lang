@@ -190,7 +190,10 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
         #drop(#field(#this, name)) ; #drop(#field(#this, expr)) ; #drop(#field(#this, hidden)) ; #drop(#field(#this, handler)) ;
 
         #bind(src, #allocate_val(#deref(#field(#this, sample_src)), #deref(#field(#this, F)))) ;
-        #evaluate(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))))
+        #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+        #bind(p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, ast)) ;
+        #evaluate(#deref(#field(#this, p)))
     )"));
 
     assert(bytes_res.shape_addr == rt.shapes.pointer_shape);
@@ -208,16 +211,42 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
         #evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), set_rule))) ;
         #drop(#field(#this, name)) ; #drop(#field(#this, expr)) ; #drop(#field(#this, hidden)) ; #drop(#field(#this, handler)) ;
 
-        #evaluate(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))))
+        #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+        #bind(p2, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, ast)) ;
+        #evaluate(#deref(#field(#this, p2)))
     )"));
     assert(child_sym.shape_addr == rt.shapes.symbol_shape);
     assert(rt.symbols.name(child_sym.as_pod<SymbolId>()) == "bar");
+}
+
+void test_install_runtime_isolation() {
+    RuntimeContext rt;
+    CapabilityHost caps;
+    caps.install_runtime(rt);
+
+    ConstructingFrame* root = rt.current_frame();
+    PointerLayout caps_ptr = root->field(rt.symbols.intern("capabilities"));
+    assert(!caps_ptr.is_null());
+
+    // Tier 1 modules must be present
+    assert(!rt.field(caps_ptr, rt.symbols.intern("constants")).is_null());
+    assert(!rt.field(caps_ptr, rt.symbols.intern("field_map")).is_null());
+    assert(!rt.field(caps_ptr, rt.symbols.intern("symbols")).is_null());
+    assert(!rt.field(caps_ptr, rt.symbols.intern("intrinsics")).is_null());
+
+    // Tier 3 compiler frontend modules must be absent in runtime-only mode
+    assert(rt.field(caps_ptr, rt.symbols.intern("ast")).is_null());
+    assert(rt.field(caps_ptr, rt.symbols.intern("syntax")).is_null());
+    assert(rt.field(caps_ptr, rt.symbols.intern("compiler")).is_null());
+    assert(rt.field(caps_ptr, rt.symbols.intern("io")).is_null());
 }
 
 int main() {
     test_io_read_write_and_symbols_intern();
     test_intrinsics_bytes_u8_and_eq_shape();
     test_syntax_cst_view_bytes_and_child_view_sym();
+    test_install_runtime_isolation();
     std::cout << "All Capabilities C++ tests passed!" << std::endl;
     return 0;
 }
