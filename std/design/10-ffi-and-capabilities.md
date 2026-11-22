@@ -1,6 +1,6 @@
-# 10. `capabilities` Modularization & Foreign Function Interface (FFI)
+# 10. `capabilities` Modularization, Frontend Pipeline Fix & Foreign Function Interface (FFI)
 
-This document specifies (1) the three-tier modularization of `capabilities` to separate **compile-time** and **runtime** boundaries as the capability surface grows, and (2) the `capabilities.ffi` design unifying dynamic external symbol loading in the Phase 1 interpreter (`dlopen`/`dlsym` + `libffi`) with Phase 2 LLVM AOT external linkage.
+This document specifies (1) the three-tier modularization of `capabilities` to separate **compile-time** and **runtime** boundaries, (2) the decoupled `syntax.parse -> Ast Handle -> ast.to_proto -> Prototype` frontend pipeline, and (3) the `capabilities.ffi` design unifying dynamic external symbol loading in the Phase 1 interpreter (`dlopen`/`dlsym` + `libffi`) with Phase 2 LLVM AOT external linkage.
 
 ---
 
@@ -10,7 +10,7 @@ As Lang grows beyond Phase 1 bootstrap, keeping all host capabilities in a singl
 
 ### 1.1 Three-Tier Logical Split (Compile-Time vs. Runtime Boundary)
 
-In Lang, `capabilities` remains mounted under root `#this.capabilities` with the same sub-namespace paths (`capabilities.constants`, `capabilities.ffi`, etc.), so existing Lang code does not break. Internally and architecturally, however, capabilities are partitioned into **three distinct tiers** with explicit installation gates:
+In Lang, `capabilities` remains mounted under root `#this.capabilities` with the same sub-namespace paths (`capabilities.constants`, `capabilities.ffi`, etc.). Architecturally, however, capabilities are partitioned into **three distinct tiers** with explicit installation gates:
 
 | Tier | Sub-modules | Available at Compile-Time | Available at Runtime / AOT | Backing Mechanism |
 | :--- | :--- | :---: | :---: | :--- |
@@ -18,13 +18,25 @@ In Lang, `capabilities` remains mounted under root `#this.capabilities` with the
 | **2. Host FFI** | `ffi` (`open_lib`, `load_symbol`) | Yes | Yes | Interpreter: `dlopen`/`dlsym` + `libffi`; AOT: `declare external` + native linker |
 | **3. Compiler Frontend** | `ast`, `syntax`, `compiler` *(+ temporary `io`)* | Yes | **No** | Compiler process only; stripped from runtime contexts and emitted executables |
 
-- **Strict Compile-Time / Runtime Isolation**:
-  - A **bootstrap / build script** runs in a full context (`install_runtime()` + `install_ffi()` + `install_compiler()`).
-  - A **pure runtime execution** (even inside the Phase 1 interpreter, before LLVM `emit_executable` exists) runs in a restricted context (`install_runtime()` + optionally `install_ffi()`), guaranteeing zero runtime dependency on `ast`, `syntax`, or `compiler`.
+- **Interpreter vs. AOT Runtime Semantics**:
+  - In the **Phase 1 interpreter**, Tier 1 and Tier 2 are mounted in root `#this.capabilities` so pure runtime code can execute without Tier 3 (`ast`, `syntax`, `compiler`).
+  - In **Phase 2 AOT executables**, no monolithic `capabilities` struct is injected into the binary: `NativeSym` `Prototype` values captured at compile time (e.g., `intrinsics.add_i64`, `ffi.load_symbol(...)`) are lowered directly into native LLVM instructions (`add i64`) or `declare external` calls, and `liblang_rt` is linked only for operations invoked dynamically at runtime (such as dynamic `field_map`/`symbols` reflection or runtime `dlopen`).
 - **Retirement of Temporary `capabilities.io`**:
   - `capabilities.io.read_file` and `capabilities.io.write_file` were Phase 1 bootstrap placeholders. Once `capabilities.ffi` is live and Layer 1 stdlib wraps libc/OS file calls, `capabilities.io` will be removed from C++.
 
-### 1.2 C++ Implementation Split (`compiler/eval/`)
+### 1.2 Decoupled Frontend Pipeline (`syntax.parse` → `Ast` → `ast.to_proto`)
+
+Superseding `09-syntax-capabilities.md` §5 where `capabilities.compiler.parse` fused parsing and `Prototype` materialization:
+
+- **`capabilities.syntax.parse({ fe, src: BytePtr }) -> Handle (Ast)`**: Pure frontend step converting source bytes through the Packrat PEG grammar and rule handlers into a root Core IR `Ast` handle.
+- **`capabilities.ast.to_proto({ ast: Handle }) -> Prototype`**: Explicit materialization of an `Ast` handle into a live `Prototype`, leaving the `Ast` layer exposed for inspection, macro passes, or IR transforms before evaluation/compilation.
+- **`capabilities.compiler`**: Strictly `Prototype`-level backend operations (`serialize_proto`, `deserialize_proto`, `emit_executable`).
+
+```text
+BytePtr (source) ──▶ syntax.parse ──▶ Ast Handle ──▶ [optional AST passes] ──▶ ast.to_proto ──▶ Prototype
+```
+
+### 1.3 C++ Implementation Split (`compiler/eval/`)
 
 Instead of one monolithic `Capabilities.cpp`, split the implementation along the exact same three tiers (all linked into `lang_core`):
 
@@ -34,7 +46,7 @@ compiler/eval/
   Capabilities.cpp        # Shared helpers (handle encoding, read_field, build_struct) + install_* orchestration
   RuntimeCaps.cpp         # constants, field_map, symbols, intrinsics
   FfiCaps.cpp             # ffi (dlopen/dlsym, Shape -> ffi_type mapper, ffi_cif cache, ffi_call bridge)
-  CompilerCaps.cpp        # ast, syntax, compiler (+ temporary io)
+  CompilerCaps.cpp        # ast, syntax (including syntax.parse), compiler (+ temporary io)
 ```
 
 ---
