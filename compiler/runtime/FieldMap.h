@@ -2,11 +2,9 @@
 
 #include "SymbolPool.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 namespace reverSilly::Lang::Runtime {
@@ -55,19 +53,9 @@ static_assert(offsetof(FieldEntry, sym) == 0, "FieldEntry::sym must be at offset
 static_assert(offsetof(FieldEntry, state) == 4, "FieldEntry::state must be at offset 4");
 static_assert(offsetof(FieldEntry, rel_ptr) == 8, "FieldEntry::rel_ptr must be at offset 8");
 
-inline uint32_t hash_symbol_id(SymbolId sym) noexcept {
-    uint32_t h = sym;
-    h ^= h >> 16;
-    h *= 0x85ebca6bu;
-    h ^= h >> 13;
-    h *= 0xc2b2ae35u;
-    h ^= h >> 16;
-    return h;
-}
+uint32_t hash_symbol_id(SymbolId sym) noexcept;
 
 // Inlined 24-byte layout embedded inside ShapeLayout.fields.
-// - entries_ptr[0..count-1]: ordered locations (open frames keep bind/unbind/3-state; closed shapes keep Live bound).
-// - buckets_ptr[0..bucket_mask]: open-addressing hash index over ONLY sym != 0 && state == Live entries.
 struct alignas(8) FieldMapInline {
     static constexpr uint32_t kEmptyBucket = 0xFFFFFFFFu;
     static constexpr uint32_t kLinearThreshold = 8;
@@ -83,72 +71,11 @@ struct alignas(8) FieldMapInline {
         return reinterpret_cast<const FieldEntry*>(entries_ptr);
     }
 
-    const FieldEntry& at(uint32_t idx) const {
-        if (idx >= count) {
-            throw std::out_of_range("FieldMapInline::at: index out of range");
-        }
-        return entries_begin()[idx];
-    }
+    const FieldEntry& at(uint32_t idx) const;
+    const FieldEntry* find(SymbolId sym) const noexcept;
 
-    const FieldEntry* find(SymbolId sym) const noexcept {
-        if (count == 0 || sym == 0) {
-            return nullptr;
-        }
-        const FieldEntry* arr = entries_begin();
-        if (buckets_ptr == 0) {
-            for (uint32_t i = 0; i < count; ++i) {
-                if (arr[i].sym == sym && arr[i].state == static_cast<uint8_t>(SlotState::Live)) {
-                    return &arr[i];
-                }
-            }
-            return nullptr;
-        }
-        const auto* buckets = reinterpret_cast<const uint32_t*>(buckets_ptr);
-        uint32_t slot = hash_symbol_id(sym) & bucket_mask;
-        while (true) {
-            uint32_t idx = buckets[slot];
-            if (idx == kEmptyBucket) return nullptr;
-            if (arr[idx].sym == sym && arr[idx].state == static_cast<uint8_t>(SlotState::Live)) {
-                return &arr[idx];
-            }
-            slot = (slot + 1) & bucket_mask;
-        }
-    }
-
-    static uint32_t next_pow2(uint32_t n) noexcept {
-        uint32_t p = 1;
-        while (p < n) p <<= 1;
-        return p;
-    }
-
-    // Build a FieldMapInline backed by caller-owned vectors (used by open ConstructingFrame::live_shape).
-    static FieldMapInline build_view(const std::vector<FieldEntry>& entries, std::vector<uint32_t>& buckets_buf) {
-        FieldMapInline out{};
-        buckets_buf.clear();
-        if (entries.empty()) {
-            return out;
-        }
-        uint32_t n = static_cast<uint32_t>(entries.size());
-        out.entries_ptr = reinterpret_cast<uint64_t>(entries.data());
-        out.count = n;
-
-        if (n > kLinearThreshold) {
-            uint32_t cap = next_pow2(n * 2);
-            uint32_t mask = cap - 1;
-            buckets_buf.assign(cap, kEmptyBucket);
-            for (uint32_t i = 0; i < n; ++i) {
-                if (!entries[i].is_live_bound()) continue;
-                uint32_t slot = hash_symbol_id(entries[i].sym) & mask;
-                while (buckets_buf[slot] != kEmptyBucket) {
-                    slot = (slot + 1) & mask;
-                }
-                buckets_buf[slot] = i;
-            }
-            out.bucket_mask = mask;
-            out.buckets_ptr = reinterpret_cast<uint64_t>(buckets_buf.data());
-        }
-        return out;
-    }
+    static uint32_t next_pow2(uint32_t n) noexcept;
+    static FieldMapInline build_view(const std::vector<FieldEntry>& entries, std::vector<uint32_t>& buckets_buf);
 };
 
 static_assert(sizeof(FieldMapInline) == 24, "FieldMapInline must be 24 bytes");
@@ -168,69 +95,11 @@ public:
     static FieldMapInline empty() noexcept { return FieldMapInline{}; }
     static bool is_empty(const FieldMapInline& m) noexcept { return m.is_empty(); }
     static uint32_t count(const FieldMapInline& m) noexcept { return m.count; }
+    static PointerLayout get(const FieldMapInline& m, SymbolId sym) noexcept;
+    static FieldEntry at(const FieldMapInline& m, uint32_t idx);
 
-    static PointerLayout get(const FieldMapInline& m, SymbolId sym) noexcept {
-        const FieldEntry* fe = m.find(sym);
-        return fe ? fe->rel_ptr : PointerLayout{};
-    }
-
-    static FieldEntry at(const FieldMapInline& m, uint32_t idx) {
-        return m.at(idx);
-    }
-
-    FieldMapInline build(const std::vector<FieldEntry>& entries) {
-        if (entries.empty()) {
-            return FieldMapInline{};
-        }
-        uint32_t n = static_cast<uint32_t>(entries.size());
-        Storage st;
-        st.entries = std::make_unique<FieldEntry[]>(n);
-        std::copy(entries.begin(), entries.end(), st.entries.get());
-
-        FieldMapInline out;
-        out.entries_ptr = reinterpret_cast<uint64_t>(st.entries.get());
-        out.count = n;
-
-        if (n > FieldMapInline::kLinearThreshold) {
-            uint32_t cap = FieldMapInline::next_pow2(n * 2);
-            uint32_t mask = cap - 1;
-            st.buckets = std::make_unique<uint32_t[]>(cap);
-            std::fill_n(st.buckets.get(), cap, FieldMapInline::kEmptyBucket);
-
-            for (uint32_t i = 0; i < n; ++i) {
-                if (!entries[i].is_live_bound()) continue;
-                uint32_t slot = hash_symbol_id(entries[i].sym) & mask;
-                while (st.buckets[slot] != FieldMapInline::kEmptyBucket) {
-                    slot = (slot + 1) & mask;
-                }
-                st.buckets[slot] = i;
-            }
-            out.bucket_mask = mask;
-            out.buckets_ptr = reinterpret_cast<uint64_t>(st.buckets.get());
-        }
-
-        blocks_.push_back(std::move(st));
-        return out;
-    }
-
-    FieldMapInline insert(const FieldMapInline& base, SymbolId sym, const PointerLayout& rel_ptr) {
-        std::vector<FieldEntry> next;
-        next.reserve(base.count + 1);
-        bool replaced = false;
-        const FieldEntry* old = base.entries_begin();
-        for (uint32_t i = 0; i < base.count; ++i) {
-            if (old[i].sym == sym) {
-                next.push_back(FieldEntry{sym, static_cast<uint8_t>(SlotState::Live), {0, 0, 0}, rel_ptr});
-                replaced = true;
-            } else {
-                next.push_back(old[i]);
-            }
-        }
-        if (!replaced) {
-            next.push_back(FieldEntry{sym, static_cast<uint8_t>(SlotState::Live), {0, 0, 0}, rel_ptr});
-        }
-        return build(next);
-    }
+    FieldMapInline build(const std::vector<FieldEntry>& entries);
+    FieldMapInline insert(const FieldMapInline& base, SymbolId sym, const PointerLayout& rel_ptr);
 };
 
 } // namespace reverSilly::Lang::Runtime
