@@ -13,7 +13,7 @@
 
 namespace reverSilly::Lang::Runtime {
 
-// Transparent 40-byte Shape layout residing in .rodata.
+// Unified transparent 40-byte Shape layout (serves both closed .rodata Shapes and open ConstructingFrames).
 // Fields: { size: 8B/8, align: 8B/8, fields: FieldMapInline (24B/8), __shape_tag: {} }
 struct alignas(8) ShapeLayout {
     uint64_t size = 0;
@@ -26,7 +26,6 @@ struct alignas(8) ShapeLayout {
 static_assert(sizeof(ShapeLayout) == 40, "ShapeLayout must be 40 bytes");
 static_assert(alignof(ShapeLayout) == 8, "ShapeLayout must be 8-byte aligned");
 
-// Any expression result in Core is a raw bit-slice Value paired with its Shape address.
 struct Value {
     uint64_t shape_addr = 0;
     std::vector<uint8_t> bytes;
@@ -55,7 +54,6 @@ struct Value {
     }
 };
 
-// Shallow canonical key for O(fields) Shape interning (since sub_shape_addr is already interned).
 struct ShapeKey {
     uint64_t size = 0;
     uint64_t align = 1;
@@ -67,6 +65,7 @@ struct ShapeKey {
         }
         for (size_t i = 0; i < entries.size(); ++i) {
             if (entries[i].sym != o.entries[i].sym ||
+                entries[i].state != o.entries[i].state ||
                 entries[i].offset() != o.entries[i].offset() ||
                 entries[i].sub_shape_addr() != o.entries[i].sub_shape_addr() ||
                 entries[i].mutability() != o.entries[i].mutability()) {
@@ -82,9 +81,10 @@ struct ShapeKeyHash {
         size_t h = std::hash<uint64_t>{}(k.size) ^ (std::hash<uint64_t>{}(k.align) << 1);
         for (const auto& e : k.entries) {
             size_t eh = std::hash<uint32_t>{}(e.sym) ^
-                        (std::hash<uint64_t>{}(e.offset()) << 1) ^
-                        (std::hash<uint64_t>{}(e.sub_shape_addr()) << 2) ^
-                        (std::hash<uint8_t>{}(e.mutability()) << 3);
+                        (std::hash<uint8_t>{}(e.state) << 1) ^
+                        (std::hash<uint64_t>{}(e.offset()) << 2) ^
+                        (std::hash<uint64_t>{}(e.sub_shape_addr()) << 3) ^
+                        (std::hash<uint8_t>{}(e.mutability()) << 4);
             h ^= eh + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
         }
         return h;
@@ -96,7 +96,6 @@ inline uint64_t align_up(uint64_t value, uint64_t alignment) noexcept {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-// Read-only .rodata arena with shallow Shape interning & 6 builtin transparent Shapes bootstrap.
 class ShapeArena {
 private:
     std::vector<std::unique_ptr<ShapeLayout>> shapes_;
@@ -106,21 +105,21 @@ private:
 public:
     FieldMapArena field_maps;
 
-    // Bootstrapped leaf Shapes (size/align base cases, fields = empty_map)
-    uint64_t unit_shape = 0;  // 0B / align 1 (empty object {})
+    // Bootstrapped leaf Shapes
+    uint64_t unit_shape = 0;  // 0B / align 1
     uint64_t raw1_shape = 0;  // 1B / align 1
     uint64_t raw4_shape = 0;  // 4B / align 4
     uint64_t raw8_shape = 0;  // 8B / align 8
 
     // Bootstrapped builtin transparent Shapes
-    uint64_t field_map_shape = 0;   // { entries_ptr, count, bucket_mask, buckets_ptr, __field_map_tag } (24B/8)
-    uint64_t shape_meta = 0;        // { size, align, fields, __shape_tag } (40B/8)
-    uint64_t symbol_shape = 0;      // { __raw: 4B/4, __sym_tag: {} } (4B/4)
-    uint64_t boolean_shape = 0;     // { __raw: 1B/1, __bool_tag: {} } (1B/1)
-    uint64_t pointer_shape = 0;     // { addr: 8B/8, shape_ptr: 8B/8, mutability: 1B/1, __ptr_tag: {} } (24B/8)
-    uint64_t field_entry_shape = 0; // { sym: Symbol, ptr: Pointer } (32B/8)
-    uint64_t prototype_shape = 0;   // { __raw: 8B/8, __proto_tag: {} } (8B/8)
-    uint64_t handle_shape = 0;      // { __raw: 8B/8, __handle_tag: {} } (8B/8)
+    uint64_t field_map_shape = 0;   // 24B/8
+    uint64_t shape_meta = 0;        // 40B/8
+    uint64_t symbol_shape = 0;      // 4B/4
+    uint64_t boolean_shape = 0;     // 1B/1
+    uint64_t pointer_shape = 0;     // 24B/8
+    uint64_t field_entry_shape = 0; // { sym: Symbol @0, state: 1B @4, ptr: Pointer @8 } (32B/8)
+    uint64_t prototype_shape = 0;   // 8B/8
+    uint64_t handle_shape = 0;      // 8B/8
 
     explicit ShapeArena(SymbolPool& syms) {
         bootstrap(syms);
@@ -180,7 +179,8 @@ public:
             offset = align_up(offset, f_align);
             entries.push_back(FieldEntry{
                 sp.sym,
-                0,
+                static_cast<uint8_t>(SlotState::Live),
+                {0, 0, 0},
                 PointerLayout{offset, sp.sub_shape_addr, sp.mutability}
             });
             offset += sub->size;
@@ -189,7 +189,6 @@ public:
         return intern_struct(entries, total_size, max_align);
     }
 
-    // Freeze arbitrary bytes into .rodata and return an immutable PointerLayout.
     PointerLayout freeze_bytes(uint64_t shape_addr, std::span<const uint8_t> data) {
         frozen_blobs_.emplace_back(data.begin(), data.end());
         uint64_t addr = frozen_blobs_.back().empty()
@@ -198,15 +197,15 @@ public:
         return PointerLayout{addr, shape_addr, 0};
     }
 
-    // Perform #field(ptr, sym) on a closed/live PointerLayout (also supports addr=0 z_ptr reflection).
+    // Unified single-path #field(ptr, sym): works identically on open frames, closed objects, and addr=0 z_ptr!
     PointerLayout field_of(const PointerLayout& ptr, SymbolId sym) const noexcept {
         if (ptr.shape_ptr == 0) {
-            return PointerLayout{}; // null
+            return PointerLayout{};
         }
         const auto* s = reinterpret_cast<const ShapeLayout*>(ptr.shape_ptr);
         const FieldEntry* fe = s->fields.find(sym);
         if (!fe) {
-            return PointerLayout{}; // null
+            return PointerLayout{};
         }
         uint8_t eff_mut = (ptr.mutability && fe->mutability()) ? 1 : 0;
         return PointerLayout{ptr.addr + fe->offset(), fe->sub_shape_addr(), eff_mut};
@@ -216,13 +215,11 @@ public:
 
 private:
     void bootstrap(SymbolPool& syms) {
-        // 1. Base leaf shapes
         unit_shape = intern_leaf(0, 1);
         raw1_shape = intern_leaf(1, 1);
         raw4_shape = intern_leaf(4, 4);
         raw8_shape = intern_leaf(8, 8);
 
-        // 2. FieldMapInline shape (24B/8): { entries_ptr: 8B, count: 4B, bucket_mask: 4B, buckets_ptr: 8B }
         field_map_shape = intern_struct_auto({
             {syms.intern("entries_ptr"), raw8_shape, 0},
             {syms.intern("count"), raw4_shape, 0},
@@ -231,7 +228,6 @@ private:
             {syms.intern("__field_map_tag"), unit_shape, 0},
         });
 
-        // 3. ShapeMeta (40B/8) — self-describing fixed point
         shape_meta = intern_struct_auto({
             {syms.intern("size"), raw8_shape, 0},
             {syms.intern("align"), raw8_shape, 0},
@@ -239,19 +235,16 @@ private:
             {syms.intern("__shape_tag"), unit_shape, 0},
         });
 
-        // 4. Symbol (4B/4)
         symbol_shape = intern_struct_auto({
             {syms.intern("__raw"), raw4_shape, 0},
             {syms.intern("__sym_tag"), unit_shape, 0},
         });
 
-        // 5. Boolean (1B/1)
         boolean_shape = intern_struct_auto({
             {syms.intern("__raw"), raw1_shape, 0},
             {syms.intern("__bool_tag"), unit_shape, 0},
         });
 
-        // 6. Pointer (24B/8)
         pointer_shape = intern_struct_auto({
             {syms.intern("addr"), raw8_shape, 0},
             {syms.intern("shape_ptr"), raw8_shape, 0},
@@ -259,19 +252,18 @@ private:
             {syms.intern("__ptr_tag"), unit_shape, 0},
         });
 
-        // 7. FieldEntry (32B/8): transparent { sym: Symbol, ptr: Pointer }
+        // Unified FieldEntry (32B/8): { sym @0, state @4, ptr @8 }
         field_entry_shape = intern_struct_auto({
             {syms.intern("sym"), symbol_shape, 0},
+            {syms.intern("state"), raw1_shape, 0},
             {syms.intern("ptr"), pointer_shape, 0},
         });
 
-        // 8. Prototype (8B/8)
         prototype_shape = intern_struct_auto({
             {syms.intern("__raw"), raw8_shape, 0},
             {syms.intern("__proto_tag"), unit_shape, 0},
         });
 
-        // 9. Handle (8B/8)
         handle_shape = intern_struct_auto({
             {syms.intern("__raw"), raw8_shape, 0},
             {syms.intern("__handle_tag"), unit_shape, 0},

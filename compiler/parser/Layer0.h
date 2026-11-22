@@ -19,17 +19,18 @@ struct BuiltinSpec {
 inline const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table() {
     using K = Ast::BuiltinKind;
     static const std::unordered_map<std::string_view, BuiltinSpec> kTable = {
-        // 5 nullary environment & slot cursors
+        // 4 nullary environment & coroutine cursors
         {"this", {K::This, 0}},
         {"parent", {K::Parent, 0}},
-        {"unbound", {K::Unbound, 0}},
         {"caller", {K::Caller, 0}},
         {"in", {K::In, 0}},
 
-        // 3 evaluation & coroutine entry primitives
+        // 5 evaluation & coroutine lifecycle / reflection primitives
         {"evaluate", {K::Evaluate, 1}},
         {"block", {K::Block, 1}},
         {"new", {K::New, 1}},
+        {"destroy", {K::Destroy, 1}},
+        {"coro_root_frame", {K::CoroRootFrame, 1}},
 
         // 5 allocation & slot state-machine primitives
         {"allocate", {K::Allocate, 2}},
@@ -69,8 +70,7 @@ inline std::string unescape_word(std::string_view raw) {
 }
 
 // Unified extensible Frontend:
-// Layer 0 has 5 hardcoded symbols (\, !...!, #, (,), ;) and 21 Core builtins.
-// Layer 1+ (including ^Expr) extends this exact same Grammar & Evaluator via capabilities.syntax.
+// Layer 0 has 5 hardcoded symbols (\, !...!, #, (,), ;) and 22 symmetric Core builtins.
 class Frontend {
 public:
     Peg::Grammar grammar;
@@ -104,7 +104,6 @@ private:
     void register_layer0() {
         using namespace Peg;
 
-        // 5 hardcoded Layer 0 symbols: \, !...!, #, ( , ), ;
         grammar.define("Escaped", seq({ch('\\'), any_byte()}), /*hidden=*/true, /*cacheable=*/false);
         grammar.define("WhiteSpace", char_set(" \t\r\n\f\v"), /*hidden=*/true, /*cacheable=*/false);
         grammar.define("Delimiter", char_set(" \t\r\n\f\v!#(),;"), /*hidden=*/true, /*cacheable=*/false);
@@ -154,7 +153,6 @@ private:
                 opt(seq({grammar.ref("_"), grammar.ref("BuiltinArgs")})),
             }));
 
-        // Pure grouping: (Expr) — strictly non-nullable (no empty ())
         grammar.define(
             "Group",
             seq({ch('('), grammar.ref("_"), grammar.ref("Expr"), grammar.ref("_"), ch(')')}));
@@ -169,11 +167,9 @@ private:
                 zero_or_more(seq({grammar.ref("_"), grammar.ref("PostfixOp")})),
             }));
 
-        // Extensible prefix & infix tiers (Layer 0 pass-through; Layer 1 adds ^, ., $, *, +, etc.)
         grammar.define("Prefix", grammar.ref(postfix_id));
         grammar.define("Infix", grammar.ref("Prefix"));
 
-        // Strictly non-nullable sequence: a ; b
         RuleId seq_id = grammar.define(
             "Seq",
             seq({
@@ -184,7 +180,6 @@ private:
         grammar.define("Expr", grammar.ref(seq_id));
         grammar.define("Program", seq({grammar.ref("_"), grammar.ref("Expr"), grammar.ref("_"), eof()}));
 
-        // O(1) RuleId-indexed semantic handlers -> Ast::ExprPtr
         evaluator.on(word_id, [](const auto& ctx) -> Ast::ExprPtr {
             return Ast::make_expr<Ast::WordExpr>(unescape_word(ctx.view()));
         });

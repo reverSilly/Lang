@@ -2,6 +2,7 @@
 
 #include "FieldMap.h"
 #include "FrameStack.h"
+#include "Prototype.h"
 #include "Shape.h"
 #include "SymbolPool.h"
 
@@ -13,33 +14,72 @@
 
 namespace reverSilly::Lang::Runtime {
 
-// Thin aggregate context owning per-process SymbolPool, ShapeArena, and Coroutines.
+// Transparent 16-byte Bytes slice layout: { ptr: 8B/8, len: 8B/8 }
+struct alignas(8) BytesLayout {
+    uint64_t ptr = 0;
+    uint64_t len = 0;
+};
+
+static_assert(sizeof(BytesLayout) == 16, "BytesLayout must be 16 bytes");
+static_assert(alignof(BytesLayout) == 8, "BytesLayout must be 8-byte aligned");
+
 class RuntimeContext {
 public:
     SymbolPool symbols;
     ShapeArena shapes;
-    std::vector<std::unique_ptr<Coroutine>> coroutines;
+    PrototypeArena prototypes;
+    CoroutinePool coroutines;
     Coroutine* active_coro = nullptr;
+    uint64_t bytes_shape = 0;
+
+    uint64_t pending_reclaim_coro = 0;
 
     RuntimeContext() : symbols(), shapes(symbols) {
-        // Initialize main coroutine with a root constructing frame.
-        auto main_coro = std::make_unique<Coroutine>();
+        bytes_shape = shapes.intern_struct_auto({
+            {symbols.intern("ptr"), shapes.raw8_shape, 0},
+            {symbols.intern("len"), shapes.raw8_shape, 0},
+        });
+
+        Coroutine* main_coro = coroutines.create();
         main_coro->state = CoroutineState::Running;
         main_coro->push_frame();
-        active_coro = main_coro.get();
-        coroutines.push_back(std::move(main_coro));
+        active_coro = main_coro;
+    }
+
+    void flush_pending_reclaim() {
+        if (pending_reclaim_coro != 0) {
+            uint64_t h = pending_reclaim_coro;
+            pending_reclaim_coro = 0;
+            coroutines.destroy(h);
+        }
     }
 
     ConstructingFrame* current_frame() noexcept {
         return active_coro ? active_coro->current_frame() : nullptr;
     }
 
-    // Core #deref(ptr) -> Value (POD/RAII-agnostic raw bit read)
+    Value make_unit() const { return Value{shapes.unit_shape, {}}; }
+
+    Value make_bool(bool b) const {
+        uint8_t v = b ? 1 : 0;
+        return Value::from_pod(shapes.boolean_shape, v);
+    }
+
+    Value make_symbol(SymbolId id) const { return Value::from_pod(shapes.symbol_shape, id); }
+    Value make_pointer(const PointerLayout& p) const { return Value::from_pod(shapes.pointer_shape, p); }
+    Value make_proto(uint64_t proto_addr) const { return Value::from_pod(shapes.prototype_shape, proto_addr); }
+    Value make_handle(uint64_t handle_val) const { return Value::from_pod(shapes.handle_shape, handle_val); }
+    Value make_bytes(const BytesLayout& b) const { return Value::from_pod(bytes_shape, b); }
+
+    // Unified single-path #field: zero open-frame special cases!
+    PointerLayout field(const PointerLayout& ptr, SymbolId sym) const noexcept {
+        return shapes.field_of(ptr, sym);
+    }
+
     Value deref(const PointerLayout& ptr) const {
         if (ptr.is_null() || ptr.shape_ptr == 0) {
             throw std::runtime_error("#deref: null or untyped pointer");
         }
-        // Reject reading Uninitialized or Empty direct slots in active chain.
         ConstructingFrame* cur = active_coro ? active_coro->current_frame() : nullptr;
         while (cur) {
             if (FrameSlot* slot = cur->find_direct_slot(ptr.addr)) {
@@ -61,7 +101,6 @@ public:
         return out;
     }
 
-    // Core #write(dst_ptr, val) (POD/RAII-agnostic raw bit write)
     void write(const PointerLayout& dst_ptr, const Value& val) {
         if (dst_ptr.is_null() || dst_ptr.shape_ptr == 0) {
             throw std::runtime_error("#write: null destination pointer");
@@ -70,7 +109,6 @@ public:
             throw std::runtime_error("#write: shape mismatch between destination and value");
         }
 
-        // Check if dst_ptr is a direct child slot in the active construction chain.
         ConstructingFrame* cur = active_coro ? active_coro->current_frame() : nullptr;
         FrameSlot* direct_slot = nullptr;
         while (cur) {
@@ -89,10 +127,10 @@ public:
                 std::memcpy(direct_slot->storage.data(), val.bytes.data(), val.bytes.size());
             }
             direct_slot->state = SlotState::Live;
+            cur->sync_live_shape();
             return;
         }
 
-        // Non-direct slot (e.g. mutable field inside a closed object or recast buffer):
         if (dst_ptr.mutability != 1) {
             throw std::runtime_error("#write: cannot write through immutable pointer");
         }

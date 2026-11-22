@@ -3,6 +3,7 @@
 #include "Shape.h"
 #include "SymbolPool.h"
 
+#include <coroutine>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -12,26 +13,17 @@
 
 namespace reverSilly::Lang::Runtime {
 
-enum class SlotState : uint8_t {
-    Uninitialized,
-    Live,
-    Empty,
-};
-
 struct ConstructingFrame;
 
-// A direct child location slot owned by a ConstructingFrame.
-// Its Shape and storage buffer are fixed at creation time so its pointer is always a real Pointer.
 struct FrameSlot {
     ConstructingFrame* owner = nullptr;
     uint64_t shape_addr = 0;
-    uint8_t mutability = 0; // 0 = immutable, 1 = mutable
+    uint8_t mutability = 0;
     SlotState state = SlotState::Uninitialized;
     bool is_bound = false;
     SymbolId bound_sym = 0;
     std::vector<uint8_t> storage;
 
-    // Non-zero stable address (even for zero-sized types, use &storage address).
     uint64_t data_addr() const noexcept {
         if (storage.empty()) {
             return reinterpret_cast<uint64_t>(&storage);
@@ -44,15 +36,59 @@ struct FrameSlot {
     }
 };
 
-// Active constructing block frame on a coroutine's construction stack.
+// Active constructing block frame whose live_shape is a standard 40B ShapeLayout:
+// - #this / #parent / #coro_root_frame return regular fat pointers { frame_addr, &live_shape, 1 }.
+// - live_entries_ keeps all slots (bound, unbound, 3-state) PLUS at most one active child open frame.
+// - Each entry stores relative offset (slot_addr - frame_addr) mod 2^64 so #field uses ONE unified path.
 struct ConstructingFrame {
     ConstructingFrame* parent = nullptr;
+    ConstructingFrame* active_child = nullptr;
     std::vector<std::unique_ptr<FrameSlot>> slots;
     std::unordered_map<uint64_t, FrameSlot*> addr_to_slot;
     std::unordered_map<SymbolId, FrameSlot*> sym_to_slot;
-    std::vector<SymbolId> bind_order; // preserves definition order for closing flatten
+    std::vector<SymbolId> bind_order;
 
-    // #allocate(shape_addr, is_mut) -> real Pointer (state = Uninitialized)
+    // Live unified ShapeLayout describing this open frame (size=0 indicates open frame)
+    ShapeLayout live_shape{};
+    std::vector<FieldEntry> live_entries_;
+    std::vector<uint32_t> live_buckets_;
+
+    uint64_t frame_addr() const noexcept {
+        return reinterpret_cast<uint64_t>(this);
+    }
+
+    PointerLayout frame_pointer() const noexcept {
+        return PointerLayout{frame_addr(), reinterpret_cast<uint64_t>(&live_shape), 1};
+    }
+
+    void sync_live_shape() {
+        live_entries_.clear();
+        live_entries_.reserve(slots.size() + (active_child ? 1 : 0));
+        uint64_t base = frame_addr();
+        for (const auto& s_ptr : slots) {
+            const FrameSlot* s = s_ptr.get();
+            uint64_t delta = s->data_addr() - base; // wrapping mod 2^64
+            live_entries_.push_back(FieldEntry{
+                s->is_bound ? s->bound_sym : 0u,
+                static_cast<uint8_t>(s->state),
+                {0, 0, 0},
+                PointerLayout{delta, s->shape_addr, s->mutability},
+            });
+        }
+        if (active_child) {
+            uint64_t child_delta = active_child->frame_addr() - base;
+            live_entries_.push_back(FieldEntry{
+                0u, // anonymous active child frame slot
+                static_cast<uint8_t>(SlotState::Live),
+                {0, 0, 0},
+                PointerLayout{child_delta, reinterpret_cast<uint64_t>(&active_child->live_shape), 1},
+            });
+        }
+        live_shape.size = 0;
+        live_shape.align = 1;
+        live_shape.fields = FieldMapInline::build_view(live_entries_, live_buckets_);
+    }
+
     FrameSlot* allocate(uint64_t shape_addr, bool is_mut) {
         const auto* s = reinterpret_cast<const ShapeLayout*>(shape_addr);
         if (!s) {
@@ -68,10 +104,10 @@ struct ConstructingFrame {
         FrameSlot* raw = slot.get();
         addr_to_slot.emplace(raw->data_addr(), raw);
         slots.push_back(std::move(slot));
+        sync_live_shape();
         return raw;
     }
 
-    // #allocate_val(val, is_mut) -> real Pointer (state = Live, sits in #unbound)
     FrameSlot* allocate_val(const Value& val, bool is_mut) {
         FrameSlot* slot = allocate(val.shape_addr, is_mut);
         if (val.bytes.size() != slot->storage.size()) {
@@ -81,21 +117,10 @@ struct ConstructingFrame {
             std::memcpy(slot->storage.data(), val.bytes.data(), val.bytes.size());
         }
         slot->state = SlotState::Live;
+        sync_live_shape();
         return slot;
     }
 
-    // #unbound -> most recently created unbound Live direct child slot (or null Pointer)
-    PointerLayout top_unbound() const noexcept {
-        for (auto it = slots.rbegin(); it != slots.rend(); ++it) {
-            const FrameSlot* slot = it->get();
-            if (!slot->is_bound && slot->state == SlotState::Live) {
-                return slot->pointer();
-            }
-        }
-        return PointerLayout{}; // null
-    }
-
-    // #bind(sym, ptr) -> true if ptr is an unbound direct child slot of this frame
     bool bind(SymbolId sym, const PointerLayout& ptr) {
         auto it = addr_to_slot.find(ptr.addr);
         if (it == addr_to_slot.end()) {
@@ -105,7 +130,6 @@ struct ConstructingFrame {
         if (slot->is_bound || slot->state == SlotState::Empty) {
             return false;
         }
-        // If sym was previously bound, allow rebind only if the old binding is Empty.
         auto existing = sym_to_slot.find(sym);
         if (existing != sym_to_slot.end()) {
             if (existing->second->state != SlotState::Empty) {
@@ -118,18 +142,18 @@ struct ConstructingFrame {
         }
         slot->is_bound = true;
         slot->bound_sym = sym;
+        sync_live_shape();
         return true;
     }
 
-    // #field(#this, sym) -> Pointer to direct child slot (or null if absent / Empty)
     PointerLayout field(SymbolId sym) const noexcept {
         auto it = sym_to_slot.find(sym);
         if (it == sym_to_slot.end()) {
-            return PointerLayout{}; // null
+            return PointerLayout{};
         }
         const FrameSlot* slot = it->second;
         if (slot->state == SlotState::Empty) {
-            return PointerLayout{}; // null
+            return PointerLayout{};
         }
         return slot->pointer();
     }
@@ -139,7 +163,6 @@ struct ConstructingFrame {
         return it == addr_to_slot.end() ? nullptr : it->second;
     }
 
-    // #touch(slot_ptr): Uninitialized (or mutable Empty) -> Live without modifying bytes
     void touch(const PointerLayout& ptr) {
         FrameSlot* slot = find_direct_slot(ptr.addr);
         if (!slot) {
@@ -148,12 +171,12 @@ struct ConstructingFrame {
         if (slot->state == SlotState::Uninitialized ||
             (slot->state == SlotState::Empty && slot->mutability == 1)) {
             slot->state = SlotState::Live;
+            sync_live_shape();
             return;
         }
         throw std::runtime_error("#touch: invalid slot state transition");
     }
 
-    // #drop(slot_ptr): mark direct child slot in active construction chain (#this or #parent) as Empty (zero RAII)
     void drop_in_chain(const PointerLayout& ptr) {
         ConstructingFrame* cur = this;
         while (cur) {
@@ -163,6 +186,7 @@ struct ConstructingFrame {
                     throw std::runtime_error("#drop: double drop on already Empty slot");
                 }
                 slot->state = SlotState::Empty;
+                cur->sync_live_shape();
                 return;
             }
             cur = cur->parent;
@@ -170,8 +194,6 @@ struct ConstructingFrame {
         throw std::runtime_error("#drop: target is not a direct child slot in active construction chain");
     }
 
-    // Block closing phase transition: strip Uninitialized, Empty, and unbound slots;
-    // flatten remaining Live bound slots into a single contiguous byte buffer + interned Shape.
     Value close_and_flatten(ShapeArena& shapes) const {
         std::vector<ShapeArena::FieldSpec> specs;
         std::vector<const FrameSlot*> live_slots;
@@ -211,21 +233,48 @@ enum class CoroutineState : uint8_t {
 };
 
 struct Coroutine {
+    uint64_t self_handle = 0;
+    uint64_t caller_handle = 0;
     CoroutineState state = CoroutineState::Suspended;
     uint64_t proto_addr = 0;
-    Coroutine* caller = nullptr;
+    std::coroutine_handle<> resume_handle{};
+    std::coroutine_handle<> root_handle{};
     std::vector<std::unique_ptr<ConstructingFrame>> frames;
-    std::unique_ptr<FrameSlot> in_slot; // coroutine root mailbox (#in)
+    std::unique_ptr<FrameSlot> in_slot;
+
+    ~Coroutine() {
+        release_resources();
+    }
+
+    void release_resources() noexcept {
+        frames.clear();
+        in_slot.reset();
+        if (root_handle) {
+            root_handle.destroy();
+            root_handle = {};
+        }
+        resume_handle = {};
+        state = CoroutineState::Dead;
+    }
+
+    ConstructingFrame* root_frame() noexcept {
+        return frames.empty() ? nullptr : frames.front().get();
+    }
 
     ConstructingFrame* current_frame() noexcept {
         return frames.empty() ? nullptr : frames.back().get();
     }
 
     ConstructingFrame* push_frame() {
+        ConstructingFrame* par = current_frame();
         auto frame = std::make_unique<ConstructingFrame>();
-        frame->parent = current_frame();
+        frame->parent = par;
         ConstructingFrame* raw = frame.get();
         frames.push_back(std::move(frame));
+        if (par) {
+            par->active_child = raw;
+            par->sync_live_shape();
+        }
         return raw;
     }
 
@@ -233,7 +282,88 @@ struct Coroutine {
         if (frames.empty()) {
             throw std::runtime_error("Coroutine::pop_frame: empty frame stack");
         }
+        ConstructingFrame* par = frames.back()->parent;
         frames.pop_back();
+        if (par) {
+            par->active_child = nullptr;
+            par->sync_live_shape();
+        }
+    }
+
+    void set_in_value(const Value& val) {
+        auto slot = std::make_unique<FrameSlot>();
+        slot->shape_addr = val.shape_addr;
+        slot->mutability = 0;
+        slot->state = SlotState::Live;
+        slot->storage = val.bytes;
+        in_slot = std::move(slot);
+    }
+
+    PointerLayout in_pointer() const noexcept {
+        return in_slot ? in_slot->pointer() : PointerLayout{};
+    }
+};
+
+class CoroutinePool {
+private:
+    struct Slot {
+        uint32_t generation = 1;
+        std::unique_ptr<Coroutine> coro;
+    };
+
+    std::vector<Slot> slots_;
+    std::vector<uint32_t> free_list_;
+
+    static uint64_t encode(uint32_t idx, uint32_t gen) noexcept {
+        return (static_cast<uint64_t>(gen) << 32) | static_cast<uint64_t>(idx);
+    }
+
+public:
+    Coroutine* create() {
+        uint32_t idx = 0;
+        if (!free_list_.empty()) {
+            idx = free_list_.back();
+            free_list_.pop_back();
+        } else {
+            idx = static_cast<uint32_t>(slots_.size());
+            slots_.push_back(Slot{1, nullptr});
+        }
+        auto coro = std::make_unique<Coroutine>();
+        coro->self_handle = encode(idx, slots_[idx].generation);
+        Coroutine* raw = coro.get();
+        slots_[idx].coro = std::move(coro);
+        return raw;
+    }
+
+    Coroutine* resolve(uint64_t handle) const noexcept {
+        if (handle == 0) return nullptr;
+        uint32_t idx = static_cast<uint32_t>(handle & 0xFFFFFFFFULL);
+        uint32_t gen = static_cast<uint32_t>(handle >> 32);
+        if (idx >= slots_.size()) return nullptr;
+        const Slot& s = slots_[idx];
+        if (!s.coro || s.generation != gen) return nullptr;
+        return s.coro.get();
+    }
+
+    bool destroy(uint64_t handle) {
+        if (handle == 0) return false;
+        uint32_t idx = static_cast<uint32_t>(handle & 0xFFFFFFFFULL);
+        uint32_t gen = static_cast<uint32_t>(handle >> 32);
+        if (idx >= slots_.size()) return false;
+        Slot& s = slots_[idx];
+        if (!s.coro || s.generation != gen) return false;
+        if (s.coro->state == CoroutineState::Running) {
+            throw std::runtime_error("CoroutinePool::destroy: cannot destroy a Running coroutine");
+        }
+        s.coro.reset();
+        ++s.generation;
+        if (s.generation == 0) s.generation = 1;
+        free_list_.push_back(idx);
+        return true;
+    }
+
+    size_t live_count() const noexcept {
+        return slots_.size() - free_list_.size();
     }
 };
 

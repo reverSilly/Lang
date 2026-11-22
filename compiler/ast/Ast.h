@@ -11,17 +11,18 @@
 namespace reverSilly::Lang::Ast {
 
 enum class BuiltinKind : uint8_t {
-    // 5 nullary environment & slot cursors
+    // 4 nullary environment & coroutine cursors
     This,
     Parent,
-    Unbound,
     Caller,
     In,
 
-    // 3 evaluation & coroutine entry primitives
+    // 5 evaluation & coroutine lifecycle / reflection primitives
     Evaluate,
     Block,
     New,
+    Destroy,
+    CoroRootFrame,
 
     // 5 allocation & slot state-machine primitives
     Allocate,
