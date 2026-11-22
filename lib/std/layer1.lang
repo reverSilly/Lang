@@ -222,7 +222,8 @@ raw_h := ^(
     Z := $.caps.constants.u64_zero ;
     ONE := $.caps.constants.u64_one ;
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
-    n := $.bs.len ;
+    bs_sh := #block(^( ptr := $#parent.bs ; #break(#evaluate($#parent.caps.field_map.ptr_shape)) )) ;
+    n := $.bs_sh.size ;
     #bind(acc, #allocate_val($.Z, $.T) ) ;
     #bind(i, #allocate_val($.Z, $.T) ) ;
     loop_p := ^(
@@ -267,7 +268,8 @@ e_int := #block(^( 0 := $#parent.digits_plus ; 1 := $#parent.not_wc ; #break(#ev
 ! StrLit = '"' (not_'"' any)* '"' -> bytes_slice(raw, 1, len - 2) -> ast.value(Bytes) !
 raw_h := ^(
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
-    inner_len := #block(^( a := $#parent.bs.len ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.sub_i64)) )) ;
+    bs_sh := #block(^( ptr := $#parent.bs ; #break(#evaluate($#parent.caps.field_map.ptr_shape)) )) ;
+    inner_len := #block(^( a := $#parent.bs_sh.size ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.sub_i64)) )) ;
     sliced := #block(^(
         bytes := $#parent.bs ; start := $#parent.caps.constants.u64_one ; len := $#parent.inner_len ;
         #break(#evaluate($#parent.caps.intrinsics.bytes_slice))

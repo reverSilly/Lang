@@ -98,6 +98,10 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
 
     assert(rt.coroutines.live_count() == 1);
 
+    // Worker coroutine:
+    // 1. Binds `secret` in its root frame
+    // 2. Enters a nested #block, binds `nested_var`, then yields `first_reply` back to #caller
+    // 3. Upon second resume, exits via root #break(#deref(#in))
     ExprPtr inner_body = make_expr<SequenceExpr>(std::vector<ExprPtr>{
         make_expr<BuiltinExpr>(
             BuiltinKind::Bind,
@@ -131,6 +135,10 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
         rt.symbols.intern("worker_p"),
         rt.current_frame()->allocate_val(rt.make_proto(worker_proto), false)->pointer());
 
+    // Resume #1: worker suspends INSIDE nested #block!
+    // Verify #coro_root_frame(coro) exposes unified ShapeLayout containing:
+    //   slot 0: `secret` (sym != 0, Live)
+    //   slot 1: active child open frame (sym == 0, Live, sub_shape.size == 0) containing `nested_var`!
     Value root_ptr_val = ev.run(fe.parse(R"(
         #bind(coro, #allocate_val(#new(#deref(#field(#this, worker_p))), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
         #resume(#deref(#field(#this, coro)), first_in) ;
@@ -141,12 +149,14 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
     PointerLayout root_fp = root_ptr_val.as_pod<PointerLayout>();
     assert(!root_fp.is_null() && root_fp.shape_ptr != 0);
     const auto* root_shape = reinterpret_cast<const ShapeLayout*>(root_fp.shape_ptr);
-    assert(root_shape->size == 0);
-    assert(root_shape->fields.count == 2);
+    assert(root_shape->size == 0); // open frame
+    assert(root_shape->fields.count == 2); // `secret` + active child open frame!
 
+    // Access `secret` directly via unified #field on #coro_root_frame!
     PointerLayout p_secret = rt.field(root_fp, rt.symbols.intern("secret"));
     assert(rt.symbols.name(rt.deref(p_secret).as_pod<SymbolId>()) == "root_val");
 
+    // Descend into active child frame (slot 1: sym == 0, Live, sub_shape->size == 0) -> compute top_frame!
     FieldEntry child_fe = FieldMapArena::at(root_shape->fields, 1);
     assert(child_fe.sym == 0 && child_fe.slot_state() == SlotState::Live);
     PointerLayout child_fp{root_fp.addr + child_fe.offset(), child_fe.sub_shape_addr(), child_fe.mutability()};
@@ -155,6 +165,7 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
     PointerLayout p_nested = rt.field(child_fp, rt.symbols.intern("nested_var"));
     assert(rt.symbols.name(rt.deref(p_nested).as_pod<SymbolId>()) == "inner_val");
 
+    // Resume #2 -> worker finishes via root #break(#deref(#in)) and is automatically reclaimed!
     Value final_val = ev.run(fe.parse(R"(
         #resume(#deref(#field(#this, coro)), second_in) ;
         #deref(#in)
@@ -162,6 +173,7 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
     assert(rt.symbols.name(final_val.as_pod<SymbolId>()) == "second_in");
     assert(rt.coroutines.live_count() == 1);
 
+    // Core #destroy(coro) on an abandoned suspended coroutine
     Value destroyed = ev.run(fe.parse(R"(
         #bind(abandoned, #allocate_val(#new(#deref(#field(#this, worker_p))), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
         #destroy(#deref(#field(#this, abandoned)))
@@ -179,10 +191,9 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
 
     const std::string target_src =
         "#block(^#bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent, capabilities), constants), false)))))";
-    BytesLayout target_bytes{reinterpret_cast<uint64_t>(target_src.data()), target_src.size()};
     rt.current_frame()->bind(
         rt.symbols.intern("target_src"),
-        rt.current_frame()->allocate_val(rt.make_bytes(target_bytes), false)->pointer());
+        rt.current_frame()->allocate_val(rt.make_bytes_ptr(target_src.data(), target_src.size()), false)->pointer());
 
     const char* bootstrap_src = R"(
         #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;

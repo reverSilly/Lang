@@ -11,7 +11,7 @@ assert_true := ^(
 a := 42 ;
 s := "hello_layer1" ;
 cond := $.a == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.s.len == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+s_sh := #shape($$.s) ; cond := $.s_sh.size == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 2. Smart `:=` dispatcher & location-owned mutability !
 x := #allocate_val(10, true) ;

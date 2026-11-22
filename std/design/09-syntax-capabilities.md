@@ -18,7 +18,7 @@ This document records the architectural refinements finalized during Compiler St
 1. `WordExpr { std::string text; }` — Delayed symbol interning (resolved to 4B `SymbolId` in `RuntimeContext`, keeping ASTs decoupled for module relocation).
 2. `BuiltinExpr { BuiltinKind kind; std::vector<ExprPtr> args; }`
 3. `SequenceExpr { std::vector<ExprPtr> items; }`
-4. `ValueExpr { Runtime::Value value; }` — Embeds any constant `Value` (including `Shape`, `Bytes`, `i64`, `Boolean`, and `Prototype` values).
+4. `ValueExpr { Runtime::Value value; }` — Embeds any constant `Value` (including `Shape`, `i64`, `Boolean`, and `Prototype` values).
 
 *(`GroupExpr` and `PrototypeExpr` are removed from Core IR.)*
 
@@ -69,12 +69,12 @@ ShapeLayout (40B, align 8):
   3. Stdlib optional Mark-Sweep Coroutine GC uses a single recursive `Live`-slot scanner starting from `#coro_root_frame(coro)`, automatically traversing the entire nested `#block` stack, marking reachable `Handle`s, running `__destroy` on unreachable orphan cycles, and finally freeing their raw stacks via `#destroy(coro)` — achieving **zero GC in Core** with **full RAII-complete GC in Stdlib**.
 - **Generational Coroutine Handles**: `Handle` encodes `(generation << 32) | slot_index`. Reclaiming a `Dead` or `#destroy`ed coroutine immediately destroys its stack/C++20 frame, increments `generation`, and recycles the slot, preventing both leaks and dangling-pointer UB.
 
-## 3. Two-Layer Code Model, `Prototype` vs. `Bytes` & FFI Direction
+## 3. Two-Layer Code Model, `Prototype` vs. `Pointer` (to leaf `Shape{size, 1}`) & FFI Direction
 - **Compile-Time Layer (Bootstrap / Build Script)**: Executed directly by the interpreter with `capabilities` mounted in root `#this`. Even without `^Expr` in Layer 0, straight-line `#bind` → `#evaluate(capabilities.ast.*)` → `#drop` in root `#this` constructs the first `Prototype` (the visitor for `^Expr`) and registers it via `capabilities.syntax.set_rule`.
 - **Runtime Layer (Target Code)**: Pure runtime programs do not depend on `capabilities.syntax`, `capabilities.ast`, or `capabilities.compiler`.
-- **`Prototype` vs. `Bytes`**:
+- **`Prototype` vs. `Pointer` (to leaf `Shape{size, 1}`)**:
   - In memory, `Prototype` is an **8-byte opaque handle** (`prototype_shape`, align 8) pointing to live, linked code inside a `RuntimeContext` (internal binary/backend format intentionally left open for AST / bytecode / LLVM IR / native machine code).
-  - Across process boundaries (relocatable libraries, hot-reloading, or OS executables), code is exchanged as transparent 16-byte **`Bytes`** (`{ ptr: 8B, len: 8B }`). No separate `Executable` or `Module` core types are needed.
+  - Across process boundaries (relocatable libraries, hot-reloading, or OS executables), raw byte buffers are represented natively by an immutable fat **`Pointer`** pointing to a leaf **`Shape{ size = N, align = 1, fields = empty }`** (identical to `#freeze` — zero extra `BytesLayout` or `bytes_shape` core types are needed).
 - **External Native Symbols & ABI (Phase 2 FFI / LLVM Direction)**:
   - External C/OS functions are linked via `load_extern_symbol(name, abi)` where the ABI signature is described directly using Lang's transparent `Shape`s (`{ args_shape: Shape, ret_shape: Shape, cc: Symbol }`) and wrapped as a `CodeKind::NativeSym` `Prototype`.
   - At compile-time/interpreter stage, the host invokes it via `dlopen`/`dlsym` + `libffi` (so compile scripts can call external native symbols directly); at AOT stage, the LLVM backend emits `declare external` + native ABI calls.
@@ -95,14 +95,14 @@ All capability operations are exposed as standard `Native` `Prototype` values (o
 
 | Module | Primitives / Constants | Role |
 | :--- | :--- | :--- |
-| **`constants`** | `true`, `false`, `u64_zero`, `u64_one`, `u64_max`; bootstrapped base `Shape`s (`unit_shape`, `raw1/4/8_shape`, `symbol_shape`, `boolean_shape`, `pointer_shape`, `bytes_shape`, `field_entry_shape`, `field_map_shape`, `shape_meta`, `prototype_shape`, `handle_shape`) | Bootstrap values needed before Layer 1 literals exist |
+| **`constants`** | `true`, `false`, `u64_zero`, `u64_one`, `u64_max`; bootstrapped base `Shape`s (`unit_shape`, `raw1/4/8_shape`, `symbol_shape`, `boolean_shape`, `pointer_shape`, `field_entry_shape`, `field_map_shape`, `shape_meta`, `prototype_shape`, `handle_shape`) | Bootstrap values needed before Layer 1 literals exist |
 | **`field_map`** | `empty`, `is_empty`, `count`, `get`, `at`, `insert`, `ptr_shape` | Works uniformly on both closed `ShapeLayout`s and open frames' `live_shape` (`at` reads ordered `FieldEntry` with `sym`/`state`/`ptr`; `get` queries `Live` bound hash index; `ptr_shape` reads the `Shape` pointed to by any fat pointer) |
 | **`symbols`** | `byte_len`, `byte_at`, `to_bytes`, `intern_bytes` | Dynamic byte-slice ↔ `Symbol` conversion (`intern_bytes` is strictly for constructing dynamic identifier `Symbol`s, never numeric values) |
-| **`intrinsics`** | `add_i64`, `sub_i64`, `mul_i64`, `lt_i64`, `eq_i64`, `eq_sym`, `eq_shape`, `bytes_at`, `bytes_slice`, `u8_to_i64` | Hardware / LLVM IR instruction backing and raw `Bytes` indexing |
+| **`intrinsics`** | `add_i64`, `sub_i64`, `mul_i64`, `lt_i64`, `eq_i64`, `eq_sym`, `eq_shape`, `bytes_at`, `bytes_slice`, `u8_to_i64` | Hardware / LLVM IR instruction backing and raw `Pointer` (to leaf `Shape{size, 1}`) indexing |
 | **`ast`** | `word({sym})`, `builtin({kind: Symbol, 0, 1, ...})`, `seq({0, 1, ...})`, `value({val})`, `to_proto({ast}) -> Prototype` | 1:1 constructors for the 4 Core IR nodes + materializing a `Prototype` (N-ary via dynamic block positional fields) |
 | **`syntax`** | `new_layer0`; atoms `lit({sym})`, `range({lo, hi})`, `ref({fe, name})`, `any`, `eof`; combinators `seq({0, 1, ...})`, `choice({0, 1, ...})`, `repeat({body, min, max})`, `lookahead({body, positive})`; rules `get_rule`, `set_rule({fe, name, expr, hidden, handler})`; explicit CST readers (`#this.node`): `cst_child_count`, `cst_view_sym`, `cst_view_bytes`, `cst_child_view_sym`, `cst_eval_child` | Algebraic PEG construction using native `Symbol`s; Stdlib builds `prepend_choice` / `wrap_rule` on top of `get_rule` + `set_rule` |
-| **`compiler`** | `parse({fe, src: Bytes}) -> Prototype`, `serialize_proto({proto}) -> Bytes`, `deserialize_proto({mod: Bytes}) -> Prototype`, `emit_executable({proto}) -> Bytes` | Pure `Bytes ↔ Prototype` transformations (zero file IO) |
-| **`io`** | `read_file({path: Bytes}) -> Bytes`, `write_file({path: Bytes, bytes: Bytes}) -> Unit` | Minimal compile-script file IO for Phase 1 MVP (no console `print_*` / `write_stdout`; replaced by FFI `load_extern_symbol` in Phase 2) |
+| **`compiler`** | `parse({fe, src: BytePtr}) -> Prototype`, `serialize_proto({proto}) -> BytePtr`, `deserialize_proto({mod: BytePtr}) -> Prototype`, `emit_executable({proto}) -> BytePtr` | Pure `BytePtr ↔ Prototype` transformations (zero file IO) |
+| **`io`** | `read_file({path: BytePtr}) -> BytePtr`, `write_file({path: BytePtr, bytes: BytePtr}) -> Unit` | Minimal compile-script file IO for Phase 1 MVP (no console `print_*` / `write_stdout`; replaced by FFI `load_extern_symbol` in Phase 2) |
 
 ## 6. Layer 1 Pure-Lang Two-Stage Self-Bootstrap Architecture
 Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C++ `Layer1.h`:
@@ -124,7 +124,7 @@ Extends `fe_boot1` into the full Layer 1 frontend `fe_layer1`, adhering to **loc
 - **Blocks & Assignment**: `{}` → `#block(^#this)`, `{ expr }` → `#block(^expr)`, `ptr = val` → `assign` dispatcher (`#write` for POD; future `__destroy` + `#write` for RAII).
 - **Literals (Zero `Symbol` Abuse)**:
   - Integer literals (`123`): visitor reads raw ASCII bytes via `cst_view_bytes`, derives `'0'` (`48`) via `symbols.byte_at(0, 0)` and `10` from `u64_one`, computes `acc = acc * 10 + (b - 48)` in Lang, and emits `ast.value(i64)`.
-  - Byte string literals (`"..."`): visitor reads raw bytes via `cst_view_bytes` (stripping quotes) and emits `ast.value(Bytes)`.
+  - Byte string literals (`"..."`): visitor reads raw bytes via `cst_view_bytes` (stripping quotes) and emits `ast.value(BytePtr)`.
   - Booleans (`true` / `false`): emit `ast.value(Boolean)`.
 - **Shape-Dispatched Operators** (vertical precedence ladder, tightest to loosest): `*` → `+` / `-` → `<` / `==` (syntax stays type-agnostic; dispatchers inspect `#shape`).
 - **English-Order Suffix Control Flow & Coroutines**:

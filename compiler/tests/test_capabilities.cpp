@@ -27,9 +27,9 @@ static void test_io_read_write_and_symbols_intern() {
 
     auto* rf = rt.current_frame();
     rf->bind(rt.symbols.intern("p_path"),
-             rf->allocate_val(rt.make_bytes(BytesLayout{reinterpret_cast<uint64_t>(tmp_path.data()), tmp_path.size()}), false)->pointer());
+             rf->allocate_val(rt.make_bytes_ptr(tmp_path.data(), tmp_path.size()), false)->pointer());
     rf->bind(rt.symbols.intern("p_data"),
-             rf->allocate_val(rt.make_bytes(BytesLayout{reinterpret_cast<uint64_t>(payload.data()), payload.size()}), false)->pointer());
+             rf->allocate_val(rt.make_bytes_ptr(payload.data(), payload.size()), false)->pointer());
 
     // Write file, read it back, intern its bytes to a Symbol, and verify
     Value sym_val = ev.run(fe.parse(R"(
@@ -58,7 +58,7 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
     const std::string text = "\"42\"";
     auto* rf = rt.current_frame();
     rf->bind(rt.symbols.intern("raw_str"),
-             rf->allocate_val(rt.make_bytes(BytesLayout{reinterpret_cast<uint64_t>(text.data()), text.size()}), false)->pointer());
+             rf->allocate_val(rt.make_bytes_ptr(text.data(), text.size()), false)->pointer());
     rf->bind(rt.symbols.intern("v1"), rf->allocate_val(Value::from_pod<uint64_t>(rt.shapes.raw8_shape, 1), false)->pointer());
     rf->bind(rt.symbols.intern("v2"), rf->allocate_val(Value::from_pod<uint64_t>(rt.shapes.raw8_shape, 2), false)->pointer());
 
@@ -110,7 +110,7 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
     const std::string sample = "foo:bar";
     auto* rf = rt.current_frame();
     rf->bind(rt.symbols.intern("sample_src"),
-             rf->allocate_val(rt.make_bytes(BytesLayout{reinterpret_cast<uint64_t>(sample.data()), sample.size()}), false)->pointer());
+             rf->allocate_val(rt.make_bytes_ptr(sample.data(), sample.size()), false)->pointer());
 
     // Build handler in C++ AST for concise unit testing of cst_view_bytes & cst_child_view_sym
     // Handler returns ast.value(cst_view_bytes(node))
@@ -193,9 +193,11 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
         #evaluate(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))))
     )"));
 
-    assert(bytes_res.shape_addr == rt.bytes_shape);
-    auto bl = bytes_res.as_pod<BytesLayout>();
-    assert(std::string_view(reinterpret_cast<const char*>(bl.ptr), bl.len) == "foo:bar");
+    assert(bytes_res.shape_addr == rt.shapes.pointer_shape);
+    auto bp = bytes_res.as_pod<PointerLayout>();
+    const auto* bsh = reinterpret_cast<const ShapeLayout*>(bp.shape_ptr);
+    assert(bsh->is_leaf() && bsh->align == 1 && bsh->size == 7);
+    assert(std::string_view(reinterpret_cast<const char*>(bp.addr), bsh->size) == "foo:bar");
 
     // Rebind Pair handler to h_child1 and verify cst_child_view_sym(1) == "bar"
     Value child_sym = ev.run(fe.parse(R"(

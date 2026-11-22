@@ -14,15 +14,6 @@
 
 namespace reverSilly::Lang::Runtime {
 
-// Transparent 16-byte Bytes slice layout: { ptr: 8B/8, len: 8B/8 }
-struct alignas(8) BytesLayout {
-    uint64_t ptr = 0;
-    uint64_t len = 0;
-};
-
-static_assert(sizeof(BytesLayout) == 16, "BytesLayout must be 16 bytes");
-static_assert(alignof(BytesLayout) == 8, "BytesLayout must be 8-byte aligned");
-
 class RuntimeContext {
 public:
     SymbolPool symbols;
@@ -30,16 +21,10 @@ public:
     PrototypeArena prototypes;
     CoroutinePool coroutines;
     Coroutine* active_coro = nullptr;
-    uint64_t bytes_shape = 0;
 
     uint64_t pending_reclaim_coro = 0;
 
     RuntimeContext() : symbols(), shapes(symbols) {
-        bytes_shape = shapes.intern_struct_auto({
-            {symbols.intern("ptr"), shapes.raw8_shape, 0},
-            {symbols.intern("len"), shapes.raw8_shape, 0},
-        });
-
         Coroutine* main_coro = coroutines.create();
         main_coro->state = CoroutineState::Running;
         main_coro->push_frame();
@@ -69,7 +54,12 @@ public:
     Value make_pointer(const PointerLayout& p) const { return Value::from_pod(shapes.pointer_shape, p); }
     Value make_proto(uint64_t proto_addr) const { return Value::from_pod(shapes.prototype_shape, proto_addr); }
     Value make_handle(uint64_t handle_val) const { return Value::from_pod(shapes.handle_shape, handle_val); }
-    Value make_bytes(const BytesLayout& b) const { return Value::from_pod(bytes_shape, b); }
+
+    // Immutable fat Pointer to a contiguous byte buffer: Shape{ size = len, align = 1, fields = empty }.
+    Value make_bytes_ptr(const void* data, uint64_t len) {
+        uint64_t leaf = shapes.intern_leaf(len, 1);
+        return make_pointer(PointerLayout{reinterpret_cast<uint64_t>(data), leaf, 0});
+    }
 
     // Unified single-path #field: zero open-frame special cases!
     PointerLayout field(const PointerLayout& ptr, SymbolId sym) const noexcept {
