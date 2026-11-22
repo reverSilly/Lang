@@ -5,9 +5,10 @@
 #include "Evaluator.h"
 
 #include <cstdint>
-#include <iostream>
+#include <fstream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -27,6 +28,9 @@ private:
     std::vector<Peg::PegExprPtr> peg_pool_;
     std::vector<std::unique_ptr<Parser::Frontend>> frontend_pool_;
     std::vector<const Peg::Evaluator<Ast::ExprPtr>::Context*> cst_pool_;
+    // Arena owning host-allocated read-only byte buffers (e.g. io.read_file, cst_view_bytes).
+    // unique_ptr<std::string> ensures stable data() pointers across vector growth; freed with CapabilityHost.
+    std::vector<std::unique_ptr<std::string>> byte_buffers_;
 
     static uint64_t encode_handle(HandleTag tag, size_t idx) noexcept {
         return (static_cast<uint64_t>(tag) << 56) | static_cast<uint64_t>(idx);
@@ -61,6 +65,13 @@ private:
             out.push_back(ev.rt.deref(p));
         }
         return out;
+    }
+
+    Runtime::Value store_bytes(Runtime::RuntimeContext& rt, std::string data) {
+        auto buf = std::make_unique<std::string>(std::move(data));
+        Runtime::BytesLayout bl{reinterpret_cast<uint64_t>(buf->data()), buf->size()};
+        byte_buffers_.push_back(std::move(buf));
+        return rt.make_bytes(bl);
     }
 
     uint64_t store_ast(Ast::ExprPtr expr) {
@@ -125,7 +136,7 @@ public:
             return Runtime::Value::from_pod(s.shape_meta, *reinterpret_cast<const Runtime::ShapeLayout*>(addr));
         };
 
-        // 1. capabilities.constants (all 13 bootstrapped base Shapes + bootstrap scalars)
+        // 1. capabilities.constants
         Runtime::Value constants_obj = build_struct(rt, {
             {"true", rt.make_bool(true)},
             {"false", rt.make_bool(false)},
@@ -147,7 +158,7 @@ public:
             {"handle_shape", shape_val(s.handle_shape)},
         });
 
-        // 2. capabilities.field_map (works uniformly on both closed Shapes and open frames' live_shape!)
+        // 2. capabilities.field_map
         Runtime::Value field_map_obj = build_struct(rt, {
             {"empty", native_proto(rt, "capabilities.field_map.empty", [](Evaluator& ev) {
                 return Runtime::Value::from_pod(ev.rt.shapes.field_map_shape, Runtime::FieldMapArena::empty());
@@ -206,9 +217,14 @@ public:
                 Runtime::BytesLayout bl{reinterpret_cast<uint64_t>(sv.data()), sv.size()};
                 return ev.rt.make_bytes(bl);
             })},
+            {"intern_bytes", native_proto(rt, "capabilities.symbols.intern_bytes", [](Evaluator& ev) {
+                auto bl = read_field(ev, "bytes").as_pod<Runtime::BytesLayout>();
+                auto span = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(bl.ptr), bl.len);
+                return ev.rt.make_symbol(ev.rt.symbols.intern(span));
+            })},
         });
 
-        // 4. capabilities.intrinsics (destroy_coro promoted to Core #destroy)
+        // 4. capabilities.intrinsics
         Runtime::Value intrinsics_obj = build_struct(rt, {
             {"add_i64", native_proto(rt, "capabilities.intrinsics.add_i64", [](Evaluator& ev) {
                 return Runtime::Value::from_pod<int64_t>(
@@ -231,6 +247,31 @@ public:
             {"eq_sym", native_proto(rt, "capabilities.intrinsics.eq_sym", [](Evaluator& ev) {
                 return ev.rt.make_bool(
                     read_field(ev, "a").as_pod<Runtime::SymbolId>() == read_field(ev, "b").as_pod<Runtime::SymbolId>());
+            })},
+            {"eq_shape", native_proto(rt, "capabilities.intrinsics.eq_shape", [](Evaluator& ev) {
+                auto a = read_field(ev, "a").as_pod<Runtime::ShapeLayout>();
+                auto b = read_field(ev, "b").as_pod<Runtime::ShapeLayout>();
+                return ev.rt.make_bool(ev.canonical_shape_addr(a) == ev.canonical_shape_addr(b));
+            })},
+            {"bytes_at", native_proto(rt, "capabilities.intrinsics.bytes_at", [](Evaluator& ev) {
+                auto bl = read_field(ev, "bytes").as_pod<Runtime::BytesLayout>();
+                auto idx = read_field(ev, "index").as_pod<uint64_t>();
+                if (idx >= bl.len) throw std::out_of_range("capabilities.intrinsics.bytes_at: out of range");
+                uint8_t byte = reinterpret_cast<const uint8_t*>(bl.ptr)[idx];
+                return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, byte);
+            })},
+            {"bytes_slice", native_proto(rt, "capabilities.intrinsics.bytes_slice", [](Evaluator& ev) {
+                auto bl = read_field(ev, "bytes").as_pod<Runtime::BytesLayout>();
+                auto start = read_field(ev, "start").as_pod<uint64_t>();
+                auto len = read_field(ev, "len").as_pod<uint64_t>();
+                if (start > bl.len || start + len > bl.len) {
+                    throw std::out_of_range("capabilities.intrinsics.bytes_slice: out of range");
+                }
+                return ev.rt.make_bytes(Runtime::BytesLayout{bl.ptr + start, len});
+            })},
+            {"u8_to_i64", native_proto(rt, "capabilities.intrinsics.u8_to_i64", [](Evaluator& ev) {
+                int64_t v = static_cast<int64_t>(read_field(ev, "b").as_pod<uint8_t>());
+                return Runtime::Value::from_pod<int64_t>(ev.rt.shapes.raw8_shape, v);
             })},
         });
 
@@ -367,6 +408,15 @@ public:
                 const auto* ctx = load_cst(read_field(ev, "node").as_pod<uint64_t>());
                 return ev.rt.make_symbol(ev.rt.symbols.intern(ctx->view()));
             })},
+            {"cst_view_bytes", native_proto(rt, "capabilities.syntax.cst_view_bytes", [this](Evaluator& ev) {
+                const auto* ctx = load_cst(read_field(ev, "node").as_pod<uint64_t>());
+                return store_bytes(ev.rt, std::string(ctx->view()));
+            })},
+            {"cst_child_view_sym", native_proto(rt, "capabilities.syntax.cst_child_view_sym", [this](Evaluator& ev) {
+                const auto* ctx = load_cst(read_field(ev, "node").as_pod<uint64_t>());
+                auto idx = read_field(ev, "index").as_pod<uint64_t>();
+                return ev.rt.make_symbol(ev.rt.symbols.intern(ctx->child_view(idx)));
+            })},
             {"cst_eval_child", native_proto(rt, "capabilities.syntax.cst_eval_child", [this](Evaluator& ev) {
                 const auto* ctx = load_cst(read_field(ev, "node").as_pod<uint64_t>());
                 auto idx = read_field(ev, "index").as_pod<uint64_t>();
@@ -389,14 +439,33 @@ public:
             })},
         });
 
-        // 8. capabilities.io
+        // 8. capabilities.io (minimal compile-script file IO; replaced by FFI load_extern_symbol in Phase 2)
         Runtime::Value io_obj = build_struct(rt, {
-            {"print_i64", native_proto(rt, "capabilities.io.print_i64", [](Evaluator& ev) {
-                std::cout << read_field(ev, "val").as_pod<int64_t>() << '\n';
-                return ev.rt.make_unit();
+            {"read_file", native_proto(rt, "capabilities.io.read_file", [this](Evaluator& ev) {
+                auto bl = read_field(ev, "path").as_pod<Runtime::BytesLayout>();
+                std::string path(reinterpret_cast<const char*>(bl.ptr), bl.len);
+                std::ifstream ifs(path, std::ios::binary);
+                if (!ifs) {
+                    throw std::runtime_error("capabilities.io.read_file: failed to open '" + path + "'");
+                }
+                std::ostringstream oss;
+                oss << ifs.rdbuf();
+                return store_bytes(ev.rt, oss.str());
             })},
-            {"print_sym", native_proto(rt, "capabilities.io.print_sym", [](Evaluator& ev) {
-                std::cout << ev.rt.symbols.name(read_field(ev, "sym").as_pod<Runtime::SymbolId>()) << '\n';
+            {"write_file", native_proto(rt, "capabilities.io.write_file", [](Evaluator& ev) {
+                auto path_bl = read_field(ev, "path").as_pod<Runtime::BytesLayout>();
+                auto data_bl = read_field(ev, "bytes").as_pod<Runtime::BytesLayout>();
+                std::string path(reinterpret_cast<const char*>(path_bl.ptr), path_bl.len);
+                std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
+                if (!ofs) {
+                    throw std::runtime_error("capabilities.io.write_file: failed to open '" + path + "'");
+                }
+                if (data_bl.len > 0) {
+                    ofs.write(reinterpret_cast<const char*>(data_bl.ptr), static_cast<std::streamsize>(data_bl.len));
+                }
+                if (!ofs) {
+                    throw std::runtime_error("capabilities.io.write_file: write failed for '" + path + "'");
+                }
                 return ev.rt.make_unit();
             })},
         });

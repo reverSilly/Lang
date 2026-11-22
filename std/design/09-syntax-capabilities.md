@@ -107,16 +107,16 @@ All capability operations are exposed as standard `Native` `Prototype` values (o
 ## 6. Layer 1 Pure-Lang Two-Stage Self-Bootstrap Architecture
 Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C++ `Layer1.h`:
 
-### 6.1 Stage 1: `std/boot0.lang` (Pure 5-Symbol Layer 0)
+### 6.1 Stage 1: `lib/std/boot0.lang` (Pure 5-Symbol Layer 0)
 Registers only the 4 minimal rules needed to unlock readable syntax, producing `fe_boot1`:
 1. `^Expr` (prefix, right-associative → `ValueExpr(Prototype)`)
 2. `.a` (prefix → `#field(#this, a)`) and `p.a` (postfix chain → `#field(p, a)`)
 3. `$p` (prefix → `#deref(p)`)
 4. `x := expr` (basic infix → `#bind(x, #allocate_val(expr, false))`)
 
-`boot0.lang` then reads `std/layer1.lang` via `capabilities.io.read_file`, parses it with `fe_boot1` via `capabilities.compiler.parse`, and `#evaluate`s it.
+`boot0.lang` then reads `lib/std/layer1.lang` via `capabilities.io.read_file`, parses it with `fe_boot1` via `capabilities.compiler.parse`, and `#evaluate`s it.
 
-### 6.2 Stage 2: `std/layer1.lang` (Written in `fe_boot1`)
+### 6.2 Stage 2: `lib/std/layer1.lang` (Written in `fe_boot1`)
 Extends `fe_boot1` into the full Layer 1 frontend `fe_layer1`, adhering to **location-owned mutability** and **Shape-driven Stdlib dispatch**:
 - **Smart `sym := RHS` Dispatcher (No `mut x :=` or `::=` Sugar)**:
   - Mutability belongs strictly to locations created by `#allocate(S, true)` / `#allocate_val(v, true)`.

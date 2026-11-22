@@ -1,0 +1,35 @@
+! ============================================================================ !
+! tests/run_tests.lang — Bootstraps Layer 1 from Layer 0 & runs Layer 1 tests  !
+! ============================================================================ !
+
+! 1. Load and run lib/std/boot0.lang in root #this -> returns fe_layer1 !
+#bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+#bind(fe0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), new_layer0))), #deref(#field(#this, F)))) ;
+
+#bind(sym, #allocate_val(lib/std/boot0.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+
+#bind(fe, #allocate_val(#deref(#field(#this, fe0)), #deref(#field(#this, F)))) ;
+#bind(boot_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, fe)) ; #drop(#field(#this, src)) ; #drop(#field(#this, F)) ;
+
+! Run full boot0 -> boot1 -> layer1 bootstrap (binds fe_layer1 & returns it) !
+#evaluate(#deref(#field(#this, boot_p))) ;
+
+! 2. Parse tests/test_layer1.lang with fe_layer1 and run in an isolated #block !
+#bind(sym, #allocate_val(tests/test_layer1.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+
+#bind(test_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), compiler), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+
+! Run tests/test_layer1.lang directly (assertions inside test_layer1.lang abort on any mismatch) !
+#block(#deref(#field(#this, test_p)))

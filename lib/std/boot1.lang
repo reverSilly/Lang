@@ -1,0 +1,184 @@
+! ============================================================================ !
+! lib/std/boot1.lang — Stage 1.5 Bootstrap (uses ^Expr, .a, $p from boot0)     !
+!                                                                              !
+! Installs Postfix (p.a) and basic BindInfix (x := expr) on fe -> fe_boot1,    !
+! then reads, parses (with fe_boot1), and evaluates lib/std/layer1.lang.       !
+! ============================================================================ !
+
+! Helper: wrap_h(raw_h) -> self-contained Prototype with `caps` injected       !
+#bind(wrap_h, #allocate_val(^(
+    #bind(sym, #allocate_val(caps, $.F)) ;
+    #bind(w_caps, #allocate_val(#evaluate($#field(.c_ast, word)), $.F)) ;
+    #drop(.sym) ;
+
+    #bind(val, #allocate_val($.caps, $.F)) ;
+    #bind(n_caps_v, #allocate_val(#evaluate($#field(.c_ast, value)), $.F)) ;
+    #drop(.val) ;
+
+    #bind(val, #allocate_val($.raw_h, $.F)) ;
+    #bind(n_raw_h, #allocate_val(#evaluate($#field(.c_ast, value)), $.F)) ;
+    #drop(.val) ;
+
+    #bind(kind, #allocate_val(allocate_val, $.F)) ;
+    #bind(0, #allocate_val($.n_caps_v, $.F)) ;
+    #bind(1, #allocate_val($.n_F, $.F)) ;
+    #bind(t_alloc, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+    #bind(kind, #allocate_val(bind, $.F)) ;
+    #bind(0, #allocate_val($.w_caps, $.F)) ;
+    #bind(1, #allocate_val($.t_alloc, $.F)) ;
+    #bind(s_bind, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+    #bind(kind, #allocate_val(evaluate, $.F)) ;
+    #bind(0, #allocate_val($.n_raw_h, $.F)) ;
+    #bind(s_eval, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ; #drop(.0) ;
+
+    #bind(0, #allocate_val($.s_bind, $.F)) ;
+    #bind(1, #allocate_val($.s_eval, $.F)) ;
+    #bind(ast, #allocate_val(#evaluate($#field(.c_ast, seq)), $.F)) ;
+    #drop(.0) ; #drop(.1) ;
+
+    #bind(res_p, #allocate_val(#evaluate($#field(.c_ast, to_proto)), $.F)) ;
+    #drop(.ast) ; #drop(.w_caps) ; #drop(.n_caps_v) ; #drop(.n_raw_h) ;
+    #drop(.t_alloc) ; #drop(.s_bind) ; #drop(.s_eval) ;
+    $.res_p
+), $.F)) ;
+
+! ---------------------------------------------------------------------------- !
+! Rule 2b: Postfix = Atom (_ "." _ Word)* -> left-fold #field(acc, child_i)    !
+! ---------------------------------------------------------------------------- !
+#bind(raw_h, #allocate_val(^(
+    #bind(F, #allocate_val($#field(#field(.caps, constants), false), $#field(#field(.caps, constants), false))) ;
+    #bind(T, #allocate_val($#field(#field(.caps, constants), true), $.F)) ;
+    #bind(Z, #allocate_val($#field(#field(.caps, constants), u64_zero), $.F)) ;
+    #bind(ONE, #allocate_val($#field(#field(.caps, constants), u64_one), $.F)) ;
+    #bind(c_syn, #allocate_val($#field(.caps, syntax), $.F)) ;
+    #bind(c_ast, #allocate_val($#field(.caps, ast), $.F)) ;
+    #bind(c_int, #allocate_val($#field(.caps, intrinsics), $.F)) ;
+
+    #bind(cnt, #allocate_val(#evaluate($#field(.c_syn, cst_child_count)), $.F)) ;
+    #bind(index, #allocate_val($.Z, $.T)) ;
+    #bind(acc, #allocate_val(#evaluate($#field(.c_syn, cst_eval_child)), $.T)) ;
+    #write(.index, $.ONE) ;
+
+    #bind(loop_p, #allocate_val(^(
+        #bind(a, #allocate_val($.index, $.F)) ;
+        #bind(b, #allocate_val($.cnt, $.F)) ;
+        #bind(cond, #allocate_val(#evaluate($#field(.c_int, lt_i64)), $.F)) ;
+        #drop(.a) ; #drop(.b) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            #bind(rhs, #allocate_val(#evaluate($#field(.c_syn, cst_eval_child)), $.F)) ;
+            #bind(kind, #allocate_val(field, $.F)) ;
+            #bind(0, #allocate_val($.acc, $.F)) ;
+            #bind(1, #allocate_val($.rhs, $.F)) ;
+            #write(.acc, #evaluate($#field(.c_ast, builtin))) ;
+            #drop(.rhs) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+            #bind(a, #allocate_val($.index, $.F)) ;
+            #bind(b, #allocate_val($.ONE, $.F)) ;
+            #write(.index, #evaluate($#field(.c_int, add_i64))) ;
+            #drop(.a) ; #drop(.b) ;
+            #evaluate($.loop_p)
+        ), ^(
+            #drop(.cond) ;
+            $.acc
+        ))
+    ), $.F)) ;
+    #evaluate($.loop_p)
+), $.F)) ;
+
+#bind(h_postfix, #allocate_val(#evaluate($.wrap_h), $.F)) ;
+#drop(.raw_h) ; #drop(.res_p) ;
+
+#bind(name, #allocate_val(Postfix, $.F)) ;
+#bind(expr, #allocate_val($.postfix_expr, $.F)) ;
+#bind(hidden, #allocate_val($.F, $.F)) ;
+#bind(handler, #allocate_val($.h_postfix, $.F)) ;
+#evaluate($#field(.c_syn, set_rule)) ;
+#drop(.name) ; #drop(.expr) ; #drop(.hidden) ; #drop(.handler) ;
+
+! ---------------------------------------------------------------------------- !
+! Rule 4: BindInfix = Word _ ":=" _ Infix -> #bind(w, #allocate_val(rhs, F))   !
+! ---------------------------------------------------------------------------- !
+#bind(raw_h, #allocate_val(^(
+    #bind(F, #allocate_val($#field(#field(.caps, constants), false), $#field(#field(.caps, constants), false))) ;
+    #bind(Z, #allocate_val($#field(#field(.caps, constants), u64_zero), $.F)) ;
+    #bind(ONE, #allocate_val($#field(#field(.caps, constants), u64_one), $.F)) ;
+    #bind(c_syn, #allocate_val($#field(.caps, syntax), $.F)) ;
+    #bind(c_ast, #allocate_val($#field(.caps, ast), $.F)) ;
+
+    #bind(index, #allocate_val($.Z, $.F)) ;
+    #bind(lhs, #allocate_val(#evaluate($#field(.c_syn, cst_eval_child)), $.F)) ;
+    #drop(.index) ;
+
+    #bind(index, #allocate_val($.ONE, $.F)) ;
+    #bind(rhs, #allocate_val(#evaluate($#field(.c_syn, cst_eval_child)), $.F)) ;
+    #drop(.index) ;
+
+    #bind(val, #allocate_val($.F, $.F)) ;
+    #bind(n_false, #allocate_val(#evaluate($#field(.c_ast, value)), $.F)) ;
+    #drop(.val) ;
+
+    #bind(kind, #allocate_val(allocate_val, $.F)) ;
+    #bind(0, #allocate_val($.rhs, $.F)) ;
+    #bind(1, #allocate_val($.n_false, $.F)) ;
+    #bind(alloc_node, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+    #bind(kind, #allocate_val(bind, $.F)) ;
+    #bind(0, #allocate_val($.lhs, $.F)) ;
+    #bind(1, #allocate_val($.alloc_node, $.F)) ;
+    #evaluate($#field(.c_ast, builtin))
+), $.F)) ;
+
+#bind(h_bind_basic, #allocate_val(#evaluate($.wrap_h), $.F)) ;
+#drop(.raw_h) ; #drop(.res_p) ;
+
+#bind(0, #allocate_val($.ref_word, $.F)) ;
+#bind(1, #allocate_val($.ref_ws, $.F)) ;
+#bind(2, #allocate_val($.lit_def, $.F)) ;
+#bind(3, #allocate_val($.ref_ws, $.F)) ;
+#bind(4, #allocate_val($.ref_infix, $.F)) ;
+#bind(expr, #allocate_val(#evaluate($#field(.c_syn, seq)), $.F)) ;
+#drop(.0) ; #drop(.1) ; #drop(.2) ; #drop(.3) ; #drop(.4) ;
+
+#bind(name, #allocate_val(BindInfix, $.F)) ;
+#bind(hidden, #allocate_val($.F, $.F)) ;
+#bind(handler, #allocate_val($.h_bind_basic, $.F)) ;
+#evaluate($#field(.c_syn, set_rule)) ;
+#drop(.name) ; #drop(.expr) ; #drop(.hidden) ; #drop(.handler) ;
+
+#bind(name, #allocate_val(BindInfix, $.F)) ;
+#bind(ref_bind, #allocate_val(#evaluate($#field(.c_syn, ref)), $.F)) ;
+#drop(.name) ;
+
+#bind(0, #allocate_val($.ref_bind, $.F)) ;
+#bind(1, #allocate_val($.old_infix, $.F)) ;
+#bind(expr, #allocate_val(#evaluate($#field(.c_syn, choice)), $.F)) ;
+#drop(.0) ; #drop(.1) ;
+
+#bind(name, #allocate_val(Infix, $.F)) ;
+#bind(hidden, #allocate_val($.F, $.F)) ;
+#bind(handler, #allocate_val($.Z, $.F)) ;
+#evaluate($#field(.c_syn, set_rule)) ;
+#drop(.name) ; #drop(.expr) ; #drop(.hidden) ; #drop(.handler) ;
+
+! ---------------------------------------------------------------------------- !
+! Now fe == fe_boot1 (has ^Expr, .a, p.a, $p, x := expr)                       !
+! Load, parse, and evaluate Stage 2: lib/std/layer1.lang                       !
+! ---------------------------------------------------------------------------- !
+#bind(sym, #allocate_val(lib/std/layer1\.lang, $.F)) ;
+#bind(path, #allocate_val(#evaluate($#field(.c_sym, to_bytes)), $.F)) ;
+#drop(.sym) ;
+
+#bind(src, #allocate_val(#evaluate($#field(.c_io, read_file)), $.F)) ;
+#drop(.path) ;
+
+#bind(layer1_proto, #allocate_val(#evaluate($#field(.c_cmp, parse)), $.F)) ;
+#drop(.src) ;
+
+#evaluate($.layer1_proto)

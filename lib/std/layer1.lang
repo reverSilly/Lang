@@ -1,0 +1,758 @@
+! ============================================================================ !
+! lib/std/layer1.lang — Stage 2 Full Layer 1 Self-Bootstrap (written in boot1) !
+!                                                                              !
+! Upgrades fe (fe_boot1) into full fe_layer1:                                  !
+!   - Smart `sym := RHS` Pointer/Value dispatcher (no mut/::=/~ sugar)         !
+!   - Blocks `{}` / `{ expr }` and assignment `ptr = val`                      !
+!   - Literals: i64 (`123`), Bytes (`"..."`), Boolean (`true` / `false`)       !
+!   - Shape-dispatched operators: `*` -> `+` / `-` -> `<` / `==`               !
+!   - Coroutine resume: `coro @ val`                                           !
+!   - English-order suffix control flow: `e1 if cond else e2`, `body while c`  !
+! ============================================================================ !
+
+! --- Shorthand aliases in root #this --- !
+c_con := $.caps.constants ;
+TWO := #block(^( a := $#parent.caps.constants.u64_one ; b := $#parent.caps.constants.u64_one ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+FOUR := #block(^( a := $#parent.TWO ; b := $#parent.TWO ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+EIGHT := #block(^( a := $#parent.FOUR ; b := $#parent.FOUR ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+TEN := #block(^( a := $#parent.EIGHT ; b := $#parent.TWO ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+ASCII_ZERO := #block(^(
+    sym := 0 ;
+    index := $#parent.Z ;
+    b := #evaluate($#parent.caps.symbols.byte_at) ;
+    #break(#evaluate($#parent.caps.intrinsics.u8_to_i64))
+)) ;
+
+! --- Runtime Shape-dispatched operator prototypes --- !
+std_ops := #block(^(
+    add := ^(
+        is_i64 := #block(^(
+            a := #shape($#parent.a) ;
+            b := $#parent.caps.constants.raw8_shape ;
+            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+        )) ;
+        #branch($.is_i64, ^#evaluate($.caps.intrinsics.add_i64), ^#break(type_error_add))
+    ) ;
+    sub := ^(
+        is_i64 := #block(^(
+            a := #shape($#parent.a) ;
+            b := $#parent.caps.constants.raw8_shape ;
+            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+        )) ;
+        #branch($.is_i64, ^#evaluate($.caps.intrinsics.sub_i64), ^#break(type_error_sub))
+    ) ;
+    mul := ^(
+        is_i64 := #block(^(
+            a := #shape($#parent.a) ;
+            b := $#parent.caps.constants.raw8_shape ;
+            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+        )) ;
+        #branch($.is_i64, ^#evaluate($.caps.intrinsics.mul_i64), ^#break(type_error_mul))
+    ) ;
+    lt := ^(
+        is_i64 := #block(^(
+            a := #shape($#parent.a) ;
+            b := $#parent.caps.constants.raw8_shape ;
+            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+        )) ;
+        #branch($.is_i64, ^#evaluate($.caps.intrinsics.lt_i64), ^#break(type_error_lt))
+    ) ;
+    eq := ^(
+        is_i64 := #block(^(
+            a := #shape($#parent.a) ;
+            b := $#parent.caps.constants.raw8_shape ;
+            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+        )) ;
+        #branch($.is_i64, ^#evaluate($.caps.intrinsics.eq_i64), ^(
+            is_sym := #block(^(
+                a := #shape($#parent.a) ;
+                b := $#parent.caps.constants.symbol_shape ;
+                #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+            )) ;
+            #branch($.is_sym, ^#evaluate($.caps.intrinsics.eq_sym), ^(
+                is_sh := #block(^(
+                    a := #shape($#parent.a) ;
+                    b := $#parent.caps.constants.shape_meta ;
+                    #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+                )) ;
+                #branch($.is_sh, ^#evaluate($.caps.intrinsics.eq_shape), ^#break(type_error_eq))
+            ))
+        ))
+    )
+)) ;
+
+! Wrap each runtime op so it carries its own `caps` without needing root #this !
+wrap_op := ^(
+    #block(^(
+        p_caps := $#parent.caps ;
+        p_raw  := $#parent.op_raw ;
+        sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        val := $.p_raw ; n_r := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t_al := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := bind ; 0 := $.w_c ; 1 := $.t_al ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := evaluate ; 0 := $.n_r ; s2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
+        0 := $.s1 ; 1 := $.s2 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ;
+        #break(#evaluate($#parent.c_ast.to_proto))
+    ))
+) ;
+
+op_raw := $.std_ops.add ; op_add := #evaluate($.wrap_op) ; #drop(.op_raw) ;
+op_raw := $.std_ops.sub ; op_sub := #evaluate($.wrap_op) ; #drop(.op_raw) ;
+op_raw := $.std_ops.mul ; op_mul := #evaluate($.wrap_op) ; #drop(.op_raw) ;
+op_raw := $.std_ops.lt  ; op_lt  := #evaluate($.wrap_op) ; #drop(.op_raw) ;
+op_raw := $.std_ops.eq  ; op_eq  := #evaluate($.wrap_op) ; #drop(.op_raw) ;
+
+ops_env := #block(^(
+    add := $#parent.op_add ;
+    sub := $#parent.op_sub ;
+    mul := $#parent.op_mul ;
+    lt  := $#parent.op_lt ;
+    eq  := $#parent.op_eq ;
+    ten := $#parent.TEN ;
+    two := $#parent.TWO ;
+    zero_ch := $#parent.ASCII_ZERO
+)) ;
+
+! Helper: wrap_h_env(raw_h) -> Prototype with both `caps` and `env` injected !
+wrap_h_env := ^(
+    #block(^(
+        p_caps := $#parent.caps ;
+        p_env  := $#parent.ops_env ;
+        p_raw  := $#parent.raw_h ;
+        val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+
+        sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := bind ; 0 := $.w_c ; 1 := $.t1 ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+        sym := env ; w_e := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        val := $.p_env ; n_e := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; 0 := $.n_e ; 1 := $.n_f ; t2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := bind ; 0 := $.w_e ; 1 := $.t2 ; s2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+        val := $.p_raw ; n_r := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := evaluate ; 0 := $.n_r ; s3 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
+
+        0 := $.s1 ; 1 := $.s2 ; 2 := $.s3 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ; #drop(.2) ;
+        #break(#evaluate($#parent.c_ast.to_proto))
+    ))
+) ;
+
+! ============================================================================ !
+! 1. Update Delimiter: add { } " * + - < @                                     !
+! ============================================================================ !
+lit_lbrace := #block(^( sym := { ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_rbrace := #block(^( sym := } ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_quote  := #block(^( sym := " ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_star   := #block(^( sym := * ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_plus   := #block(^( sym := + ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_minus  := #block(^( sym := - ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_lt     := #block(^( sym := < ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_at     := #block(^( sym := @ ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_eqeq   := #block(^( sym := \=\= ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_true   := #block(^( sym := true ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_false  := #block(^( sym := false ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_if     := #block(^( sym := if ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_else   := #block(^( sym := else ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+lit_while  := #block(^( sym := while ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+
+old_delim2 := #block(^( fe := $#parent.fe ; name := Delimiter ; #break(#evaluate($#parent.c_syn.get_rule)) )) ;
+new_delim2 := #block(^(
+    0 := $#parent.old_delim2 ;
+    1 := $#parent.lit_lbrace ;
+    2 := $#parent.lit_rbrace ;
+    3 := $#parent.lit_quote ;
+    4 := $#parent.lit_star ;
+    5 := $#parent.lit_plus ;
+    6 := $#parent.lit_minus ;
+    7 := $#parent.lit_lt ;
+    8 := $#parent.lit_at ;
+    #break(#evaluate($#parent.c_syn.choice))
+)) ;
+#block(^(
+    fe := $#parent.fe ; name := Delimiter ; expr := $#parent.new_delim2 ;
+    hidden := $#parent.T ; handler := $#parent.Z ;
+    #evaluate($#parent.c_syn.set_rule)
+)) ;
+
+! WordChar = not_Delimiter any (hidden, for keyword/int boundary lookahead) !
+ref_delim := #block(^( fe := $#parent.fe ; name := Delimiter ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+not_delim := #block(^( body := $#parent.ref_delim ; positive := $#parent.F ; #break(#evaluate($#parent.c_syn.lookahead)) )) ;
+word_char_expr := #block(^( 0 := $#parent.not_delim ; 1 := $#parent.c_syn.any ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^(
+    fe := $#parent.fe ; name := WordChar ; expr := $#parent.word_char_expr ;
+    hidden := $#parent.T ; handler := $#parent.Z ;
+    #evaluate($#parent.c_syn.set_rule)
+)) ;
+ref_wc := #block(^( fe := $#parent.fe ; name := WordChar ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+not_wc := #block(^( body := $#parent.ref_wc ; positive := $#parent.F ; #break(#evaluate($#parent.c_syn.lookahead)) )) ;
+
+ref_expr := #block(^( fe := $#parent.fe ; name := Expr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_postfix := #block(^( fe := $#parent.fe ; name := Postfix ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+! ============================================================================ !
+! 2. Literals: BoolTrue, BoolFalse, IntLit, StrLit                             !
+! ============================================================================ !
+
+! BoolTrue = "true" not_WordChar -> ast.value(true) !
+raw_h := ^(
+    val := $.caps.constants.true ;
+    #evaluate($.caps.ast.value)
+) ;
+h_true := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+e_true := #block(^( 0 := $#parent.lit_true ; 1 := $#parent.not_wc ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := BoolTrue ; expr := $#parent.e_true ; hidden := $#parent.F ; handler := $#parent.h_true ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! BoolFalse = "false" not_WordChar -> ast.value(false) !
+raw_h := ^(
+    val := $.caps.constants.false ;
+    #evaluate($.caps.ast.value)
+) ;
+h_false := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+e_false := #block(^( 0 := $#parent.lit_false ; 1 := $#parent.not_wc ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := BoolFalse ; expr := $#parent.e_false ; hidden := $#parent.F ; handler := $#parent.h_false ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! IntLit = [0-9]+ not_WordChar -> pure Lang arithmetic -> ast.value(i64) !
+raw_h := ^(
+    F := $.caps.constants.false ;
+    T := $.caps.constants.true ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    bs := #evaluate($.caps.syntax.cst_view_bytes) ;
+    n := $.bs.len ;
+    #bind(acc, #allocate_val($.Z, $.T) ) ;
+    #bind(i, #allocate_val($.Z, $.T) ) ;
+    loop_p := ^(
+        cond := #block(^( a := $#parent.i ; b := $#parent.n ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            digit := #block(^(
+                bytes := $#parent.bs ; index := $#parent.i ;
+                b := #evaluate($#parent.caps.intrinsics.bytes_at) ;
+                a := #evaluate($#parent.caps.intrinsics.u8_to_i64) ;
+                #drop(.b) ;
+                b := $#parent.env.zero_ch ;
+                #break(#evaluate($#parent.caps.intrinsics.sub_i64))
+            )) ;
+            acc10 := #block(^( a := $#parent.acc ; b := $#parent.env.ten ; #break(#evaluate($#parent.caps.intrinsics.mul_i64)) )) ;
+            next_acc := #block(^( a := $#parent.acc10 ; b := $#parent.digit ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            #write(.acc, $.next_acc) ;
+            #drop(.digit) ; #drop(.acc10) ; #drop(.next_acc) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            #write(.i, $.next_i) ;
+            #drop(.next_i) ;
+            #evaluate($.loop_p)
+        ), ^(
+            #drop(.cond) ;
+            val := $.acc ;
+            #evaluate($.caps.ast.value)
+        ))
+    ) ;
+    #evaluate($.loop_p)
+) ;
+h_int := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+
+digit_range := #block(^(
+    sym := 0 ; index := $#parent.Z ; lo := #evaluate($#parent.c_sym.byte_at) ; #drop(.sym) ;
+    sym := 9 ; hi := #evaluate($#parent.c_sym.byte_at) ; #drop(.sym) ;
+    #break(#evaluate($#parent.c_syn.range))
+)) ;
+digits_plus := #block(^( body := $#parent.digit_range ; min := $#parent.ONE ; max := $#parent.MAX ; #break(#evaluate($#parent.c_syn.repeat)) )) ;
+e_int := #block(^( 0 := $#parent.digits_plus ; 1 := $#parent.not_wc ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := IntLit ; expr := $#parent.e_int ; hidden := $#parent.F ; handler := $#parent.h_int ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! StrLit = '"' (not_'"' any)* '"' -> bytes_slice(raw, 1, len - 2) -> ast.value(Bytes) !
+raw_h := ^(
+    bs := #evaluate($.caps.syntax.cst_view_bytes) ;
+    inner_len := #block(^( a := $#parent.bs.len ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.sub_i64)) )) ;
+    sliced := #block(^(
+        bytes := $#parent.bs ; start := $#parent.caps.constants.u64_one ; len := $#parent.inner_len ;
+        #break(#evaluate($#parent.caps.intrinsics.bytes_slice))
+    )) ;
+    val := $.sliced ;
+    #evaluate($.caps.ast.value)
+) ;
+h_str := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+
+not_quote := #block(^( body := $#parent.lit_quote ; positive := $#parent.F ; #break(#evaluate($#parent.c_syn.lookahead)) )) ;
+str_char  := #block(^( 0 := $#parent.not_quote ; 1 := $#parent.c_syn.any ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+str_chars := #block(^( body := $#parent.str_char ; min := $#parent.Z ; max := $#parent.MAX ; #break(#evaluate($#parent.c_syn.repeat)) )) ;
+e_str := #block(^( 0 := $#parent.lit_quote ; 1 := $#parent.str_chars ; 2 := $#parent.lit_quote ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := StrLit ; expr := $#parent.e_str ; hidden := $#parent.F ; handler := $#parent.h_str ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! ============================================================================ !
+! 3. Blocks: EmptyBlock {} and NonEmptyBlock { Expr }                          !
+! ============================================================================ !
+raw_h := ^(
+    a_this := #block(^( kind := this ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    p_this := #block(^( ast := $#parent.a_this ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_p    := #block(^( val := $#parent.p_this ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    kind := block ; 0 := $.v_p ;
+    #evaluate($.caps.ast.builtin)
+) ;
+h_empty_blk := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+e_empty_blk := #block(^( 0 := $#parent.lit_lbrace ; 1 := $#parent.ref_ws ; 2 := $#parent.lit_rbrace ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := EmptyBlock ; expr := $#parent.e_empty_blk ; hidden := $#parent.F ; handler := $#parent.h_empty_blk ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+raw_h := ^(
+    body_ast := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_zero ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    p_body   := #block(^( ast := $#parent.body_ast ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_p      := #block(^( val := $#parent.p_body ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    kind := block ; 0 := $.v_p ;
+    #evaluate($.caps.ast.builtin)
+) ;
+h_blk := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+e_blk := #block(^( 0 := $#parent.lit_lbrace ; 1 := $#parent.ref_ws ; 2 := $#parent.ref_expr ; 3 := $#parent.ref_ws ; 4 := $#parent.lit_rbrace ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := NonEmptyBlock ; expr := $#parent.e_blk ; hidden := $#parent.F ; handler := $#parent.h_blk ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! Prepend EmptyBlock, NonEmptyBlock, StrLit, IntLit, BoolTrue, BoolFalse to Atom !
+old_atom2 := #block(^( fe := $#parent.fe ; name := Atom ; #break(#evaluate($#parent.c_syn.get_rule)) )) ;
+ref_empty_blk := #block(^( fe := $#parent.fe ; name := EmptyBlock    ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_blk       := #block(^( fe := $#parent.fe ; name := NonEmptyBlock ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_str       := #block(^( fe := $#parent.fe ; name := StrLit        ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_int       := #block(^( fe := $#parent.fe ; name := IntLit        ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_btrue     := #block(^( fe := $#parent.fe ; name := BoolTrue      ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_bfalse    := #block(^( fe := $#parent.fe ; name := BoolFalse     ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+new_atom2 := #block(^(
+    0 := $#parent.ref_empty_blk ;
+    1 := $#parent.ref_blk ;
+    2 := $#parent.ref_str ;
+    3 := $#parent.ref_int ;
+    4 := $#parent.ref_btrue ;
+    5 := $#parent.ref_bfalse ;
+    6 := $#parent.old_atom2 ;
+    #break(#evaluate($#parent.c_syn.choice))
+)) ;
+#block(^( fe := $#parent.fe ; name := Atom ; expr := $#parent.new_atom2 ; hidden := $#parent.F ; handler := $#parent.Z ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! ============================================================================ !
+! 4. Smart `sym := RHS` Pointer/Value Dispatcher (Upgrading BindInfix)         !
+! ============================================================================ !
+raw_h := ^(
+    F := $.caps.constants.false ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    lhs := #block(^( node := $#parent.node ; index := $#parent.Z ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    rhs := #block(^( node := $#parent.node ; index := $#parent.ONE ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+
+    ! Common AST pieces !
+    n_F   := #block(^( val := $#parent.F ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    w_tmp := #block(^( sym := __bind_v ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+    a_this := #block(^( kind := this ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    a_par  := #block(^( kind := parent ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    p_tmp  := #block(^( kind := field ; 0 := $#parent.a_this ; 1 := $#parent.w_tmp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    v_tmp  := #block(^( kind := deref ; 0 := $#parent.p_tmp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    drop_tmp := #block(^( kind := drop ; 0 := $#parent.p_tmp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+    ! stmt1: #bind(__bind_v, #allocate_val(rhs, false)) !
+    al_rhs := #block(^( kind := allocate_val ; 0 := $#parent.rhs ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    stmt1  := #block(^( kind := bind ; 0 := $#parent.w_tmp ; 1 := $#parent.al_rhs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+    ! cond_is_ptr: #block(^( a := #shape($#parent.__bind_v) ; b := pointer_shape ; #break(#evaluate(eq_shape)) )) !
+    par_tmp := #block(^( kind := field ; 0 := $#parent.a_par ; 1 := $#parent.w_tmp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    par_v   := #block(^( kind := deref ; 0 := $#parent.par_tmp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    sh_v    := #block(^( kind := shape ; 0 := $#parent.par_v ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    w_a     := #block(^( sym := a ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+    w_b     := #block(^( sym := b ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+    al_a    := #block(^( kind := allocate_val ; 0 := $#parent.sh_v ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    b_a     := #block(^( kind := bind ; 0 := $#parent.w_a ; 1 := $#parent.al_a ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    v_ps    := #block(^( val := $#parent.caps.constants.pointer_shape ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    al_b    := #block(^( kind := allocate_val ; 0 := $#parent.v_ps ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    b_b     := #block(^( kind := bind ; 0 := $#parent.w_b ; 1 := $#parent.al_b ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    v_eqs   := #block(^( val := $#parent.caps.intrinsics.eq_shape ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    ev_eqs  := #block(^( kind := evaluate ; 0 := $#parent.v_eqs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    brk_eq  := #block(^( kind := break ; 0 := $#parent.ev_eqs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    cond_seq := #block(^( 0 := $#parent.b_a ; 1 := $#parent.b_b ; 2 := $#parent.brk_eq ; #break(#evaluate($#parent.caps.ast.seq)) )) ;
+    cond_pr  := #block(^( ast := $#parent.cond_seq ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_cond_p := #block(^( val := $#parent.cond_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    cond_blk := #block(^( kind := block ; 0 := $#parent.v_cond_p ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+    ! fallback_proto: ^(#bind(lhs, #allocate_val($.__bind_v, false)) ; #drop(.__bind_v)) !
+    al_v    := #block(^( kind := allocate_val ; 0 := $#parent.v_tmp ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    bind_fb := #block(^( kind := bind ; 0 := $#parent.lhs ; 1 := $#parent.al_v ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    fb_seq  := #block(^( 0 := $#parent.bind_fb ; 1 := $#parent.drop_tmp ; #break(#evaluate($#parent.caps.ast.seq)) )) ;
+    fb_pr   := #block(^( ast := $#parent.fb_seq ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_fb_p  := #block(^( val := $#parent.fb_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+
+    ! drop_proto: ^(#drop(.__bind_v)) !
+    dr_pr   := #block(^( ast := $#parent.drop_tmp ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_dr_p  := #block(^( val := $#parent.dr_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+
+    ! ptr_branch: ^(#branch(#bind(lhs, $.__bind_v), drop_proto, fallback_proto)) !
+    try_bind := #block(^( kind := bind ; 0 := $#parent.lhs ; 1 := $#parent.v_tmp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    inner_br := #block(^( kind := branch ; 0 := $#parent.try_bind ; 1 := $#parent.v_dr_p ; 2 := $#parent.v_fb_p ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    ptr_pr   := #block(^( ast := $#parent.inner_br ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_ptr_p  := #block(^( val := $#parent.ptr_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+
+    ! outer_br: #branch(cond_blk, ptr_branch, fallback_proto) !
+    outer_br := #block(^( kind := branch ; 0 := $#parent.cond_blk ; 1 := $#parent.v_ptr_p ; 2 := $#parent.v_fb_p ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    0 := $.stmt1 ; 1 := $.outer_br ;
+    #evaluate($.caps.ast.seq)
+) ;
+h_smart_bind := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+
+e_bind := #block(^( fe := $#parent.fe ; name := BindInfix ; #break(#evaluate($#parent.c_syn.get_rule)) )) ;
+#block(^( fe := $#parent.fe ; name := BindInfix ; expr := $#parent.e_bind ; hidden := $#parent.F ; handler := $#parent.h_smart_bind ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! ============================================================================ !
+! 5. Assignment `ptr = val` (AssignInfix = Postfix _ "=" not_"=" _ Infix)         !
+! ============================================================================ !
+raw_h := ^(
+    lhs := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_zero ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    rhs := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_one  ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    kind := write ; 0 := $.lhs ; 1 := $.rhs ;
+    #evaluate($.caps.ast.builtin)
+) ;
+h_assign := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+
+lit_eq1 := #block(^( sym := \= ; #break(#evaluate($#parent.c_syn.lit)) )) ;
+not_eq1 := #block(^( body := $#parent.lit_eq1 ; positive := $#parent.F ; #break(#evaluate($#parent.c_syn.lookahead)) )) ;
+e_assign := #block(^(
+    0 := $#parent.ref_postfix ; 1 := $#parent.ref_ws ;
+    2 := $#parent.lit_eq1 ; 3 := $#parent.not_eq1 ;
+    4 := $#parent.ref_ws ; 5 := $#parent.ref_infix ;
+    #break(#evaluate($#parent.c_syn.seq))
+)) ;
+#block(^( fe := $#parent.fe ; name := AssignInfix ; expr := $#parent.e_assign ; hidden := $#parent.F ; handler := $#parent.h_assign ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! ============================================================================ !
+! 6. Binary Operator AST Builder & Precedence Ladder (* -> +- -> <== -> @)     !
+!    Uses collision-free sym_a = intern_bytes(cst_view_bytes(node)) + __op_b   !
+! ============================================================================ !
+build_binop_ast := ^(
+    #block(^(
+        caps := $#parent.caps ;
+        b_sym_a := $#parent.b_sym_a ;
+        b_lhs := $#parent.b_lhs ;
+        b_rhs := $#parent.b_rhs ;
+        b_op := $#parent.b_op ;
+        F := $.caps.constants.false ;
+        n_F := #block(^( val := $#parent.F ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+        w_sa := #block(^( sym := $#parent.b_sym_a ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+        w_sb := #block(^( sym := __op_b ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+        w_a  := #block(^( sym := a ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+        w_b  := #block(^( sym := b ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+        a_par := #block(^( kind := parent ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+        ! #bind(sym_a, #allocate_val(lhs, false)) !
+        al_l := #block(^( kind := allocate_val ; 0 := $#parent.b_lhs ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        s1   := #block(^( kind := bind ; 0 := $#parent.w_sa ; 1 := $#parent.al_l ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+        ! #bind(__op_b, #allocate_val(rhs, false)) !
+        al_r := #block(^( kind := allocate_val ; 0 := $#parent.b_rhs ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        s2   := #block(^( kind := bind ; 0 := $#parent.w_sb ; 1 := $#parent.al_r ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+        ! Inside #block: copy a, b from #parent, drop both from #parent, #break(#evaluate(op_proto)) !
+        p_sa := #block(^( kind := field ; 0 := $#parent.a_par ; 1 := $#parent.w_sa ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        p_sb := #block(^( kind := field ; 0 := $#parent.a_par ; 1 := $#parent.w_sb ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        d_sa := #block(^( kind := deref ; 0 := $#parent.p_sa ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        d_sb := #block(^( kind := deref ; 0 := $#parent.p_sb ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+        al_a := #block(^( kind := allocate_val ; 0 := $#parent.d_sa ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        ba   := #block(^( kind := bind ; 0 := $#parent.w_a ; 1 := $#parent.al_a ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        al_b := #block(^( kind := allocate_val ; 0 := $#parent.d_sb ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        bb   := #block(^( kind := bind ; 0 := $#parent.w_b ; 1 := $#parent.al_b ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        dr_a := #block(^( kind := drop ; 0 := $#parent.p_sa ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        dr_b := #block(^( kind := drop ; 0 := $#parent.p_sb ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        v_op := #block(^( val := $#parent.b_op ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+        ev_o := #block(^( kind := evaluate ; 0 := $#parent.v_op ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+        br_o := #block(^( kind := break ; 0 := $#parent.ev_o ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+        bseq := #block(^( 0 := $#parent.ba ; 1 := $#parent.bb ; 2 := $#parent.dr_a ; 3 := $#parent.dr_b ; 4 := $#parent.br_o ; #break(#evaluate($#parent.caps.ast.seq)) )) ;
+        bpr  := #block(^( ast := $#parent.bseq ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+        v_bp := #block(^( val := $#parent.bpr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+        s3   := #block(^( kind := block ; 0 := $#parent.v_bp ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+        0 := $.s1 ; 1 := $.s2 ; 2 := $.s3 ;
+        #break(#evaluate($#parent.caps.ast.seq))
+    ))
+) ;
+
+! Re-pack ops_env2 with build_binop_ast included !
+ops_env2 := #block(^(
+    add := $#parent.op_add ;
+    sub := $#parent.op_sub ;
+    mul := $#parent.op_mul ;
+    lt  := $#parent.op_lt ;
+    eq  := $#parent.op_eq ;
+    ten := $#parent.TEN ;
+    two := $#parent.TWO ;
+    zero_ch := $#parent.ASCII_ZERO ;
+    binop := $#parent.build_binop_ast
+)) ;
+
+wrap_h_env2 := ^(
+    #block(^(
+        p_caps := $#parent.caps ;
+        p_env  := $#parent.ops_env2 ;
+        p_raw  := $#parent.raw_h ;
+        val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+
+        sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := bind ; 0 := $.w_c ; 1 := $.t1 ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+        sym := env ; w_e := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        val := $.p_env ; n_e := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; 0 := $.n_e ; 1 := $.n_f ; t2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := bind ; 0 := $.w_e ; 1 := $.t2 ; s2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+
+        val := $.p_raw ; n_r := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := evaluate ; 0 := $.n_r ; s3 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
+
+        0 := $.s1 ; 1 := $.s2 ; 2 := $.s3 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ; #drop(.2) ;
+        #break(#evaluate($#parent.c_ast.to_proto))
+    ))
+) ;
+
+! --- MulExpr = Prefix (_ "*" _ Prefix)* --- !
+raw_h := ^(
+    T := $.caps.constants.true ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    #bind(acc, #allocate_val(#block(^( node := $#parent.node ; index := $#parent.Z ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )), $.T)) ;
+    #bind(i, #allocate_val($.ONE, $.T) ) ;
+    b_sym_a := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
+    loop_p := ^(
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            b_lhs := $.acc ;
+            b_rhs := #block(^( node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+            b_op  := $.env.mul ;
+            #write(.acc, #evaluate($.env.binop)) ;
+            #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.b_op) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            #write(.i, $.next_i) ;
+            #drop(.next_i) ;
+            #evaluate($.loop_p)
+        ), ^(
+            #drop(.cond) ;
+            $.acc
+        ))
+    ) ;
+    #evaluate($.loop_p)
+) ;
+h_mul := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
+
+mul_body := #block(^( 0 := $#parent.ref_ws ; 1 := $#parent.lit_star ; 2 := $#parent.ref_ws ; 3 := $#parent.ref_prefix ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+mul_tail := #block(^( body := $#parent.mul_body ; min := $#parent.Z ; max := $#parent.MAX ; #break(#evaluate($#parent.c_syn.repeat)) )) ;
+e_mul := #block(^( 0 := $#parent.ref_prefix ; 1 := $#parent.mul_tail ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := MulExpr ; expr := $#parent.e_mul ; hidden := $#parent.F ; handler := $#parent.h_mul ; #evaluate($#parent.c_syn.set_rule) )) ;
+ref_mul := #block(^( fe := $#parent.fe ; name := MulExpr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+! --- AddOp = "+" / "-" ; AddExpr = MulExpr (_ AddOp _ MulExpr)* --- !
+e_addop := #block(^( 0 := $#parent.lit_plus ; 1 := $#parent.lit_minus ; #break(#evaluate($#parent.c_syn.choice)) )) ;
+#block(^( fe := $#parent.fe ; name := AddOp ; expr := $#parent.e_addop ; hidden := $#parent.F ; handler := $#parent.Z ; #evaluate($#parent.c_syn.set_rule) )) ;
+ref_addop := #block(^( fe := $#parent.fe ; name := AddOp ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+raw_h := ^(
+    T := $.caps.constants.true ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    #bind(acc, #allocate_val(#block(^( node := $#parent.node ; index := $#parent.Z ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )), $.T)) ;
+    #bind(i, #allocate_val($.ONE, $.T) ) ;
+    b_sym_a := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
+    loop_p := ^(
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            op_sym := #block(^( node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_child_view_sym)) )) ;
+            rhs_idx := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            b_lhs := $.acc ;
+            b_rhs := #block(^( node := $#parent.node ; index := $#parent.rhs_idx ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+            is_plus := #block(^( a := $#parent.op_sym ; b := + ; #break(#evaluate($#parent.caps.intrinsics.eq_sym)) )) ;
+            b_op := #branch($.is_plus, ^$.env.add, ^$.env.sub) ;
+            #write(.acc, #evaluate($.env.binop)) ;
+            #drop(.op_sym) ; #drop(.rhs_idx) ; #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.is_plus) ; #drop(.b_op) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            #write(.i, $.next_i) ;
+            #drop(.next_i) ;
+            #evaluate($.loop_p)
+        ), ^(
+            #drop(.cond) ;
+            $.acc
+        ))
+    ) ;
+    #evaluate($.loop_p)
+) ;
+h_add := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
+
+add_body := #block(^( 0 := $#parent.ref_ws ; 1 := $#parent.ref_addop ; 2 := $#parent.ref_ws ; 3 := $#parent.ref_mul ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+add_tail := #block(^( body := $#parent.add_body ; min := $#parent.Z ; max := $#parent.MAX ; #break(#evaluate($#parent.c_syn.repeat)) )) ;
+e_add := #block(^( 0 := $#parent.ref_mul ; 1 := $#parent.add_tail ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := AddExpr ; expr := $#parent.e_add ; hidden := $#parent.F ; handler := $#parent.h_add ; #evaluate($#parent.c_syn.set_rule) )) ;
+ref_add := #block(^( fe := $#parent.fe ; name := AddExpr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+! --- CmpOp = "==" / "<" ; CmpExpr = AddExpr (_ CmpOp _ AddExpr)* --- !
+e_cmpop := #block(^( 0 := $#parent.lit_eqeq ; 1 := $#parent.lit_lt ; #break(#evaluate($#parent.c_syn.choice)) )) ;
+#block(^( fe := $#parent.fe ; name := CmpOp ; expr := $#parent.e_cmpop ; hidden := $#parent.F ; handler := $#parent.Z ; #evaluate($#parent.c_syn.set_rule) )) ;
+ref_cmpop := #block(^( fe := $#parent.fe ; name := CmpOp ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+raw_h := ^(
+    T := $.caps.constants.true ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    #bind(acc, #allocate_val(#block(^( node := $#parent.node ; index := $#parent.Z ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )), $.T)) ;
+    #bind(i, #allocate_val($.ONE, $.T) ) ;
+    b_sym_a := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
+    loop_p := ^(
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            op_sym := #block(^( node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_child_view_sym)) )) ;
+            rhs_idx := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            b_lhs := $.acc ;
+            b_rhs := #block(^( node := $#parent.node ; index := $#parent.rhs_idx ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+            is_lt := #block(^( a := $#parent.op_sym ; b := < ; #break(#evaluate($#parent.caps.intrinsics.eq_sym)) )) ;
+            b_op := #branch($.is_lt, ^$.env.lt, ^$.env.eq) ;
+            #write(.acc, #evaluate($.env.binop)) ;
+            #drop(.op_sym) ; #drop(.rhs_idx) ; #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.is_lt) ; #drop(.b_op) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            #write(.i, $.next_i) ;
+            #drop(.next_i) ;
+            #evaluate($.loop_p)
+        ), ^(
+            #drop(.cond) ;
+            $.acc
+        ))
+    ) ;
+    #evaluate($.loop_p)
+) ;
+h_cmp := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
+
+cmp_body := #block(^( 0 := $#parent.ref_ws ; 1 := $#parent.ref_cmpop ; 2 := $#parent.ref_ws ; 3 := $#parent.ref_add ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+cmp_tail := #block(^( body := $#parent.cmp_body ; min := $#parent.Z ; max := $#parent.MAX ; #break(#evaluate($#parent.c_syn.repeat)) )) ;
+e_cmp := #block(^( 0 := $#parent.ref_add ; 1 := $#parent.cmp_tail ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := CmpExpr ; expr := $#parent.e_cmp ; hidden := $#parent.F ; handler := $#parent.h_cmp ; #evaluate($#parent.c_syn.set_rule) )) ;
+ref_cmp := #block(^( fe := $#parent.fe ; name := CmpExpr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+! --- CoroExpr = CmpExpr (_ "@" _ CmpExpr)* -> left-fold #resume(lhs, rhs) --- !
+raw_h := ^(
+    T := $.caps.constants.true ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    #bind(acc, #allocate_val(#block(^( node := $#parent.node ; index := $#parent.Z ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )), $.T)) ;
+    #bind(i, #allocate_val($.ONE, $.T) ) ;
+    loop_p := ^(
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            rhs := #block(^( node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+            nxt := #block(^( kind := resume ; 0 := $#parent.acc ; 1 := $#parent.rhs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+            #write(.acc, $.nxt) ;
+            #drop(.rhs) ; #drop(.nxt) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            #write(.i, $.next_i) ;
+            #drop(.next_i) ;
+            #evaluate($.loop_p)
+        ), ^(
+            #drop(.cond) ;
+            $.acc
+        ))
+    ) ;
+    #evaluate($.loop_p)
+) ;
+h_coro := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
+
+coro_body := #block(^( 0 := $#parent.ref_ws ; 1 := $#parent.lit_at ; 2 := $#parent.ref_ws ; 3 := $#parent.ref_cmp ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+coro_tail := #block(^( body := $#parent.coro_body ; min := $#parent.Z ; max := $#parent.MAX ; #break(#evaluate($#parent.c_syn.repeat)) )) ;
+e_coro := #block(^( 0 := $#parent.ref_cmp ; 1 := $#parent.coro_tail ; #break(#evaluate($#parent.c_syn.seq)) )) ;
+#block(^( fe := $#parent.fe ; name := CoroExpr ; expr := $#parent.e_coro ; hidden := $#parent.F ; handler := $#parent.h_coro ; #evaluate($#parent.c_syn.set_rule) )) ;
+ref_coro := #block(^( fe := $#parent.fe ; name := CoroExpr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+
+! ============================================================================ !
+! 7. English-Order Suffix Control Flow:                                        !
+!    IfExpr    = CoroExpr _ "if" not_WordChar _ CoroExpr _ "else" not_WordChar _ ControlExpr !
+!    WhileExpr = CoroExpr _ "while" not_WordChar _ CoroExpr                       !
+! ============================================================================ !
+raw_h := ^(
+    e_then := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_zero ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    e_cond := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_one  ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    e_else := #block(^( node := $#parent.node ; index := $#parent.env.two                 ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    p_then := #block(^( ast := $#parent.e_then ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    p_else := #block(^( ast := $#parent.e_else ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_then := #block(^( val := $#parent.p_then ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    v_else := #block(^( val := $#parent.p_else ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    kind := branch ; 0 := $.e_cond ; 1 := $.v_then ; 2 := $.v_else ;
+    #evaluate($.caps.ast.builtin)
+) ;
+h_if := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
+
+raw_h := ^(
+    F := $.caps.constants.false ;
+    n_F := #block(^( val := $#parent.F ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    e_body := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_zero ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    e_cond := #block(^( node := $#parent.node ; index := $#parent.caps.constants.u64_one  ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
+    ! Unique loop slot name from CST view bytes so nested while loops never collide !
+    w_sym := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
+    w_loop := #block(^( sym := $#parent.w_sym ; #break(#evaluate($#parent.caps.ast.word)) )) ;
+    a_this := #block(^( kind := this ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    p_loop := #block(^( kind := field ; 0 := $#parent.a_this ; 1 := $#parent.w_loop ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    d_loop := #block(^( kind := deref ; 0 := $#parent.p_loop ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    ev_rec := #block(^( kind := evaluate ; 0 := $#parent.d_loop ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+
+    ! true_branch: ^(body ; #evaluate($.__w)) !
+    tb_seq := #block(^( 0 := $#parent.e_body ; 1 := $#parent.ev_rec ; #break(#evaluate($#parent.caps.ast.seq)) )) ;
+    tb_pr  := #block(^( ast := $#parent.tb_seq ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_tb   := #block(^( val := $#parent.tb_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+
+    ! false_branch: ^#this !
+    fb_pr  := #block(^( ast := $#parent.a_this ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_fb   := #block(^( val := $#parent.fb_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+
+    ! step_proto: ^#branch(cond, true_branch, false_branch) !
+    br_ast := #block(^( kind := branch ; 0 := $#parent.e_cond ; 1 := $#parent.v_tb ; 2 := $#parent.v_fb ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    st_pr  := #block(^( ast := $#parent.br_ast ; #break(#evaluate($#parent.caps.ast.to_proto)) )) ;
+    v_st   := #block(^( val := $#parent.st_pr ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+
+    ! #bind(__w, #allocate_val(step_proto, false)) ; #evaluate($.__w) ; #drop(.__w) !
+    al_st  := #block(^( kind := allocate_val ; 0 := $#parent.v_st ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    s1     := #block(^( kind := bind ; 0 := $#parent.w_loop ; 1 := $#parent.al_st ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    s3     := #block(^( kind := drop ; 0 := $#parent.p_loop ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
+    0 := $.s1 ; 1 := $.ev_rec ; 2 := $.s3 ;
+    #evaluate($.caps.ast.seq)
+) ;
+h_while := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
+
+ref_ctrl := #block(^( fe := $#parent.fe ; name := ControlExpr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+e_if := #block(^(
+    0 := $#parent.ref_coro ; 1 := $#parent.ref_ws ;
+    2 := $#parent.lit_if ; 3 := $#parent.not_wc ; 4 := $#parent.ref_ws ;
+    5 := $#parent.ref_coro ; 6 := $#parent.ref_ws ;
+    7 := $#parent.lit_else ; 8 := $#parent.not_wc ; 9 := $#parent.ref_ws ;
+    10 := $#parent.ref_ctrl ;
+    #break(#evaluate($#parent.c_syn.seq))
+)) ;
+#block(^( fe := $#parent.fe ; name := IfExpr ; expr := $#parent.e_if ; hidden := $#parent.F ; handler := $#parent.h_if ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+e_while := #block(^(
+    0 := $#parent.ref_coro ; 1 := $#parent.ref_ws ;
+    2 := $#parent.lit_while ; 3 := $#parent.not_wc ; 4 := $#parent.ref_ws ;
+    5 := $#parent.ref_coro ;
+    #break(#evaluate($#parent.c_syn.seq))
+)) ;
+#block(^( fe := $#parent.fe ; name := WhileExpr ; expr := $#parent.e_while ; hidden := $#parent.F ; handler := $#parent.h_while ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+ref_if    := #block(^( fe := $#parent.fe ; name := IfExpr    ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_while := #block(^( fe := $#parent.fe ; name := WhileExpr ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+e_ctrl := #block(^( 0 := $#parent.ref_if ; 1 := $#parent.ref_while ; 2 := $#parent.ref_coro ; #break(#evaluate($#parent.c_syn.choice)) )) ;
+#block(^( fe := $#parent.fe ; name := ControlExpr ; expr := $#parent.e_ctrl ; hidden := $#parent.F ; handler := $#parent.Z ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! Final Infix = BindInfix / AssignInfix / ControlExpr !
+ref_bind2  := #block(^( fe := $#parent.fe ; name := BindInfix   ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+ref_assign := #block(^( fe := $#parent.fe ; name := AssignInfix ; #break(#evaluate($#parent.c_syn.ref)) )) ;
+e_infix_final := #block(^( 0 := $#parent.ref_bind2 ; 1 := $#parent.ref_assign ; 2 := $#parent.ref_ctrl ; #break(#evaluate($#parent.c_syn.choice)) )) ;
+#block(^( fe := $#parent.fe ; name := Infix ; expr := $#parent.e_infix_final ; hidden := $#parent.F ; handler := $#parent.Z ; #evaluate($#parent.c_syn.set_rule) )) ;
+
+! Export full Layer 1 frontend as fe_layer1 !
+fe_layer1 := $.fe ;
+$.fe_layer1

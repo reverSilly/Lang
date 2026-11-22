@@ -1,0 +1,69 @@
+! ============================================================================ !
+! tests/test_layer1.lang — Pure Layer 1 End-to-End Test Suite                  !
+! Parsed & executed by fe_layer1 self-bootstrapped from 5-symbol Layer 0       !
+! ============================================================================ !
+
+assert_true := ^(
+    #branch($.cond, ^ok, ^#deref(#field(#this, __assertion_failed__)))
+) ;
+
+! 1. Literals: i64, Boolean, Bytes !
+a := 42 ;
+s := "hello_layer1" ;
+cond := $.a == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.s.len == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. Smart `:=` dispatcher & location-owned mutability !
+x := #allocate_val(10, true) ;
+.x = 25 ;
+p := .x ;
+cond := $.x == 25 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $$.p == 25 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 3. Precedence, left-associativity & arbitrary nesting of Shape-dispatched ops !
+r1 := (1 + 2) * (3 + 4) ;
+cond := $.r1 == 21 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+r2 := 2 + 3 * 4 ;
+cond := $.r2 == 14 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+r3 := 10 - 3 - 2 ;
+cond := $.r3 == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Symbol & Shape equality via `==` dispatcher !
+cond := foo == foo ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := #shape(42) == #shape(0) ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 4. English-order suffix `if/else` !
+v_if1 := 100 if ($.x == 25) else 0 ;
+v_if2 := 100 if ($.x < 10) else 200 ;
+cond := $.v_if1 == 100 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.v_if2 == 200 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 5. English-order suffix `while`: sum 1..10 == 55 !
+sum := #allocate_val(0, true) ;
+idx := #allocate_val(1, true) ;
+(.sum = $.sum + $.idx ; .idx = $.idx + 1) while ($.idx < 11) ;
+cond := $.sum == 55 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 6. Closed struct blocks `{}` and `{ expr }` !
+empty_u := {} ;
+pt := { px := 10 ; py := 32 } ;
+cond := $.pt.px + $.pt.py == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 7. Coroutines with `@` (`#resume`) !
+worker := #new(^(
+    v1 := $#in ;
+    #caller @ ($.v1 * 2) ;
+    v2 := $#in ;
+    #break($.v2 + 100)
+)) ;
+$.worker @ 10 ;
+out1 := $#in ;
+cond := $.out1 == 20 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+$.worker @ 5 ;
+out2 := $#in ;
+cond := $.out2 == 105 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+all_layer1_tests_passed
