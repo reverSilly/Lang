@@ -55,7 +55,7 @@ enable_testing()
 foreach(test_name IN ITEMS test_step1 test_step2 test_step3 test_capabilities test_ffi)
     add_executable(${test_name} tests/${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE lang_core)
-    target_compile_options(${test_name} PRIVATE -Wall -Wextra)
+    target_compile_options(${test_name} PRIVATE -Wall -Wextra -UNDEBUG)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 

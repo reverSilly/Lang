@@ -97,7 +97,9 @@ static void test_unified_open_frame_shape_and_flatten() {
     SymbolId sym_uninit = rt.symbols.intern("uninit_slot");
 
     FrameSlot* slot_x = frame->allocate(rt.shapes.raw4_shape, false);
-    assert(frame->bind(sym_x, slot_x->pointer()));
+    bool ok_x = frame->bind(sym_x, slot_x->pointer());
+    assert(ok_x);
+    (void)ok_x;
 
     // Unified #field on open frame pointer (uses live_shape directly, zero special case!):
     // Uninitialized slot is NOT yet Live, so rt.field returns null until written!
@@ -119,16 +121,22 @@ static void test_unified_open_frame_shape_and_flatten() {
     assert(last_fe.sym == 0 && last_fe.slot_state() == SlotState::Live);
     assert(frame->frame_addr() + last_fe.offset() == slot_tmp->data_addr());
 
-    assert(frame->bind(sym_tmp, slot_tmp->pointer()));
+    bool ok_tmp = frame->bind(sym_tmp, slot_tmp->pointer());
+    assert(ok_tmp);
+    (void)ok_tmp;
     frame->drop_in_chain(slot_tmp->pointer());
     assert(rt.field(frame->frame_pointer(), sym_tmp).is_null());
 
     FrameSlot* slot_u = frame->allocate(rt.shapes.raw8_shape, false);
-    assert(frame->bind(sym_uninit, slot_u->pointer()));
+    bool ok_uninit = frame->bind(sym_uninit, slot_u->pointer());
+    assert(ok_uninit);
+    (void)ok_uninit;
 
     uint64_t v777 = 777;
     FrameSlot* slot_y = frame->allocate_val(Value::from_pod(rt.shapes.raw8_shape, v777), true);
-    assert(frame->bind(sym_y, slot_y->pointer()));
+    bool ok_y = frame->bind(sym_y, slot_y->pointer());
+    assert(ok_y);
+    (void)ok_y;
 
     Value closed = frame->close_and_flatten(rt.shapes);
     const auto* cs = closed.shape();
