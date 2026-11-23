@@ -16,8 +16,7 @@ using namespace reverSilly::Lang::Eval;
 
 static void test_pure_layer0_slots_and_intrinsics() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -40,8 +39,7 @@ static void test_pure_layer0_slots_and_intrinsics() {
 
 static void test_block_flatten_break_and_branch() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -91,8 +89,7 @@ static void test_block_flatten_break_and_branch() {
 
 static void test_coroutines_unified_frame_reflection_and_destroy() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -184,8 +181,7 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
 
 static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -204,6 +200,7 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         #bind(c_syn, #allocate_val(#deref(#field(#field(#this, caps), syntax)), #deref(#field(#this, F)))) ;
 
         #bind(fe, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), new_layer0))), #deref(#field(#this, F)))) ;
+        #bind(arena, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), new_arena))), #deref(#field(#this, F)))) ;
 
         #bind(val, #allocate_val(#deref(#field(#this, F)), #deref(#field(#this, F)))) ;
         #bind(n_F, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
@@ -355,6 +352,8 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         #bind(src, #allocate_val(#deref(#field(#this, target_src)), #deref(#field(#this, F)))) ;
         #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), parse))), #deref(#field(#this, F)))) ;
         #bind(parsed_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), to_proto))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#field(#this, c_ast), destroy_arena))) ;
+        #evaluate(#deref(#field(#field(#this, c_syn), destroy_frontend))) ;
         #evaluate(#deref(#field(#this, parsed_proto)))
     )";
 

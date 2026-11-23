@@ -17,8 +17,7 @@ using namespace reverSilly::Lang::Eval;
 
 static void test_io_read_write_and_symbols_intern() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -50,8 +49,7 @@ static void test_io_read_write_and_symbols_intern() {
 
 static void test_intrinsics_bytes_u8_and_eq_shape() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -100,8 +98,7 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
 
 static void test_syntax_cst_view_bytes_and_child_view_sym() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install(rt);
+    install_all_capabilities(rt);
     Evaluator ev(rt);
     Frontend fe;
 
@@ -134,6 +131,7 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
         #bind(T, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), true)), #deref(#field(#this, F)))) ;
         #bind(Z, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), u64_zero)), #deref(#field(#this, F)))) ;
         #bind(fe, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), new_layer0))), #deref(#field(#this, F)))) ;
+        #bind(arena, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), new_arena))), #deref(#field(#this, F)))) ;
 
         #bind(sym, #allocate_val(:, #deref(#field(#this, F)))) ;
         #bind(lit_colon, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), lit))), #deref(#field(#this, F)))) ;
@@ -214,6 +212,8 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
         #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
         #bind(p2, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
         #drop(#field(#this, ast)) ;
+        #evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
+        #evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
         #evaluate(#deref(#field(#this, p2)))
     )"));
     assert(child_sym.shape_addr == rt.shapes.symbol_shape);
@@ -222,8 +222,7 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
 
 void test_install_runtime_isolation() {
     RuntimeContext rt;
-    CapabilityHost caps;
-    caps.install_runtime(rt);
+    install_runtime_capabilities(rt);
 
     ConstructingFrame* root = rt.current_frame();
     PointerLayout caps_ptr = root->field(rt.symbols.intern("capabilities"));

@@ -3,9 +3,9 @@
 #include <limits>
 #include <stdexcept>
 
-namespace reverSilly::Lang::Eval {
+namespace reverSilly::Lang::Eval::CapabilitiesDetail {
 
-Runtime::Value CapabilityHost::build_constants_module(Runtime::RuntimeContext& rt) {
+Runtime::Value build_constants_module(Runtime::RuntimeContext& rt) {
     auto& s = rt.shapes;
     auto shape_val = [&](uint64_t addr) {
         return Runtime::Value::from_pod(s.shape_meta, *reinterpret_cast<const Runtime::ShapeLayout*>(addr));
@@ -32,7 +32,7 @@ Runtime::Value CapabilityHost::build_constants_module(Runtime::RuntimeContext& r
     });
 }
 
-Runtime::Value CapabilityHost::build_field_map_module(Runtime::RuntimeContext& rt) {
+Runtime::Value build_field_map_module(Runtime::RuntimeContext& rt) {
     return build_struct(rt, {
         {"empty", native_proto(rt, "capabilities.field_map.empty", [](Evaluator& ev) {
             return Runtime::Value::from_pod(ev.rt.shapes.field_map_shape, Runtime::FieldMapArena::empty());
@@ -73,7 +73,7 @@ Runtime::Value CapabilityHost::build_field_map_module(Runtime::RuntimeContext& r
     });
 }
 
-Runtime::Value CapabilityHost::build_symbols_module(Runtime::RuntimeContext& rt) {
+Runtime::Value build_symbols_module(Runtime::RuntimeContext& rt) {
     return build_struct(rt, {
         {"byte_len", native_proto(rt, "capabilities.symbols.byte_len", [](Evaluator& ev) {
             auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
@@ -98,7 +98,7 @@ Runtime::Value CapabilityHost::build_symbols_module(Runtime::RuntimeContext& rt)
     });
 }
 
-Runtime::Value CapabilityHost::build_intrinsics_module(Runtime::RuntimeContext& rt) {
+Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
     return build_struct(rt, {
         {"add_i64", native_proto(rt, "capabilities.intrinsics.add_i64", [](Evaluator& ev) {
             return Runtime::Value::from_pod<int64_t>(
@@ -149,4 +149,4 @@ Runtime::Value CapabilityHost::build_intrinsics_module(Runtime::RuntimeContext& 
     });
 }
 
-} // namespace reverSilly::Lang::Eval
+} // namespace reverSilly::Lang::Eval::CapabilitiesDetail

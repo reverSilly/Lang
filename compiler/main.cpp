@@ -27,8 +27,7 @@ int main(int argc, char** argv) {
 
     try {
         reverSilly::Lang::Runtime::RuntimeContext rt;
-        reverSilly::Lang::Eval::CapabilityHost caps;
-        caps.install(rt);
+        reverSilly::Lang::Eval::install_all_capabilities(rt);
         reverSilly::Lang::Eval::Evaluator ev(rt);
         reverSilly::Lang::Parser::Frontend fe;
 

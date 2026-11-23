@@ -26,6 +26,7 @@
 
 ! --- Create fresh Layer 0 frontend --- !
 #bind(fe, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), new_layer0))), #deref(#field(#this, F)))) ;
+#bind(arena, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), new_arena))), #deref(#field(#this, F)))) ;
 
 ! --- Reusable AST constant nodes for embedding into self-contained handlers --- !
 #bind(val, #allocate_val(#deref(#field(#this, F)), #deref(#field(#this, F)))) ;

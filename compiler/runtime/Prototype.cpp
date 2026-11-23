@@ -25,6 +25,17 @@ uint64_t PrototypeArena::create_native(std::string extern_name, NativeFn fn) {
     return addr;
 }
 
+uint64_t PrototypeArena::create_ffi(FfiBinding binding, NativeFn fn) {
+    auto obj = std::make_unique<PrototypeObject>();
+    obj->kind = CodeKind::NativeSym;
+    obj->extern_name = binding.symbol_name;
+    obj->ffi_binding = std::move(binding);
+    obj->native_fn = std::move(fn);
+    uint64_t addr = reinterpret_cast<uint64_t>(obj.get());
+    objects_.push_back(std::move(obj));
+    return addr;
+}
+
 const PrototypeObject* PrototypeArena::get(uint64_t addr) const {
     if (addr == 0) {
         throw std::runtime_error("PrototypeArena::get: null prototype handle");
