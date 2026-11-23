@@ -8,6 +8,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -25,9 +27,16 @@ int main(int argc, char** argv) {
     oss << ifs.rdbuf();
     const std::string source = oss.str();
 
+    std::vector<std::string_view> cli_args;
+    cli_args.reserve(static_cast<size_t>(argc - 2));
+    for (int i = 2; i < argc; ++i) {
+        cli_args.emplace_back(argv[i]);
+    }
+
     try {
         reverSilly::Lang::Runtime::RuntimeContext rt;
         reverSilly::Lang::Eval::install_all_capabilities(rt);
+        reverSilly::Lang::Eval::install_cli_args(rt, cli_args);
         reverSilly::Lang::Eval::Evaluator ev(rt);
         reverSilly::Lang::Parser::Frontend fe;
 
