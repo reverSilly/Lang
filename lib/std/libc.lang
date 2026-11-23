@@ -1,24 +1,18 @@
 ! ============================================================================ !
-! lib/std/libc.lang — Standard C89/C99 FFI Module (Pure Layer 1)               !
+! lib/std/libc.lang — Standard C89/C99 Declarative FFI Module (Pure Layer 1)   !
 !                                                                              !
 ! Evaluates inside a `#block` (reading `#parent.capabilities`) and `#break`s   !
-! a clean closed module struct exporting:                                      !
-!   - `lib`    : Process global symbol table Handle (`open_lib("")`)           !
+! a 100% pure stageable module struct (zero OS `Handle`, zero `open_lib`)      !
+! exporting:                                                                   !
 !   - `shapes` : Common C ABI Shapes (`c_void`, `c_u8`, `c_int`, `c_size`,     !
 !                `c_ptr`, `f64`, `div_t`)                                      !
-!   - 24 standard C symbols with positional argument slots (`0`, `1`, `2`, `3`)!
+!   - 24 standard C symbols (`ffi.extern_symbol`, positional slots `0..3`)     !
 ! ============================================================================ !
 
 caps  := $#parent.capabilities ;
 c_con := $.caps.constants ;
 c_ffi := $.caps.ffi ;
 c_int := $.caps.intrinsics ;
-
-! Open current process global symbol table (exposes linked libc) !
-lib := #block(^(
-    path := "" ;
-    #break(#evaluate($#parent.c_ffi.open_lib))
-)) ;
 
 ! Common C ABI Shapes (64-bit portable; c_ptr is raw 8B address, not fat Pointer) !
 c_void  := $.c_con.unit_shape ;
@@ -52,51 +46,51 @@ args_8_4_8   := #shape({ 0 := 0 ; 1 := $#parent.i32_0 ; 2 := 0 }) ;
 args_8_8_4   := #shape({ 0 := 0 ; 1 := 0 ; 2 := $#parent.i32_0 }) ;
 args_8_8_8_8 := #shape({ 0 := 0 ; 1 := 0 ; 2 := 0 ; 3 := 0 }) ;
 
-! Helper: load a single C symbol with `cc := c` !
-load_c := ^(
+! Helper: declare a single external C symbol with `lib := ""` and `cc := c` !
+decl_c := ^(
     #block(^(
-        lib  := $#parent.lib ;
-        name := $#parent.sym_name ;
+        lib    := "" ;
+        name   := $#parent.sym_name ;
         a_args := $#parent.sym_args ;
         a_ret  := $#parent.sym_ret ;
-        abi  := { args := $#parent.a_args ; ret := $#parent.a_ret ; cc := c } ;
-        #break(#evaluate($#parent.c_ffi.load_symbol))
+        abi    := { args := $#parent.a_args ; ret := $#parent.a_ret ; cc := c } ;
+        #break(#evaluate($#parent.c_ffi.extern_symbol))
     ))
 ) ;
 
 ! --- Memory allocation (<stdlib.h>) --- !
-sym_name := "malloc"  ; sym_args := $.args_8   ; sym_ret := $.c_ptr  ; f_malloc  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "calloc"  ; sym_args := $.args_8_8 ; sym_ret := $.c_ptr  ; f_calloc  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "realloc" ; sym_args := $.args_8_8 ; sym_ret := $.c_ptr  ; f_realloc := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "free"    ; sym_args := $.args_8   ; sym_ret := $.c_void ; f_free    := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "malloc"  ; sym_args := $.args_8   ; sym_ret := $.c_ptr  ; f_malloc  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "calloc"  ; sym_args := $.args_8_8 ; sym_ret := $.c_ptr  ; f_calloc  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "realloc" ; sym_args := $.args_8_8 ; sym_ret := $.c_ptr  ; f_realloc := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "free"    ; sym_args := $.args_8   ; sym_ret := $.c_void ; f_free    := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
 
 ! --- Raw memory operations (<string.h>) --- !
-sym_name := "memcpy"  ; sym_args := $.args_8_8_8 ; sym_ret := $.c_ptr   ; f_memcpy  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "memmove" ; sym_args := $.args_8_8_8 ; sym_ret := $.c_ptr   ; f_memmove := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "memset"  ; sym_args := $.args_8_4_8 ; sym_ret := $.c_ptr   ; f_memset  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "memcmp"  ; sym_args := $.args_8_8_8 ; sym_ret := $.c_int_s ; f_memcmp  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "memcpy"  ; sym_args := $.args_8_8_8 ; sym_ret := $.c_ptr   ; f_memcpy  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "memmove" ; sym_args := $.args_8_8_8 ; sym_ret := $.c_ptr   ; f_memmove := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "memset"  ; sym_args := $.args_8_4_8 ; sym_ret := $.c_ptr   ; f_memset  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "memcmp"  ; sym_args := $.args_8_8_8 ; sym_ret := $.c_int_s ; f_memcmp  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
 
 ! --- NUL-terminated C strings (<string.h>) --- !
-sym_name := "strlen"  ; sym_args := $.args_8     ; sym_ret := $.c_size  ; f_strlen  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "strcmp"  ; sym_args := $.args_8_8   ; sym_ret := $.c_int_s ; f_strcmp  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "strncmp" ; sym_args := $.args_8_8_8 ; sym_ret := $.c_int_s ; f_strncmp := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "strlen"  ; sym_args := $.args_8     ; sym_ret := $.c_size  ; f_strlen  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "strcmp"  ; sym_args := $.args_8_8   ; sym_ret := $.c_int_s ; f_strcmp  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "strncmp" ; sym_args := $.args_8_8_8 ; sym_ret := $.c_int_s ; f_strncmp := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
 
 ! --- Standard I/O (<stdio.h>) --- !
-sym_name := "fopen"   ; sym_args := $.args_8_8     ; sym_ret := $.c_ptr   ; f_fopen   := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "fread"   ; sym_args := $.args_8_8_8_8 ; sym_ret := $.c_size  ; f_fread   := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "fwrite"  ; sym_args := $.args_8_8_8_8 ; sym_ret := $.c_size  ; f_fwrite  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "fflush"  ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_fflush  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "fclose"  ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_fclose  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "puts"    ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_puts    := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "putchar" ; sym_args := $.args_4       ; sym_ret := $.c_int_s ; f_putchar := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "remove"  ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_remove  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "fopen"   ; sym_args := $.args_8_8     ; sym_ret := $.c_ptr   ; f_fopen   := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "fread"   ; sym_args := $.args_8_8_8_8 ; sym_ret := $.c_size  ; f_fread   := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "fwrite"  ; sym_args := $.args_8_8_8_8 ; sym_ret := $.c_size  ; f_fwrite  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "fflush"  ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_fflush  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "fclose"  ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_fclose  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "puts"    ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_puts    := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "putchar" ; sym_args := $.args_4       ; sym_ret := $.c_int_s ; f_putchar := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "remove"  ; sym_args := $.args_8       ; sym_ret := $.c_int_s ; f_remove  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
 
 ! --- Numeric & process (<stdlib.h>) --- !
-sym_name := "abs"     ; sym_args := $.args_4     ; sym_ret := $.c_int_s ; f_abs     := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "div"     ; sym_args := $.args_4_4   ; sym_ret := $.div_t_s ; f_div     := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "strtod"  ; sym_args := $.args_8_8   ; sym_ret := $.f64_s   ; f_strtod  := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "strtoll" ; sym_args := $.args_8_8_4 ; sym_ret := $.c_size  ; f_strtoll := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
-sym_name := "exit"    ; sym_args := $.args_4     ; sym_ret := $.c_void  ; f_exit    := #evaluate($.load_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "abs"     ; sym_args := $.args_4     ; sym_ret := $.c_int_s ; f_abs     := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "div"     ; sym_args := $.args_4_4   ; sym_ret := $.div_t_s ; f_div     := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "strtod"  ; sym_args := $.args_8_8   ; sym_ret := $.f64_s   ; f_strtod  := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "strtoll" ; sym_args := $.args_8_8_4 ; sym_ret := $.c_size  ; f_strtoll := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
+sym_name := "exit"    ; sym_args := $.args_4     ; sym_ret := $.c_void  ; f_exit    := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
 
 shapes_obj := {
     c_void := $#parent.c_void ;
@@ -108,10 +102,9 @@ shapes_obj := {
     div_t  := $#parent.div_t_s
 } ;
 
-! Export clean closed libc module (no internal helper locals leak) !
+! Export 100% pure stageable libc module (zero OS Handle, directly liftable via `ast.value`) !
 #break({
-    lib    := $#parent.lib ;
-    shapes := $#parent.shapes_obj ;
+    shapes  := $#parent.shapes_obj ;
     malloc  := $#parent.f_malloc ;
     calloc  := $#parent.f_calloc ;
     realloc := $#parent.f_realloc ;

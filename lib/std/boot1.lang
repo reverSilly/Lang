@@ -11,9 +11,21 @@
     #bind(w_caps, #allocate_val(#evaluate($#field(.c_ast, word)), $.F)) ;
     #drop(.sym) ;
 
-    #bind(val, #allocate_val($.caps, $.F)) ;
-    #bind(n_caps_v, #allocate_val(#evaluate($#field(.c_ast, value)), $.F)) ;
-    #drop(.val) ;
+    #bind(kind, #allocate_val(this, $.F)) ;
+    #bind(b1_th, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ;
+    #bind(sym, #allocate_val(capabilities, $.F)) ;
+    #bind(w_cb1, #allocate_val(#evaluate($#field(.c_ast, word)), $.F)) ;
+    #drop(.sym) ;
+    #bind(kind, #allocate_val(field, $.F)) ;
+    #bind(0, #allocate_val($.b1_th, $.F)) ;
+    #bind(1, #allocate_val($.w_cb1, $.F)) ;
+    #bind(p_cb1, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ; #drop(.0) ; #drop(.1) ; #drop(.b1_th) ; #drop(.w_cb1) ;
+    #bind(kind, #allocate_val(deref, $.F)) ;
+    #bind(0, #allocate_val($.p_cb1, $.F)) ;
+    #bind(n_caps_v, #allocate_val(#evaluate($#field(.c_ast, builtin)), $.F)) ;
+    #drop(.kind) ; #drop(.0) ; #drop(.p_cb1) ;
 
     #bind(val, #allocate_val($.raw_h, $.F)) ;
     #bind(n_raw_h, #allocate_val(#evaluate($#field(.c_ast, value)), $.F)) ;
