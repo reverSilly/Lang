@@ -27,7 +27,21 @@
 ! Run full boot0 -> boot1 -> layer1 bootstrap (binds fe & arena for fe_layer1) !
 #evaluate(#deref(#field(#this, boot_p))) ;
 
-! 2. Parse tests/test_layer1.lang with fe_layer1 and run in an isolated #block !
+! 2. Parse lib/std/libc.lang with fe_layer1 and materialize `libc` module !
+#bind(sym, #allocate_val(lib/std/libc.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+#bind(libc_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+#bind(libc, #allocate_val(#block(#deref(#field(#this, libc_p))), #deref(#field(#this, F)))) ;
+
+! 3. Parse tests/test_layer1.lang with fe_layer1 and run in an isolated #block !
 #bind(sym, #allocate_val(tests/test_layer1.lang, #deref(#field(#this, F)))) ;
 #bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;
@@ -42,5 +56,8 @@
 #evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
 #evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
 
-! Run tests/test_layer1.lang directly (assertions inside test_layer1.lang abort on any mismatch) !
-#block(#deref(#field(#this, test_p)))
+! Run tests/test_layer1.lang (assertions abort on any mismatch), then close libc handle !
+#bind(test_res, #allocate_val(#block(#deref(#field(#this, test_p))), #deref(#field(#this, F)))) ;
+#bind(lib, #allocate_val(#deref(#field(#field(#this, libc), lib)), #deref(#field(#this, F)))) ;
+#evaluate(#deref(#field(#field(#field(#this, capabilities), ffi), close_lib))) ;
+#deref(#field(#this, test_res))
