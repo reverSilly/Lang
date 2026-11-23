@@ -24,6 +24,20 @@ ConstructingFrame* RuntimeContext::current_frame() noexcept {
     return active_coro ? active_coro->current_frame() : nullptr;
 }
 
+ConstructingFrame* RuntimeContext::find_open_frame(const PointerLayout& ptr) const noexcept {
+    if (ptr.is_null() || ptr.shape_ptr == 0) return nullptr;
+    if (active_coro) {
+        for (auto it = active_coro->frames.rbegin(); it != active_coro->frames.rend(); ++it) {
+            ConstructingFrame* f = it->get();
+            if (f->frame_addr() == ptr.addr &&
+                reinterpret_cast<uint64_t>(&f->live_shape) == ptr.shape_ptr) {
+                return f;
+            }
+        }
+    }
+    return coroutines.find_open_frame(ptr);
+}
+
 Value RuntimeContext::make_unit() const { return Value{shapes.unit_shape, {}}; }
 
 

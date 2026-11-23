@@ -7,9 +7,8 @@ namespace reverSilly::Lang::Parser {
 const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table() {
     using K = Ast::BuiltinKind;
     static const std::unordered_map<std::string_view, BuiltinSpec> kTable = {
-        // 4 nullary environment & coroutine cursors
+        // 3 nullary environment & coroutine cursors
         {"this", {K::This, 0}},
-        {"parent", {K::Parent, 0}},
         {"caller", {K::Caller, 0}},
         {"in", {K::In, 0}},
 
@@ -31,7 +30,8 @@ const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table() {
         {"deref", {K::Deref, 1}},
         {"write", {K::Write, 2}},
 
-        // 2 navigation & reflection primitives
+        // 3 navigation & reflection primitives
+        {"parent", {K::Parent, 1}},
         {"field", {K::Field, 2}},
         {"shape", {K::Shape, 1}},
 

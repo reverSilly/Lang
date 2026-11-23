@@ -748,9 +748,12 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
     switch (b.kind) {
         case K::This:
             co_return rt.make_pointer(frame ? frame->frame_pointer() : Runtime::PointerLayout{});
-        case K::Parent:
+        case K::Parent: {
+            expect_shape(args[0], rt.shapes.pointer_shape, "#parent: argument must be a Pointer");
+            Runtime::ConstructingFrame* target = rt.find_open_frame(args[0].as_pod<Runtime::PointerLayout>());
             co_return rt.make_pointer(
-                (frame && frame->parent) ? frame->parent->frame_pointer() : Runtime::PointerLayout{});
+                (target && target->parent) ? target->parent->frame_pointer() : Runtime::PointerLayout{});
+        }
         case K::Caller:
             co_return rt.make_handle(rt.active_coro->caller_handle);
         case K::In:

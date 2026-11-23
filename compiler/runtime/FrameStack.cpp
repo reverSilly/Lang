@@ -271,6 +271,21 @@ Coroutine* CoroutinePool::resolve(uint64_t handle) const noexcept {
     return s.coro.get();
 }
 
+ConstructingFrame* CoroutinePool::find_open_frame(const PointerLayout& ptr) const noexcept {
+    if (ptr.is_null() || ptr.shape_ptr == 0) return nullptr;
+    for (const Slot& s : slots_) {
+        if (!s.coro) continue;
+        for (auto it = s.coro->frames.rbegin(); it != s.coro->frames.rend(); ++it) {
+            ConstructingFrame* f = it->get();
+            if (f->frame_addr() == ptr.addr &&
+                reinterpret_cast<uint64_t>(&f->live_shape) == ptr.shape_ptr) {
+                return f;
+            }
+        }
+    }
+    return nullptr;
+}
+
 bool CoroutinePool::destroy(uint64_t handle) {
     if (handle == 0) return false;
     uint32_t idx = static_cast<uint32_t>(handle & 0xFFFFFFFFULL);

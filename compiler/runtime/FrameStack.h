@@ -98,6 +98,7 @@ private:
 public:
     Coroutine* create();
     Coroutine* resolve(uint64_t handle) const noexcept;
+    ConstructingFrame* find_open_frame(const PointerLayout& ptr) const noexcept;
     bool destroy(uint64_t handle);
     size_t live_count() const noexcept { return slots_.size() - free_list_.size(); }
 };

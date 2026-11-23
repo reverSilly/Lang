@@ -121,17 +121,17 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
     // Build handler in C++ AST for concise unit testing of cst_view_bytes & cst_child_view_sym
     // Handler returns ast.value(cst_view_bytes(node))
     uint64_t handler_bytes = rt.prototypes.create_ast(fe.parse(R"(
-        #bind(F, #allocate_val(#deref(#field(#field(#field(#parent, capabilities), constants), false)), #deref(#field(#field(#field(#parent, capabilities), constants), false)))) ;
-        #bind(val, #allocate_val(#evaluate(#deref(#field(#field(#field(#parent, capabilities), syntax), cst_view_bytes))), #deref(#field(#this, F)))) ;
-        #evaluate(#deref(#field(#field(#field(#parent, capabilities), ast), value)))
+        #bind(F, #allocate_val(#deref(#field(#field(#field(#parent(#this), capabilities), constants), false)), #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))) ;
+        #bind(val, #allocate_val(#evaluate(#deref(#field(#field(#field(#parent(#this), capabilities), syntax), cst_view_bytes))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#field(#field(#parent(#this), capabilities), ast), value)))
     )"));
     rf->bind(rt.symbols.intern("h_bytes"), rf->allocate_val(rt.make_proto(handler_bytes), false)->pointer());
 
     uint64_t handler_child1 = rt.prototypes.create_ast(fe.parse(R"(
-        #bind(F, #allocate_val(#deref(#field(#field(#field(#parent, capabilities), constants), false)), #deref(#field(#field(#field(#parent, capabilities), constants), false)))) ;
-        #bind(index, #allocate_val(#deref(#field(#field(#field(#parent, capabilities), constants), u64_one)), #deref(#field(#this, F)))) ;
-        #bind(val, #allocate_val(#evaluate(#deref(#field(#field(#field(#parent, capabilities), syntax), cst_child_view_sym))), #deref(#field(#this, F)))) ;
-        #evaluate(#deref(#field(#field(#field(#parent, capabilities), ast), value)))
+        #bind(F, #allocate_val(#deref(#field(#field(#field(#parent(#this), capabilities), constants), false)), #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))) ;
+        #bind(index, #allocate_val(#deref(#field(#field(#field(#parent(#this), capabilities), constants), u64_one)), #deref(#field(#this, F)))) ;
+        #bind(val, #allocate_val(#evaluate(#deref(#field(#field(#field(#parent(#this), capabilities), syntax), cst_child_view_sym))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#field(#field(#parent(#this), capabilities), ast), value)))
     )"));
     rf->bind(rt.symbols.intern("h_child1"), rf->allocate_val(rt.make_proto(handler_child1), false)->pointer());
 

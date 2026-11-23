@@ -28,6 +28,7 @@ public:
 
     void flush_pending_reclaim();
     ConstructingFrame* current_frame() noexcept;
+    ConstructingFrame* find_open_frame(const PointerLayout& ptr) const noexcept;
 
     Value make_unit() const;
     Value make_symbol(SymbolId id) const;

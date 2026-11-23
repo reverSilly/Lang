@@ -49,8 +49,8 @@ static void test_block_flatten_break_and_branch() {
     Frontend fe;
 
     ExprPtr blk_body = fe.parse(R"(
-        #bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent, capabilities), constants), false)))) ;
-        #bind(y, #allocate_val(world, #deref(#field(#field(#field(#parent, capabilities), constants), false)))) ;
+        #bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))) ;
+        #bind(y, #allocate_val(world, #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))) ;
         #drop(#field(#this, y))
     )");
     uint64_t blk_proto = rt.prototypes.create_ast(blk_body);
@@ -90,6 +90,35 @@ static void test_block_flatten_break_and_branch() {
         "#branch(#deref(#field(#field(#field(#this, capabilities), constants), true)), "
         "#deref(#field(#this, p_yes)), #deref(#field(#this, p_no)))"));
     assert(rt.symbols.name(b_true.as_pod<SymbolId>()) == "yes_branch");
+
+    // Multi-level #parent(#parent(#this)) + null on root frame and non-open-frame pointers
+    uint64_t inner2_p = rt.prototypes.create_ast(fe.parse(
+        "#break(#deref(#field(#parent(#parent(#this)), outer_tag)))"));
+    uint64_t mid_p = rt.prototypes.create_ast(make_expr<BuiltinExpr>(
+        BuiltinKind::Break,
+        std::vector<ExprPtr>{make_expr<BuiltinExpr>(
+            BuiltinKind::Block,
+            std::vector<ExprPtr>{make_expr<ValueExpr>(reify_ast_value(rt, rt.make_proto(inner2_p)))})}));
+    rt.current_frame()->bind(
+        rt.symbols.intern("outer_tag"),
+        rt.current_frame()->allocate_val(rt.make_symbol(rt.symbols.intern("grandparent_ok")), false)->pointer());
+    rt.current_frame()->bind(
+        rt.symbols.intern("mid_p"),
+        rt.current_frame()->allocate_val(rt.make_proto(mid_p), false)->pointer());
+
+    Value gp_res = ev.run(fe.parse("#block(#deref(#field(#this, mid_p)))"));
+    assert(gp_res.shape_addr == rt.shapes.symbol_shape);
+    assert(rt.symbols.name(gp_res.as_pod<SymbolId>()) == "grandparent_ok");
+
+    Value root_par = ev.run(fe.parse("#parent(#this)"));
+    assert(root_par.as_pod<PointerLayout>().is_null());
+
+    // Empty closed unit struct also has size == 0, must NOT be misidentified as an OpenFrame
+    rt.current_frame()->bind(
+        rt.symbols.intern("u_slot"),
+        rt.current_frame()->allocate_val(rt.make_unit(), false)->pointer());
+    Value non_frame_par = ev.run(fe.parse("#parent(#field(#this, u_slot))"));
+    assert(non_frame_par.as_pod<PointerLayout>().is_null());
 }
 
 static void test_coroutines_unified_frame_reflection_and_destroy() {
@@ -191,7 +220,7 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
     Frontend fe;
 
     const std::string target_src =
-        "#block(^#bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent, capabilities), constants), false)))))";
+        "#block(^#bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))))";
     rt.current_frame()->bind(
         rt.symbols.intern("target_src"),
         rt.current_frame()->allocate_val(rt.make_raw_bytes(target_src.data(), target_src.size()), false)->pointer());

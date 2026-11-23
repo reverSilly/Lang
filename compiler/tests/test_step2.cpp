@@ -31,7 +31,6 @@ static void test_builtins_and_arity() {
 
     const std::pair<const char*, BuiltinKind> nullaries[] = {
         {"#this", BuiltinKind::This},
-        {"#parent", BuiltinKind::Parent},
         {"#caller", BuiltinKind::Caller},
         {"#in", BuiltinKind::In},
     };
@@ -49,6 +48,12 @@ static void test_builtins_and_arity() {
         auto* b1 = std::get_if<BuiltinExpr>(&seq->items[1]->node);
         assert(b0 && b0->kind == BuiltinKind::Destroy && b0->args.size() == 1);
         assert(b1 && b1->kind == BuiltinKind::CoroRootFrame && b1->args.size() == 1);
+    }
+
+    {
+        ExprPtr e = fe.parse("#parent(#this)");
+        auto* b = std::get_if<BuiltinExpr>(&e->node);
+        assert(b && b->kind == BuiltinKind::Parent && b->args.size() == 1);
     }
 
     {
@@ -93,6 +98,7 @@ static void test_strict_non_nullable_and_errors() {
     expect_parse_error("#unbound");       // #unbound removed from Core
     expect_parse_error("#unknown_builtin");
     expect_parse_error("#this(a)");
+    expect_parse_error("#parent");        // needs 1 arg
     expect_parse_error("#destroy");       // needs 1 arg
     expect_parse_error("#coro_root_frame");
     expect_parse_error("#bind(x)");
