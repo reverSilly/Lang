@@ -33,8 +33,8 @@
 - **严格区分 `#shape(val)` 与 `ptr.shape_ptr`**：
   - **`#shape(val) -> Pointer(Shape)`**：取**任意 `value` 自身**的形状指针；
   - **`ptr.shape_ptr`**：取**胖指针 `ptr` 所指向的目标 `location` 内容**的形状地址。
-- **`frozen` 对象 = 指向只读常量区的安全 `Pointer`**：
-  - 不存在独立的 `frozen` 类型；编译期固化或 `#freeze` 产生的只读对象住在常量区（`.rodata`），直接以 `mutability = 0`（`immutable`）的安全 `Pointer` 表示，永不悬垂且允许跨阶段固化。
+- **无 `#freeze` 与 `.rodata` 概念**：
+  - 编译期常量（含字符串字面量 `Shape{ size = N, align = 1 }` 纯字节值、常量结构体、`Shape`、`IntrinsicProto`、`FfiProto`）直接通过 `ast.value` 按值嵌入 Standalone `Ast`；运行期跨帧存活的内存通过声明式 FFI 显式管理（如 `libc.malloc` / `libc.free`），不存在隐式永生冻结原语。
 
 ### 2.2 自解释 `Shape` 与 `#field` 的代数同构
 
@@ -55,7 +55,7 @@
 
 判据：**凡是触碰求值器栈帧、槽三态机与内存读写的入核；凡是 RAII（`__destroy`）、POD Gate、`move`、`swap`、`recast`、字段 map 遍历（归 `capabilities.map`）、符号文本互转（归 `capabilities.symbols`）、算术指令（归 `capabilities.intrinsics`）、多层 `break`、模式匹配与所有语法糖（`.`、`$`、`{}`、`""` 等）全部归元层能力或标准库。**
 
-Core 共包含 **2 个语法级原语** + **22 个 `#` 前缀 Builtin（5 个零参 + 17 个带参）**：
+Core 共包含 **2 个语法级原语** + **21 个 `#` 前缀 Builtin（4 个零参 + 17 个带参）**：
 
 | 分类 | Core 原语 | 签名与语义 |
 | :--- | :--- | :--- |
@@ -64,11 +64,11 @@ Core 共包含 **2 个语法级原语** + **22 个 `#` 前缀 Builtin（5 个零
 | **3. 环境与槽游标（5，皆零参）** | `#this` / `#parent` / `#unbound` / `#caller` / `#in` | 当前构建帧指针 / 构建栈直接父帧指针 / 当前帧栈顶未 `#bind` 的匿名 `live` 子槽指针（无则 `null`）/ 恢复者协程 `Handle` / 本协程来信槽指针 |
 | **4. 槽分配与状态演进（5）** | `#allocate(s, is_mut)` / `#allocate_val(v, is_mut)` / `#touch(ptr)` / `#bind(sym, val)` / `#drop(ptr)` | 按 `Shape` `s` 分配 `uninitialized` 真槽 / 按 `v` 直接分配 `live` 真槽 / 将直接子槽零开销置为 `live` / 绑定未命名直接子槽（返 `bytes(1, 1)`：`0x01`/`0x00`，若旧同名槽为 `empty` 则重绑）/ 将构建链直接子槽置为 `empty`（零 RAII） |
 | **5. 比特读写（2，零 POD/RAII 检查）** | `#deref(ptr)` / `#write(dst_ptr, val)` | 从 `live` 槽无条件按位读出 `val` / 当 `dst_ptr.shape_ptr == (#shape(val)).addr` 且 `dst_ptr` 为 `uninitialized` 或 `mutable`（含已闭合对象的 `mutable live` 字段）时，无条件按位写入并置为 `live` |
-| **6. 导航、反射与冻结（3）** | `#field(ptr, sym)` / `#shape(val)` / `#freeze(ptr)` | 胖指针偏移寻址 / 取 `Shape` 只读指针 / 冻结至只读常量区 |
+| **6. 导航与反射（2）** | `#field(ptr, sym)` / `#shape(val)` | 胖指针偏移寻址 / 取值的透明 `Shape` 元数据 |
 | **7. 控制流与协程切换（3）** | `#branch(c, p1, p2)` / `#break(val)` / `#resume(coro, val)` | 透明二路分支 / **仅退出当前最内层构建帧 `#this`** 并将 `val` 直接填入当前块 `self root` 结果槽（零 POD/RAII 检查）/ 原子地将 `val` 填入目标 `#in` 槽并切换协程（零 POD/RAII 检查） |
 
 ## 四、验收用例（自检清单）
 
-1. **Core 极简收敛**：`move`、`swap`、`recast`、`bytes`、字段遍历游标与符号文本互转全部移出 Core；全内核仅由上表 2 + 22 个原语构成。
+1. **Core 极简收敛**：`move`、`swap`、`recast`、`bytes`、字段遍历游标与符号文本互转全部移出 Core；全内核仅由上表 2 + 21 个原语构成。
 2. **POD 递归终点与 Stdlib Gate 自洽**：标准库检查 `Shape` 是否为 POD 时，以不含 `__destroy` 且 `fields == empty_map` 作为天然递归基底；`$`、`=`、`break`、`@` 在标准库入口通过 `is_pod` Gate 拦截未经 `move` 的非 POD 值。
 3. **全程真指针**：`x := #allocate(i32, false)` 执行后，`.x` 立即返回 `addr ~= 0, shape_ptr == Shape(i32)` 的真 `Pointer`；未执行 `#write(.x, 42)` 或 `#touch(.x)` 前，`x` 不进入 `live` 字段游标，且 `#deref(.x)` 报错拒绝读取。

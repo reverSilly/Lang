@@ -1,6 +1,6 @@
-# 10. Stateless `capabilities`, Explicit Arena Handles & Foreign Function Interface (FFI)
+# 10. Stateless `capabilities`, Standalone `Ast`, Isolated Backends & Unified FFI
 
-This document specifies (1) the **100% stateless** three-tier modularization of `capabilities` with explicit, symmetric resource handles (`open_lib`/`close_lib`, `new_arena`/`destroy_arena`, `new_layer0`/`destroy_frontend`), (2) the decoupled `syntax.parse -> Ast Handle -> ast.to_proto -> Prototype` frontend pipeline, and (3) the `capabilities.ffi` design unifying dynamic external symbol loading in the Phase 1 interpreter (`dlopen`/`dlsym` + `libffi`) with Phase 2 LLVM AOT external linkage.
+This document specifies (1) the **100% stateless** three-tier modularization of `capabilities` with explicit, symmetric resource handles (`new_arena`/`destroy_arena`, `new_layer0`/`destroy_frontend`), (2) the **environment-independent Standalone `Ast`** (`AstValue` + pure-value `AstShape`) and strict Stageability boundary (`ast.value`), (3) the decoupled `ast.to_proto` (compile-time staging) vs. `capabilities.backends.*` (isolated target execution / AOT codegen) pipeline, and (4) the unified pure-data `capabilities.ffi` (`extern_symbol` + two-stage `bind_ptr`).
 
 ---
 
@@ -8,80 +8,122 @@ This document specifies (1) the **100% stateless** three-tier modularization of 
 
 `capabilities` holds **zero hidden host state** — there is no `CapabilityHost` / `xxxHost` singleton owning internal pools. Every capability primitive is a pure stateless `NativeProto` `Prototype` operating solely on `#this` and `RuntimeContext`.
 
-### 1.1 Three-Tier Logical Split (Compile-Time vs. Runtime Boundary)
+### 1.1 Three-Tier Logical Split (Compile-Time vs. Target Runtime Boundary)
 
-In Lang, `capabilities` remains mounted under root `#this.capabilities` with the same sub-namespace paths (`capabilities.constants`, `capabilities.ffi`, etc.). Architecturally, capabilities are partitioned into **three tiers** with explicit stateless installers:
+In Lang, `capabilities` is mounted under root `#this.capabilities` strictly in the **compile-time script's** `RuntimeContext`. Architecturally, capabilities are partitioned into **three tiers**:
 
-| Tier | Sub-modules | Available at Compile-Time | Available at Runtime / AOT | Backing Mechanism |
+| Tier | Sub-modules | Available in Compile Script | Available in Target Runtime / AOT | Backing Mechanism |
 | :--- | :--- | :---: | :---: | :--- |
-| **1. Runtime Core** | `constants`, `field_map`, `symbols`, `intrinsics` | Yes | Yes | Interpreter C++ / `liblang_rt` + LLVM IR intrinsics |
-| **2. Host FFI** | `ffi` (`open_lib`, `close_lib`, `load_symbol`) | Yes | Yes | Interpreter: `dlopen`/`dlsym`/`dlclose` + `libffi`; AOT: `declare external` + native linker |
-| **3. Compiler Frontend** | `ast`, `syntax`, `compiler` *(+ temporary `io`)* | Yes | **No** | Compiler process only; stripped from runtime contexts and emitted executables |
+| **1. Core Factories & Reflection** | `constants`, `field_map`, `symbols`, `intrinsics` | Yes | **No** *(baked into `Ast` at compile time)* | Interpreter C++ / LLVM IR instructions |
+| **2. Declarative FFI Factories** | `ffi` (`extern_symbol`, `bind_ptr`) | Yes | **No** *(baked into `Ast` at compile time)* | Interpreter: lazy per-`RuntimeContext` `FfiDispatchCache` (`dlopen`/`dlsym` + `libffi`); AOT: `declare external` + static indirect thunks |
+| **3. Compiler Frontend & Backends** | `ast`, `syntax`, `backends` (`interpreter`, future `llvm`) *(+ temporary `io`)* | Yes | **No** | Compiler process only; never mounted in target root frames or emitted executables |
 
-- **Interpreter vs. AOT Runtime Semantics**:
-  - In the **Phase 1 interpreter**, `install_runtime_capabilities(rt)` mounts Tier 1 only, `install_runtime_with_ffi(rt)` mounts Tier 1 + Tier 2, and `install_all_capabilities(rt)` mounts all three tiers.
-  - In **Phase 2 AOT executables**, no monolithic `capabilities` struct is injected into the binary: `IntrinsicProto` and `FfiProto` `Prototype` values captured at compile time (e.g., `intrinsics.add_int(...)`, `ffi.load_symbol(...)`) are lowered directly into native LLVM instructions (`add i64`) or `declare external` calls, and `liblang_rt` is linked only for operations invoked dynamically at runtime (such as dynamic `field_map`/`symbols` reflection or runtime `dlopen`).
+- **Complete Target Isolation (Phase 1 & Phase 2 Isomorphism)**:
+  - When a compile script invokes **`capabilities.backends.interpreter.run({ ast })`**, the interpreter backend creates a **brand-new, completely independent `RuntimeContext` + `Evaluator`** (`#parent = nullptr`, **zero `capabilities`**, independent `SymbolPool` / `ShapeArena` / `PrototypeArena` / `CoroutinePool` / `FfiDispatchCache`), interns the standalone `Ast` into it, executes it, and tears down all target resources (including any lazily opened FFI libraries) on return.
+  - When a compile script invokes **`capabilities.backends.llvm.emit_executable({ ast, ... })`** *(Phase 2)*, the LLVM backend lowers the **exact same standalone `Ast`**: embedded `IntrinsicVal` lowers to single LLVM instructions, `FfiExternVal` lowers to `declare external` + linker flags, `FfiBindPtrVal` lowers to a statically compiled indirect-call trampoline (zero runtime `libffi`), and no `capabilities` struct exists in the binary.
+  - Runtime dynamic library loading in target programs requires no special compiler capability: target code simply declares `dlopen`/`dlsym`/`dlclose` (or Win32 `LoadLibraryA`/`GetProcAddress`) via `ffi.extern_symbol` and binds returned function pointers via `ffi.bind_ptr`.
 - **Retirement of Temporary `capabilities.io`**:
-  - `capabilities.io.read_file` and `capabilities.io.write_file` are Phase 1 bootstrap placeholders. Immutable byte buffers returned by `io.read_file` and `syntax.cst_view_bytes` are allocated directly in `rt.shapes.freeze_bytes` (the same `.rodata` arena as `#freeze`), eliminating any separate byte-buffer pool.
+  - `capabilities.io.read_file` and `capabilities.io.write_file` are Phase 1 bootstrap placeholders for reading source files before `libc` FFI is loaded.
 
-### 1.2 Explicit Resource Lifecycles & Decoupled Frontend Pipeline
+### 1.2 Explicit Resource Lifecycles, `Ast` vs. `Prototype`, and Backends
 
-Every heap-allocated compiler or OS resource uses an explicit symmetric `new_*`/`destroy_*` (or `open_*`/`close_*`) handle pair — zero hidden GC, zero hidden RC, zero hidden host pools:
+Every heap-allocated compiler resource uses an explicit symmetric `new_*`/`destroy_*` handle pair — zero hidden GC, zero hidden host pools:
 
-1. **AST Arena (`capabilities.ast`)**:
-   - `new_arena() -> Handle`: Allocates an `AstArena` (backed by a pointer-stable `std::deque<Ast::ExprPtr>`) and returns its raw address as `Handle`.
+1. **Standalone AST & Staging (`capabilities.ast`)**:
+   - `new_arena() -> Handle`: Allocates an `AstArena` (a simple pointer-stable `std::deque<Ast::ExprPtr>`, owning no `StringTable` or `ShapeTable` — every `ExprPtr` is 100% self-contained even after `destroy_arena`).
    - `destroy_arena({ arena: Handle }) -> Unit`: Frees the `AstArena` immediately.
-   - `word({ arena, sym })`, `builtin({ arena, kind, 0, 1, ... })`, `seq({ arena, 0, 1, ... })`, `value({ arena, val })`: Allocate Core IR nodes inside `#this.arena` and return `Handle` (`Ast::ExprPtr*`).
-   - `to_proto({ ast: Handle }) -> Prototype`: Copies the underlying `Ast::ExprPtr` into `PrototypeArena`, so calling `destroy_arena(arena)` after `to_proto` leaves materialized `Prototype`s intact.
+   - `word({ arena, sym })`, `builtin({ arena, kind, 0, 1, ... })`, `seq({ arena, 0, 1, ... })`, `value({ arena, val })`: Construct standalone Core IR nodes inside `#this.arena` and return `Handle` (`Ast::ExprPtr*`).
+   - `to_proto({ ast: Handle }) -> Prototype`: **Stages/embeds** a standalone `Ast` into the **current compile-time `RuntimeContext`** as a live `AstProto`, so the compile script can execute it via `#evaluate` / `#block` (e.g., bootstrapping `boot1`/`layer1`, or evaluating `lib/std/libc.lang` at compile time).
+   - `serialize({ ast: Handle }) -> Bytes` / `deserialize({ arena: Handle, bytes }) -> Handle (Ast)` *(replaces retired `serialize_proto`/`deserialize_proto`)*: Lossless binary encoding/decoding of standalone `Ast` for incremental build caches and cross-process IR transfer.
 2. **Frontend / PEG Arena (`capabilities.syntax`)**:
-   - `new_layer0() -> Handle`: Allocates a `Parser::Frontend` (which also owns a pointer-stable `std::deque<Peg::PegExprPtr>` for its PEG expressions) and returns its raw address as `Handle`.
-   - `destroy_frontend({ fe: Handle }) -> Unit`: Frees the `Frontend`, its grammar, and its PEG expressions in one shot.
-   - `lit({ fe, sym })`, `range({ fe, lo, hi })`, `ref({ fe, name })`, `seq({ fe, 0, ... })`, `choice({ fe, 0, ... })`, `repeat({ fe, body, min, max })`, `lookahead({ fe, body, positive })`, `get_rule({ fe, name })`: Allocate PEG handles inside `#this.fe`. (`any` and `eof` are immutable static singletons requiring no arena.)
-   - `parse({ fe, src: BytePtr, arena: Handle }) -> Handle (Ast)`: Pure frontend step converting source bytes through the Packrat PEG grammar and rule handlers into a root Core IR `Ast` handle allocated in `arena`. When invoking CST rule handlers registered via `set_rule`, `parse` mounts both `node` (`&ctx` directly, zero CST pool) and `arena` into the handler's frame so `ast.*` and `cst_eval_child` work transparently.
-3. **Backend (`capabilities.compiler`)**:
-   - Reserved strictly for `Prototype`-level backend operations (`serialize_proto`, `deserialize_proto`, `emit_executable`).
+   - `new_layer0() -> Handle` / `destroy_frontend({ fe: Handle }) -> Unit`: Explicit lifecycle for `Parser::Frontend` + PEG expression arena.
+   - `lit`, `range`, `ref`, `any`, `eof`, `seq`, `choice`, `repeat`, `lookahead`, `get_rule`, `set_rule`, `parse`, and CST readers (`cst_child_count`, `cst_view_sym`, `cst_view_bytes`, `cst_child_view_sym`, `cst_eval_child`).
+3. **Target Backends (`capabilities.backends`)**:
+   - Backends consume **standalone `Ast` handles** directly — never host `Prototype` objects.
+   - **`capabilities.backends.interpreter.run({ ast: Handle }) -> Value`** *(Phase 1)*: Creates a fresh `RuntimeContext` + `Evaluator`, interns `ast`, executes it in an isolated root frame (`#parent = nullptr`, zero `capabilities`), and reifies/interns any stageable return value back to the caller (or `Unit`).
+   - **`capabilities.backends.llvm`** *(Phase 2)*: Symmetrical AOT codegen sub-namespace (`emit_ir`, `emit_object`, `emit_executable`) consuming the exact same standalone `Ast` handle.
 
 ```text
-BytePtr (source) ──▶ syntax.parse({fe, src, arena}) ──▶ Ast Handle ──▶ [optional AST passes] ──▶ ast.to_proto ──▶ Prototype
-```
-
-### 1.3 C++ Implementation Split (`compiler/eval/`)
-
-```text
-compiler/eval/
-  Capabilities.h          # Stateless free functions: install_runtime_capabilities / install_runtime_with_ffi / install_all_capabilities
-  Capabilities.cpp        # Shared stateless helpers (read_field, read_bytes_ptr, build_struct, native_proto) + install_* orchestration
-  RuntimeCaps.cpp         # Tier 1: constants, field_map, symbols, intrinsics
-  FfiCaps.cpp             # Tier 2: ffi (open_lib, close_lib, load_symbol, Shape -> ffi_type mapper, struct layout verification)
-  CompilerCaps.cpp        # Tier 3: ast (explicit AstArena), syntax (Frontend-owned PEG arena, syntax.parse), compiler (+ temporary io)
+                                                               ┌──▶ ast.to_proto({ast}) ──▶ Prototype (stage into compile-time env: #evaluate / #block)
+                                                               ├──▶ ast.serialize({ast}) ──▶ Bytes (portable binary IR cache)
+RawBytes (source) ──▶ syntax.parse({fe, src, arena}) ──▶ Ast ──▶ [AST composition / lifting via ast.*] ──┤
+                                                               ├──▶ backends.interpreter.run({ast}) ──▶ Fresh RuntimeContext + Evaluator (Phase 1)
+                                                               └──▶ backends.llvm.emit_executable({ast, ...}) ──▶ Native Binary (Phase 2 AOT)
 ```
 
 ---
 
-## 2. `capabilities.ffi` Specification
+## 2. Environment-Independent Standalone `Ast` (`AstValue` & `AstShape`)
 
-Lang's Core has **no function-call syntax and no separate C type system**. Because every Lang `Shape` is already a transparent, C-compatible memory layout (`size`, `align`, ordered `FieldEntry[]`), FFI reuses `Shape` directly as the ABI contract and `#evaluate` as the sole invocation mechanism.
+`compiler/ast/Ast.h` has **zero dependency on `compiler/runtime/`** (no `Runtime::Value`, no `SymbolId`, no `ShapeLayout*`, no `PrototypeObject*`, no `.rodata` concept).
 
-### 2.1 Primitives (3 total)
+### 2.1 Pure-Value `AstShape` & Non-Redundant `StructVal`
 
-1. **`capabilities.ffi.open_lib`**
+- **`AstShape`** (plain value type, zero `shared_ptr`) is used **only** where a layout is needed without a value (`ShapeVal`, `FfiExternVal.args/ret`, `FfiBindPtrVal.args/ret`):
+  ```cpp
+  struct AstField;
+  struct AstShape {
+      uint64_t size = 0;
+      uint64_t align = 1;
+      std::vector<AstField> fields;
+  };
+  struct AstField {
+      std::string name;
+      uint64_t offset = 0;
+      AstShape shape;
+  };
+  ```
+- **`StructVal`** does **not** carry a redundant `AstShape` — each field's `sub_shape` is derived directly from its `AstValue` during interning:
+  ```cpp
+  struct AstStructField {
+      std::string name;
+      uint64_t offset = 0;
+      AstValue value;
+  };
+  struct StructVal {
+      uint64_t size = 0;
+      uint64_t align = 1;
+      std::vector<AstStructField> fields;
+  };
+  ```
+- Runtime `RuntimeContext` retains `ShapeArena` so 24-byte POD `PointerLayout::shape_ptr` stays a stable 8-byte address and `Shape` equality remains `O(1)` (`addr_a == addr_b`).
+
+### 2.2 8-Variant Structured `AstValue` & Strict Stageability Rule
+
+```cpp
+using AstValue = std::variant<
+    RawBytes,       // { uint64_t align; std::vector<uint8_t> bytes } — unit, raw1/2/4/8, "hello" (Shape{N, 1})
+    SymbolVal,      // { std::string name } — delayed interning
+    ShapeVal,       // { AstShape shape }
+    AstProtoVal,    // { ExprPtr ast }
+    IntrinsicVal,   // 5-variant IntrinsicSpec with std::string slot names
+    FfiExternVal,   // { std::string lib, symbol, cc; AstShape args, ret }
+    FfiBindPtrVal,  // { std::string fn_slot, cc; AstShape args, ret }
+    StructVal       // { uint64_t size, align; std::vector<AstStructField> fields }
+>;
+```
+
+- **Strict Stageability Boundary (`ast.value` Reification)**:
+  - **Allowed**: Only the 8 stageable variants above (including string literals `"hello"` as pure `RawBytes` `Shape{ size = N, align = 1 }`).
+  - **Strictly Rejected (compile-time error)**: **All `Pointer`s** (Core has no `#freeze`), **all `Handle`s**, **all `NativeProto`s** (including `capabilities`), **all runtime-bound `BoundFfiProto`s**, and any struct recursively containing them.
+- **Lossless Round-Trip (`intern_ast_value(target_rt, av)`)**:
+  - Interns leaf bytes via `target_rt.shapes.intern_leaf`, symbols via `target_rt.symbols.intern`, shapes via `intern_ast_shape` (automatically canonicalizing builtin transparent shapes like `pointer_shape` / `symbol_shape` to `target_rt.shapes.*`), prototypes via `target_rt.prototypes.create_*`, and structs by recursively interning each field value and packing bytes at `f.offset` into `target_rt.shapes.intern_struct`.
+
+---
+
+## 3. Unified Pure-Data `capabilities.ffi` Specification
+
+Lang's Core has **no function-call syntax and no separate C type system**. Every `Shape` is already a transparent C-compatible memory layout (`size`, `align`, ordered `FieldEntry[]`), so FFI reuses `Shape` as the ABI contract and `#evaluate` as the sole invocation mechanism.
+
+`capabilities.ffi` exposes **exactly 2 pure-data Prototype-Factories** (retiring `open_lib` / `load_symbol` / `close_lib` completely — zero OS handles leak into compile scripts or `Ast`):
+
+### 3.1 Primitives (2 total)
+
+1. **`capabilities.ffi.extern_symbol`** *(Direct External C Call)*
    - **Input fields in `#this`**:
-     - `path: Pointer` (immutable fat pointer to leaf `Shape{ size = N, align = 1 }` UTF-8 library path).
-     - If `N == 0` (empty path `""`), opens the current process's global symbol table (`dlopen(nullptr, RTLD_LAZY)` on POSIX / `GetModuleHandleA(nullptr)` on Windows), making already-linked symbols such as `libc` immediately resolvable.
-   - **Return**: `Handle` — the raw OS dynamic library handle (`void*` cast to `uint64_t`). Ownership belongs strictly to the caller (no hidden RC or handle table).
-   - **Error**: Throws if the shared library cannot be loaded.
-
-2. **`capabilities.ffi.close_lib`**
-   - **Input fields in `#this`**:
-     - `lib: Handle` — library handle returned by `open_lib`.
-   - **Return**: `bytes(1, 1)` (`0x01` if `dlclose` / `FreeLibrary` succeeded, `0x00` otherwise).
-   - **Semantics**: Directly releases the OS handle with zero hidden refcounting or dangling-handle tracking (mirroring manual C `dlclose`; Stdlib layers deterministic RAII via `__destroy`).
-
-3. **`capabilities.ffi.load_symbol`**
-   - **Input fields in `#this`**:
-     - `lib: Handle` — library handle returned by `open_lib`.
-     - `name: Pointer` (leaf `Shape{ size = N, align = 1 }`) — exact C symbol name (e.g., `"strlen"`, `"abs"`, `"strtod"`, `"div"`).
-     - `abi: Abi` — a closed Lang struct describing the calling convention and parameter/return layouts:
+     - `lib: RawBytes` (leaf `Shape{ size = N, align = 1 }`) — library name (e.g., `""` for default process/libc symbols, `"m"`, `"sqlite3"`).
+     - `name: RawBytes` — exact C symbol name (e.g., `"malloc"`, `"strlen"`, `"div"`, `"dlopen"`).
+     - `abi: Abi`:
        ```text
        Abi {
          args: Shape,   ! Closed Shape whose ordered fields define C parameters (unit_shape = 0 args) !
@@ -89,67 +131,84 @@ Lang's Core has **no function-call syntax and no separate C type system**. Becau
          cc:   Symbol   ! Calling convention: `c` (platform default C ABI) !
        }
        ```
-   - **Return**: `Prototype` (`FfiProto` variant), indistinguishable at the call site from any other `Prototype`.
+   - **Return**: `Prototype` (`FfiProto` — pure data `{ lib_name, symbol_name, args_shape_addr, ret_shape_addr, cc }`, **zero `NativeFn` closure, zero `dlopen` handle**, 100% stageable into `Ast`).
+   - **Phase 1 Execution**: Each `RuntimeContext` owns a lazy `FfiDispatchCache` that opens `lib_name` via `dlopen`, resolves `symbol_name` via `dlsym`, prepares `ffi_cif` once, and automatically calls `dlclose` on all cached libraries in `~RuntimeContext()`.
+   - **Phase 2 Execution**: Emits LLVM `declare external` + direct C ABI call + linker flag `-l<lib_name>`.
 
-### 2.2 Invocation Semantics (`#evaluate(native_proto)`)
+2. **`capabilities.ffi.bind_ptr`** *(Two-Stage Indirect C Function Pointer Call)*
+   - **Stage 1 (Compile-Time Factory)**:
+     - **Input fields in `#this`**:
+       - `fn: Symbol` — slot name in `#this` from which Stage 2 will read the 8-byte raw C function pointer (`c_ptr`, `raw8_shape`).
+       - `abi: Abi` — compile-time fixed C ABI `{ args: Shape, ret: Shape, cc: Symbol }`.
+     - **Return**: `Prototype` (`FfiBindPtrProto` — pure data `{ fn_slot, args_shape_addr, ret_shape_addr, cc }`, 100% stageable into `Ast`).
+   - **Stage 2 (Runtime Binding — zero `capabilities`, zero slot collision with `abi.args`)**:
+     - Evaluating `FfiBindPtrProto` reads **only** `#this.<fn_slot>` (8-byte raw address) and returns a first-class runtime `Prototype` (`BoundFfiProto { void* fn_ptr, args_shape_addr, ret_shape_addr, cc }`).
+     - Because `BoundFfiProto` holds a live process `fn_ptr`, it is runtime-bound and cannot be lifted back into `Ast`.
+   - **Stage 3 (Runtime Call — 100% identical to `extern_symbol`)**:
+     - Evaluating `BoundFfiProto` reads only `abi.args` from `#this` (clean argument frame, no `fn` slot pollution) and invokes `fn_ptr`.
+     - **Phase 1**: Dispatches via `target_rt`'s `FfiDispatchCache` (`ffi_cif` + `FFI_FN(fn_ptr)`).
+     - **Phase 2 LLVM AOT**: Because `abi` is fixed in Stage 1, LLVM statically generates an indirect-call trampoline for `abi`, and Stage 2 simply pairs `{ fn_ptr, static_thunk }` — **zero `libffi` dependency in AOT binaries**.
 
-Because Core has no function semantics, `#evaluate(p)` always executes in the caller's active `#this` frame. `abi.args` leverages the fact that `ShapeLayout.fields` is an **ordered array** of `FieldEntry[count]` carrying both field names (`sym`) and deterministic parameter order (`0 .. count-1`):
+### 3.2 Invocation Semantics (`#evaluate`)
 
-1. For each non-zero-sized `fe` in `args_shape.fields.entries[0 .. count-1]` (0-byte tag fields are skipped):
-   - Look up `slot_ptr = #field(#this, fe.sym)` in the current `#this` frame.
-   - Verify the slot exists, is `Live`, and satisfies `slot_ptr.shape_ptr == fe.sub_shape_addr`.
-   - Record `arg_ptrs[i] = reinterpret_cast<void*>(slot_ptr.addr)`.
-2. Invoke the resolved C function pointer with `arg_ptrs` under the precompiled `ffi_cif`.
-3. Write the C return value into a `Value{ ret_shape_addr, bytes }` buffer (or `unit` if `ret_shape.size == 0`) and return it as the result of `#evaluate`.
+For both `FfiProto` and `BoundFfiProto`:
+1. For each non-zero-sized `fe` in `args_shape.fields.entries[0 .. count-1]` (0-byte tag fields skipped):
+   - Look up `slot_ptr = #field(#this, fe.sym)` in the active `#this` frame, verify `Live` and `slot_ptr.shape_ptr == fe.sub_shape_addr`, and record `arg_ptrs[i] = reinterpret_cast<void*>(slot_ptr.addr)`.
+2. Invoke the C function under `ffi_cif` (Phase 1) or native call (Phase 2).
+3. Return `Value{ ret_shape_addr, bytes }` (or `unit` if `ret_shape.size == 0`).
 
-**Key Properties**:
-- **Named and Positional Calls Unified**:
-  - Named ABI: `args = #shape({ fd := i32_0; buf := u64_0; count := u64_0 })` → invoke via `{ fd := 1; buf := p.addr; count := 5; #evaluate(c_write) }`.
-  - Positional ABI: `args = #shape({ 0 := i32_0; 1 := u64_0; 2 := u64_0 })` → invoke via `{ 0 := 1; 1 := p.addr; 2 := 5; #evaluate(c_write) }`.
-- **Zero Implicit Pointer Unwrapping**: A Lang fat `Pointer` is 24 bytes `{ addr, shape_ptr, mutability }`; a C pointer (`void*`, `const char*`) is an 8-byte raw address (`raw8_shape`). Callers explicitly pass `p.addr` (or wrap it in a Layer 1 helper), keeping ABI marshaling 100% transparent.
+- **Zero Implicit Pointer Unwrapping**: Lang fat `Pointer` is 24 bytes `{ addr, shape_ptr, mutability }`; C `void*` / `const char*` is an 8-byte raw address (`raw8_shape`). Callers explicitly pass `p.addr`.
 
 ---
 
-## 3. Unified `Shape` → C ABI Type Mapping & Struct Layout Verification
+## 4. Unified `Shape` → C ABI Type Mapping & Struct Layout Verification
 
-In hardware ABIs (SysV AMD64, AAPCS64, Win64), integer and floating-point values of the same size use different register classes (GPR vs. XMM/VFP), and C structs passed/returned by value follow platform register-classification rules.
-
-Following the same zero-overhead convention used by `Symbol` (`__sym_tag: {}`), floating-point `Shape`s are identified by a zero-byte tag field:
+Floating-point `Shape`s are identified by a zero-byte tag field (`__f32_tag` / `__f64_tag`), matching `Symbol` (`__sym_tag`):
 
 | Lang `Shape` | Detection Rule | `libffi` Type (`Phase 1`) | LLVM Type (`Phase 2`) |
 | :--- | :--- | :--- | :--- |
 | `unit_shape` (`0B/1`, leaf) | `size == 0 && is_leaf()` | `ffi_type_void` *(return only; 0-arg `args` yields `nargs = 0`)* | `void` |
-| `f32` (`4B/4` with `__f32_tag`) | `size == 4` and has field `__f32_tag` (`0B`) | `ffi_type_float` | `float` |
-| `f64` (`8B/8` with `__f64_tag`) | `size == 8` and has field `__f64_tag` (`0B`) | `ffi_type_double` | `double` |
-| 1-byte leaf / single-scalar tagged (`raw1`, Stdlib `Bool`) | `size == 1`, no float tag | `ffi_type_uint8` | `i8` |
-| 2-byte leaf / single-scalar tagged | `size == 2`, no float tag | `ffi_type_uint16` | `i16` |
-| 4-byte leaf / single-scalar tagged (`Symbol`, `raw4`) | `size == 4`, no float tag | `ffi_type_uint32` | `i32` |
-| 8-byte leaf / single-scalar tagged (`raw8`, `Handle`, C ptr) | `size == 8`, no float tag | `ffi_type_uint64` | `i64` / `ptr` |
-| Composite struct (`fields` with ≥1 non-zero-sized fields, no float tag) | Non-empty non-tag fields | `ffi_type_struct` (recursive `elements[]` skipping `0B` tag fields) | `%struct` (packed/aligned to match `FieldEntry` offsets) |
+| `f32` (`4B/4` with `__f32_tag`) | `size == 4` and has `__f32_tag` (`0B`) | `ffi_type_float` | `float` |
+| `f64` (`8B/8` with `__f64_tag`) | `size == 8` and has `__f64_tag` (`0B`) | `ffi_type_double` | `double` |
+| 1/2/4/8-byte leaf or single-scalar tagged | `size ∈ {1,2,4,8}`, no float tag | `ffi_type_uint{8,16,32,64}` | `i{8,16,32,64}` / `ptr` |
+| Composite struct (≥1 non-zero-sized fields, no float tag) | Non-empty non-tag fields | `ffi_type_struct` (skipping `0B` tags) | `%struct` matching `FieldEntry` offsets |
 
-- **Strict By-Value Struct Layout Verification (`load_symbol`)**:
-  - Passing arbitrary manually laid-out `Shape`s (packed, custom padding, over-aligned) **by pointer** (`p.addr` as `raw8_shape`) is always supported.
-  - When passing or returning a composite struct **by value** through `libffi`, `load_symbol` verifies both total `ffi_type.size == shape->size` and every non-zero-sized field's offset via `ffi_get_struct_offsets(FFI_DEFAULT_ABI, st, offsets)` against `FieldEntry::offset()`. Any mismatch fails fast at `load_symbol` time rather than silently corrupting memory.
+- **Strict By-Value Struct Layout Verification**: Passing/returning composite structs by value verifies `ffi_type.size == shape->size` and every field offset via `ffi_get_struct_offsets` against `FieldEntry::offset()`, failing fast on any mismatch.
 
 ---
 
-## 4. Two-Phase Unification: Interpreter vs. Phase 2 LLVM AOT
+## 5. Pure-Data `PrototypeObject` & `IntrinsicSpec` (`compiler/runtime/Prototype.h`)
 
-`PrototypeObject` is a **pure-data closed sum type (`std::variant`)** carrying no virtual dispatch or backend methods. Every consumer (Phase 1 `Evaluator`, Phase 2 `LlvmCodegen`, `serialize_proto`, debug dump) dispatches externally via `std::visit` with compile-time exhaustiveness checking:
+`PrototypeObject` is a **pure-data closed sum type (`std::variant`)** with external exhaustive `std::visit` dispatch across all consumers:
 
 ```cpp
 struct FfiBinding {
+    std::string lib_name;      // "" = default process/libc, "m" = libm, ...
     std::string symbol_name;   // C symbol name
     uint64_t args_shape_addr;  // Canonical closed ShapeLayout*
     uint64_t ret_shape_addr;   // Canonical closed ShapeLayout*
     SymbolId cc;               // Calling convention symbol (e.g. "c")
 };
 
+struct FfiBindPtrSpec {
+    SymbolId fn_slot;          // Slot name in #this holding raw 8B C fn ptr
+    uint64_t args_shape_addr;
+    uint64_t ret_shape_addr;
+    SymbolId cc;
+};
+
+struct BoundFfiSpec {
+    void* fn_ptr;              // Live runtime C function pointer (non-stageable)
+    uint64_t args_shape_addr;
+    uint64_t ret_shape_addr;
+    SymbolId cc;
+};
+
 enum class IntBinKind   : uint8_t { Add, Sub, Mul, SDiv, UDiv, SRem, URem, BitAnd, BitOr, BitXor, Shl, AShr, LShr };
 enum class IntUnaryKind : uint8_t { BitNot };
 enum class FloatBinKind : uint8_t { Add, Sub, Mul, Div };
 enum class CastKind     : uint8_t { SExt, ZExt, Trunc, FPExt, FPTrunc, SIToFP, UIToFP, FPToSI, FPToUI };
-enum class CmpKind      : uint8_t { EqBytes, SLt, ULt, SLe, ULe, FEq, FLt, FLe };
+enum class CmpKind      : uint8_t { EqBytes, EqShape, SLt, ULt, SLe, ULe, FEq, FLt, FLe };
 
 struct IntBinOp   { IntBinKind op;   uint8_t width; SymbolId lhs, rhs; };             // -> bytes(width)
 struct IntUnaryOp { IntUnaryKind op; uint8_t width; SymbolId src; };                  // -> bytes(width)
@@ -159,18 +218,16 @@ struct CmpOp      { CmpKind op;      uint8_t width; SymbolId lhs, rhs; };       
 
 using IntrinsicSpec = std::variant<IntBinOp, IntUnaryOp, FloatBinOp, CastOp, CmpOp>;
 
-struct AstProto       { Ast::ExprPtr ast; };
-struct NativeProto    { std::string extern_name; NativeFn fn; };
-struct FfiProto       { FfiBinding binding; NativeFn fn; };
-struct IntrinsicProto { IntrinsicSpec spec; }; // Pure POD data, zero std::function closure
+struct AstProto        { Ast::ExprPtr ast; };
+struct NativeProto     { std::string extern_name; NativeFn fn; }; // Host-only (non-stageable)
+struct FfiProto        { FfiBinding binding; };                   // Pure data (stageable)
+struct FfiBindPtrProto { FfiBindPtrSpec spec; };                  // Pure data (stageable)
+struct BoundFfiProto   { BoundFfiSpec spec; };                    // Runtime-bound (non-stageable)
+struct IntrinsicProto  { IntrinsicSpec spec; };                   // Pure data (stageable)
 
 struct PrototypeObject {
-    std::variant<AstProto, NativeProto, FfiProto, IntrinsicProto> payload;
+    std::variant<AstProto, NativeProto, FfiProto, FfiBindPtrProto, BoundFfiProto, IntrinsicProto> payload;
 };
 ```
 
-- **Phase 1 (Interpreter)**:
-  - `Evaluator` uses `std::visit` on `PrototypeObject::payload`: `AstProto` runs the coroutine AST evaluator, `NativeProto` and `FfiProto` invoke `fn(*this)` (where `load_symbol` precompiles `ffi_cif` once into `FfiProto::fn`), and `IntrinsicProto` dispatches directly through C++23 width/type templates on `spec` with zero closure overhead.
-- **Phase 2 (LLVM AOT & `serialize_proto`)**:
-  - `serialize_proto` writes only the portable payload (`FfiBinding`, `IntrinsicSpec`, or serialized AST) — never raw pointers or OS library binaries.
-  - `emit_executable` uses `std::visit` to lower `IntrinsicProto` directly into single LLVM IR instructions and `FfiProto` into `declare external` + native C ABI calls using the exact same `Shape -> llvm::Type` table in §3.
+- `eq_shape` is promoted to a Prototype-Factory returning `IntrinsicProto{ CmpOp{ CmpKind::EqShape, 0, lhs, rhs } }` so `layer1.lang` emits 100% pure stageable `Ast` with zero `NativeProto` or `capabilities` leakage.

@@ -7,7 +7,7 @@
 
 1. **无子字段叶子 `Shape`（`size = N, align = A, fields = empty_map`）是 Core 唯一的物理归纳基底**：
    - 内核不提供 `%bytes` 原语，也不内置 `i32`、`u64`、`f64` 乃至独立的 `usize` 算术类型；
-   - 在 Core 对象模型中，任何 `fields == empty_map` 且 `size = N, align = A` 的普通 `Shape` 契约上即指代一段占 `N` 字节、按 `A` 对齐的原始字节块（简记为 `bytes(N, A)`）。求值器在启动自举（Bootstrap）时仅需在 `.rodata` 静态实例化 `1B/1`、`2B/2`、`4B/4`、`8B/8` 四个叶子 `Shape` 以支撑五大内建透明类型及位宽算术；标准库只需提供轻量辅助函数 `raw_bytes_shape(N, align)`，并在高层按需提供 `ByteArray` / `BitSet` / `Slice`。
+   - 在 Core 对象模型中，任何 `fields == empty_map` 且 `size = N, align = A` 的普通 `Shape` 契约上即指代一段占 `N` 字节、按 `A` 对齐的原始字节块（简记为 `bytes(N, A)`）。求值器在启动自举（Bootstrap）时仅需在 `ShapeArena` 中静态实例化 `1B/1`、`2B/2`、`4B/4`、`8B/8` 四个叶子 `Shape` 以支撑五大内建透明类型及位宽算术；标准库只需提供轻量辅助函数 `raw_bytes_shape(N, align)`，并在高层按需提供 `ByteArray` / `BitSet` / `Slice`。
 2. **零尺寸标记（ZST Marker）区分同尺寸描述性 `Shape`**：
    - 由于 `Shape` 是纯粹描述性的（Descriptive），两个同样包装 `4B/4` 的类型（如 `i32` 与 `u32`）通过在结构中嵌入不同符号名的零尺寸空对象字段（如 `__i32_tag : {}` vs `__u32_tag : {}`）实现零内存开销的 `Shape` 区分与多态分派；且这些 `Shape` 直接由标准库构造，无需特殊元层能力。
 3. **全内建类型透明化与 `Shape` 极简 4 字段自解释**：
@@ -33,12 +33,12 @@ Shape := {
 在此结构下，任意定长原始字节块形状没有任何黑魔法，标准库辅助构造函数直接表示为：
 
 ```
-raw_bytes_shape(N, align) := #freeze({
+raw_bytes_shape(N, align) := {
     size        := N;
     align       := align;
     fields      := empty_map;
     __shape_tag := {}
-})
+}
 ```
 
 - **为什么叶子 `Shape` 需要 `align`**：

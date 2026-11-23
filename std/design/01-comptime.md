@@ -1,76 +1,58 @@
-# 01 - Comptime 与阶段边界
+# 01 - 编译期与运行期：严格分层与阶段边界
 
 前置：无（系列总纲）
-后续：[02-evaluation.md](02-evaluation.md)、[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)、[06-stdlib-foundations.md](06-stdlib-foundations.md)、[07-types-and-intrinsics.md](07-types-and-intrinsics.md)、[08-syntax.md](08-syntax.md)
+后续：[02-evaluation.md](02-evaluation.md)、[03-symbols-locations-matching.md](03-symbols-locations-matching.md)、[04-control-flow.md](04-control-flow.md)、[05-ownership.md](05-ownership.md)、[06-stdlib-foundations.md](06-stdlib-foundations.md)、[07-types-and-intrinsics.md](07-types-and-intrinsics.md)、[08-syntax.md](08-syntax.md)、[09-syntax-capabilities.md](09-syntax-capabilities.md)、[10-ffi-and-capabilities.md](10-ffi-and-capabilities.md)
 
 ## 一、核心原则
 
-语言只有一个求值器。代码可在编译期或运行期被求值，两者的求值规则、控制流与所有权语义完全相同。
-`#compile` 不是值上的属性，而是**求值发生的时机**。
+1. **同一套内核求值语义**：编译期脚本与运行期目标程序共享同一套 Core 语义（21 个 `#` 内建原语、三态槽状态机、透明 `Shape` 与对称协程）。
+2. **严格的编译期 / 目标运行期隔离**：不存在把编译器前端泄入运行期的“运行时 `import`”或隐式 `#compile` 魔法；构建脚本（编译期）与目标程序（运行期）通过**环境无关的 Standalone `Ast`** 严格解耦：
+   - **编译期（Build Script）**：在挂载了 `capabilities`（Tier 1–3）的宿主 `RuntimeContext` 中运行，负责自举语法前端、读取并解析多文件源码、构造/拼装 Core IR（`Ast`）、实例化编译期常量与外部声明（`intrinsics`、`ffi`），最后将封闭的 `Ast` 交给后端。
+   - **目标运行期（Target Program）**：在**完全孤立的运行环境**中执行（Phase 1 由 `capabilities.backends.interpreter.run` 创建全新的 `RuntimeContext` + `Evaluator`；Phase 2 由 `capabilities.backends.llvm.emit_executable` 生成独立原生可执行文件），**根帧不含 `capabilities`、`#parent = null`**。
 
-## 二、阶段分层与元层能力
+## 二、`Ast`、`Prototype` 与后端的职责划分
 
-| 层级 | 执行时机 | 触发方式 | 核心职责 |
-| :--- | :--- | :--- | :--- |
-| **元层** | 编译期（必须） | 构建脚本入口、顶层 `#compile(...)` 块 | 构建配置、语法/算符/字面量注册、底层 `bytes(N, N)` 算术 `intrinsics` 获取、模块导入、编译期诊断 |
-| **程序层（静态）** | 编译期（编译器尽力） | 常量折叠成功；`#compile(...)` 强制 | 单态化、静态连续内存布局推导、指针瘦化（消去静态已知的 `shape_ptr` 与 `mutability`） |
-| **程序层（动态）** | 运行期 | 默认；静态未知时保留运行期描述信息 | 常规程序执行、胖指针动态寻址与分派 |
+| 概念 / 原语 | 语义 | 是否绑定 `RuntimeContext` |
+| :--- | :--- | :---: |
+| **`Ast`（Core IR）** | 唯一的环境无关程序表示（`WordExpr`、`BuiltinExpr`、`SequenceExpr`、`ValueExpr{ AstValue }`） | **否** |
+| **`Prototype`** | 某个活运行环境内的可执行实体（`AstProto`、`IntrinsicProto`、`FfiProto`、`FfiBindPtrProto`、`BoundFfiProto`、`NativeProto`） | **是** |
+| **`ast.to_proto({ ast })`** | 将 `Ast` **嵌入（stage 到）当前编译脚本的 `RuntimeContext`**，生成活 `AstProto` 供脚本自身 `#evaluate` / `#block` 执行 | **是** |
+| **`ast.serialize` / `ast.deserialize`** | `Ast` ↔ `Bytes` 的无损二进制编解码，用于增量缓存、预编译模块与跨进程传递 IR（取代旧 `serialize_proto`） | **否** |
+| **`backends.interpreter.run({ ast })`** | **Phase 1 解释器后端**：构造全新独立的 `RuntimeContext` + `Evaluator`，将 `Ast` 实例化并孤立执行 | 目标独立 |
+| **`backends.llvm.emit_executable({ ast, ... })`** | **Phase 2 AOT 后端**：直接将同一棵 `Ast` 降级为 LLVM IR 与独立原生二进制 | 无 `RuntimeContext` |
 
-- **元层隔离与能力注入**：原生在编译期执行的元层代码与“被折叠到编译期执行的普通程序代码”明确区分。元层能力（IO、文件系统、`import`、字段映射 `capabilities.map`、符号池互转 `capabilities.symbols`、底层指令集 `capabilities.intrinsics`、语法注册 `capabilities.syntax` 与字节常量构造）通过显式的 `capabilities` 对象传入，默认沙箱化。
-- **语法扩展与纯 `Prototype`**：AST 仅存在于编译期元层的语法重写阶段（见 [08-syntax.md](08-syntax.md)）；一旦生成 `Prototype`（`^Expr`），它在编译期与运行期都是不携带 AST 包袱的纯执行代码值，保证两阶段语义严格一致且运行期零 AST 开销。
-- **确定性与可缓存**：单次编译期求值内部允许拥有局部可变状态（`mutable` location）；但跨求值缓存与跨阶段传递只允许不可变的固化值（见第四节），因此编译期求值天然可缓存、可测试、IDE 可安全执行。
+* **多文件构建模型**：多文件项目由编译脚本驱动——纯目标模块全程保持为 `Ast`，按依赖顺序通过 `ast.seq` / `ast.builtin` 拼装成单一根 `Ast`（无需 `to_proto`）；仅需要在编译期借助 `capabilities` 计算导出值的模块（如 `lib/std/libc.lang`）先经 `ast.to_proto` + `#block` 求值，再将其纯可移植结果通过 `ast.value` 提升进目标 `Ast`。
 
-## 三、与动态结构的关系
+## 三、阶段边界规则（Stageability / `ast.value`）
 
-- 语言允许动态结构，因此语言层面“必须编译期已知”的语法位置趋近于零。
-- 类型/形状约束、泛型参数等位置**不强制要求**编译期已知；它们只是“若编译期可折叠则解锁单态化、内联连续布局与瘦指针退化”的优化机会。
-- **折叠成功** → 单态化 + 静态偏移计算 + 指针省去运行期 `shape_ptr` 与 `mutability` 字段（退化为单字瘦指针 `addr`）；**折叠失败** → 保留完整胖指针 + 动态查表寻址。
-- **强制断言**：用户可用 `#compile(...)` 显式约束某表达式必须在编译期求值完成（例如 `capabilities.intrinsics` 要求的编译期常数参数）；若折叠失败则直接报编译错误，绝不静默退化为运行期求值。
+编译期求值结果跨阶段进入 Standalone `Ast`（`ast.value({ arena, val })`）时，语言强制执行一刀切的 **Stageability 边界**：
 
-## 四、阶段边界规则
+1. **允许跨越边界的值（8 种结构化 `AstValue`，零 `RuntimeContext` 依赖）**：
+   - **`RawBytes`**：任意叶子位模式（`unit`、`raw1/2/4/8`、整数/浮点原始字节、以及字符串字面量 `"hello"` 等 `Shape{ size = N, align = 1 }` 纯字节值）；
+   - **`SymbolVal`**：按名称保存的符号常量（延迟 intern）；
+   - **`ShapeVal`**：纯值语义的 `AstShape` 布局树（无值仅布局）；
+   - **`AstProtoVal`**：嵌套代码原型 `^Expr`（持有子 `ExprPtr`）；
+   - **`IntrinsicVal`**：5 变体 LLVM 对齐硬件指令规格（槽名存 `std::string`）；
+   - **`FfiExternVal`**：纯声明式外部链接符号规格（`{ lib, symbol, args, ret, cc }`）；
+   - **`FfiBindPtrVal`**：二次实例化间接函数指针绑定器（`{ fn_slot, args, ret, cc }`）；
+   - **`StructVal`**：闭合复合结构体常量 `{ size, align, vector<{ name, offset, AstValue }> }`（子字段 `Shape` 由 `AstValue` 自身推导，零重复）。
+2. **严禁跨越边界的值（`ast.value` 直接拒绝报错）**：
+   - **所有 `Pointer`**（Core 已移除 `#freeze`，不存在任何“可跨阶段的冻结指针”；字符串字面量直接按 `RawBytes` 值嵌入）；
+   - **所有 `Handle`**（`AstArena*`、`FrontendArena*`、协程句柄等）；
+   - **所有 `NativeProto`**（宿主编译器 C++ 函数指针，包括整个 `capabilities`）；
+   - **所有运行期已绑定裸指针的 `BoundFfiProto`**（`ffi.bind_ptr` 在运行期二次实例化后的产物）；
+   - 任何递归包含上述类型的结构体。
+3. **单向性**：`compile-time → Ast → target runtime` 严格单向不可逆；运行期值绝不回流编译期。
 
-1. **固化（Reification）**：编译期求值结果跨阶段进入运行期时，只允许以下不可变 `value` 跨越边界：
-   - **非指针 POD `value`**（底层为无子字段叶子 `Shape` 的值，如各类整数、浮点数、`bytes(1, 1)`、`Symbol` 等）：按位深拷贝为二进制常量数据；
-   - **指向只读常量区（`frozen` 区）的安全只读 `Pointer`**：包括已闭合对象的 `Shape` 指针（`#shape(val)`）、编译期冻结的模块与只读对象快照（`#freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
-   - **`Prototype`（纯代码值）**：包括由 `^Expr` 构造或由 `capabilities.intrinsics` 生成的底层算术/比较 `Prototype`，固化为可序列化的中间表示（IR）/机器码并参与后续编译。
-   - **严禁固化**：指向编译期栈或协程堆上普通 `location` 的 `Pointer`、外部 OS 资源句柄、活跃块指针（`#this`）及协程 `Handle`（`#caller`）。
-2. **阶段结束清理**：单次 `#compile` 求值结束时，其创建的局部资源按 [06-stdlib-foundations.md](06-stdlib-foundations.md) 的标准库 RAII 协议完整执行清理，仅固化值留存。
-3. **单向性**：`compile → runtime` 单向不可逆。运行期值绝不能流回编译期（语言内核显式排除运行期 JIT）。
-4. **步数上限**：编译期求值不追求理论可判定性；编译器设置求值步数上限，超限时报错并输出调用栈。
+## 四、与动态结构及可变性的正交性
 
-## 五、形状（`Shape`）与泛型接口
+- **位置可变性与阶段完全正交**：位置是否可原地覆写仅由 `#allocate(s, is_mut)` / `#allocate_val(v, is_mut)` 的 `is_mut`（`bytes(1, 1)`）决定；默认不可变（仅允许 `uninitialized → live` 单次写入）。
+- **静态折叠作为优化机会**：类型/形状约束与泛型均以普通 `Shape` 值表达；编译期可折叠时解锁单态化、静态偏移与瘦指针退化（消去运行期 `shape_ptr` 与 `mutability`），折叠失败时自然退回完整胖指针动态寻址。
+- **动态内存与动态 FFI 均显式化**：目标运行期不再存在隐藏的 `#freeze` 永生堆分配，也不保留 `capabilities`；运行期堆内存通过声明式 FFI 引入 `libc.malloc` / `libc.free` 管理，运行期动态加载插件库通过 `ffi.extern_symbol` 引入 `dlopen` / `dlsym` + `ffi.bind_ptr` 完成。
 
-- **唯一类型概念 `Shape`**：全语言用 `Shape` 统一替代传统的 `type`（完整结构见 [07-types-and-intrinsics.md](07-types-and-intrinsics.md)）。
-- **泛型即普通子程序**：泛型函数 = 参数中包含 `Pointer(Shape)` 的普通子程序；泛型类型构造器 = 返回 `Pointer(Shape)` 或构造原型的普通子程序。
+## 五、验收用例（自检清单）
 
-## 六、阶段与可变性词汇表
-
-求值阶段与位置可变性完全正交，全语言仅保留两个核心维度：
-
-| 维度 | Core 机制 | 含义 | 缺省行为 |
-| :--- | :--- | :--- | :--- |
-| **求值时机** | `#compile(expr)` | 强制在编译期求值完成并固化 | 编译器尽力折叠，不作硬性保证 |
-| **位置可变性** | `#allocate(s, is_mut)` / `#allocate_val(v, is_mut)` | `is_mut = true` 允许槽位在进入 `live` 后再次调用 `#write` 原地覆写 | 默认 `immutable`（仅允许 `uninitialized → live` 单次写入） |
-
-- **废弃旧词**：`type`（统一为 `Shape`）、`constant`（混淆时机与可变性）、`variant`（缺省状态无需标注）、`comptime`（改用 `#compile`）、`static`（消除 C 系多义性）、`readonly`（缺省即为不可变）、`%seal`（单次初始化状态机已覆盖）。
-
-用法示例：
-```
-! 1. 元层块：编译期执行构建与语法注册逻辑 !
-#compile({ ... })
-
-! 2. 编译期求值并装箱绑定为运行期不可变位置 !
-size := #compile(f(x))
-
-! 3. 编译期求初值、运行期可反复修改的位置 !
-x := #allocate(i32, true);
-.x = #compile(f())
-```
-
-## 七、验收用例（自检清单）
-
-1. **编译期 `printf`**：在编译期解析格式串，并按参数 `Shape` 生成对应的格式化 `Prototype` 代码固化到运行期。
-2. **编译期生成只读查找表**：`#compile` 块中用可变 `location` 计算完美哈希表，经 `#freeze` 冻结为指向只读常量区的安全指针后跨阶段供运行期只读访问。
-3. **编译期反射 `derive(Serialize)`**：通过 `#shape` 与 `Shape.fields`（`capabilities.map`）遍历字段元数据，生成并返回序列化代码 `Prototype`。
-4. **非法固化拦截**：编译期构造栈/堆 `location` 指针试图直接跨阶段固化时静态拒绝；POD `value`、只读常量区 `Pointer`（含闭合 `Shape` 与 `frozen` 对象）、`Prototype` 正常固化。
-5. **编译期 RAII**：`#compile` 块内创建的资源与 `defer` 守卫在编译期块结束时按与运行期完全相同的标准库逆序规则执行 `destroy`。
+1. **孤立执行验证**：通过 `backends.interpreter.run({ ast })` 运行目标程序时，目标根帧内 `#field(#this, capabilities)` 与 `#parent` 均为 `null` 指针，且使用独立 `RuntimeContext` + `Evaluator`。
+2. **非法跨阶段值拦截**：试图将 `Pointer`、`Handle`、`NativeProto`（如 `capabilities`）或 `BoundFfiProto` 传入 `ast.value` 时静态抛错拒绝；8 种可移植 `AstValue`（含 `libc` 声明式符号与 `IntrinsicProto`）正常提升并在新 `RuntimeContext` 中无损 intern。
+3. **多文件编译脚本拼装**：构建脚本用 `syntax.parse` 解析多个模块为 `Ast`，通过 `ast.seq` + `ast.value` 合并为单一封闭 `Ast` 并直接交由后端执行，全程无需 `to_proto`。
+4. **纯字节字符串与零 `#freeze`**：`"hello"` 求值为 `Shape{ size = 5, align = 1 }` 的 `RawBytes` 值，可直接参与结构体构造与 FFI，全内核零 `#freeze` 原语。

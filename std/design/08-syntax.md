@@ -24,7 +24,7 @@
 | **`Comment`** | `! ... !`（内部支持 `\!` 转义） | 唯一注释语法（支持单行与多行），作为分隔符忽略 |
 | **`Escaped`** | `\` + 任意单字符 | 转义后字符失去原有语法含义，作为普通 `Char` 参与构成 `Word` |
 | **`Word`** | 一个或多个连续的字母、数字、`_`、非 ASCII 字节或 `Escaped` 字符 | 统一词元（标识符与数字文本在词法层不作区分）；Layer 0 中自动映射为编译期驻留的 4 字节 `Symbol` ID |
-| **`Builtin`** | `#` 紧贴 `Word`（如 `#this`、`#write`） | 指代 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) §3 中的 22 个内置原语 |
+| **`Builtin`** | `#` 紧贴 `Word`（如 `#this`、`#write`） | 指代 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) §3 中的 21 个内置原语 |
 
 ### 2.2 Layer 0 文法（仅 4 条产生式）
 
