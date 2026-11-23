@@ -72,7 +72,6 @@ uint64_t align_up(uint64_t value, uint64_t alignment) noexcept;
 class ShapeArena {
 private:
     std::vector<std::unique_ptr<ShapeLayout>> shapes_;
-    std::vector<std::vector<uint8_t>> frozen_blobs_;
     std::unordered_map<ShapeKey, uint64_t, ShapeKeyHash> intern_table_;
 
     void bootstrap(SymbolPool& syms);
@@ -107,7 +106,6 @@ public:
     uint64_t intern_leaf(uint64_t size, uint64_t align);
     uint64_t intern_struct(const std::vector<FieldEntry>& entries, uint64_t size, uint64_t align);
     uint64_t intern_struct_auto(const std::vector<FieldSpec>& specs);
-    PointerLayout freeze_bytes(uint64_t shape_addr, std::span<const uint8_t> data);
 
     // Unified single-path #field(ptr, sym): works identically on open frames, closed objects, and addr=0 z_ptr.
     PointerLayout field_of(const PointerLayout& ptr, SymbolId sym) const noexcept;

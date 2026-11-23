@@ -98,14 +98,6 @@ uint64_t ShapeArena::intern_struct_auto(const std::vector<FieldSpec>& specs) {
     return intern_struct(entries, total_size, max_align);
 }
 
-PointerLayout ShapeArena::freeze_bytes(uint64_t shape_addr, std::span<const uint8_t> data) {
-    frozen_blobs_.emplace_back(data.begin(), data.end());
-    uint64_t addr = frozen_blobs_.back().empty()
-        ? reinterpret_cast<uint64_t>(&frozen_blobs_.back())
-        : reinterpret_cast<uint64_t>(frozen_blobs_.back().data());
-    return PointerLayout{addr, shape_addr, 0};
-}
-
 PointerLayout ShapeArena::field_of(const PointerLayout& ptr, SymbolId sym) const noexcept {
     if (ptr.shape_ptr == 0) {
         return PointerLayout{};

@@ -31,10 +31,9 @@ const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table() {
         {"deref", {K::Deref, 1}},
         {"write", {K::Write, 2}},
 
-        // 3 navigation, reflection & freeze primitives
+        // 2 navigation & reflection primitives
         {"field", {K::Field, 2}},
         {"shape", {K::Shape, 1}},
-        {"freeze", {K::Freeze, 1}},
 
         // 3 control-flow & coroutine primitives
         {"branch", {K::Branch, 3}},

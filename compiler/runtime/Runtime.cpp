@@ -26,14 +26,25 @@ ConstructingFrame* RuntimeContext::current_frame() noexcept {
 
 Value RuntimeContext::make_unit() const { return Value{shapes.unit_shape, {}}; }
 
+
 Value RuntimeContext::make_symbol(SymbolId id) const { return Value::from_pod(shapes.symbol_shape, id); }
 Value RuntimeContext::make_pointer(const PointerLayout& p) const { return Value::from_pod(shapes.pointer_shape, p); }
 Value RuntimeContext::make_proto(uint64_t proto_addr) const { return Value::from_pod(shapes.prototype_shape, proto_addr); }
 Value RuntimeContext::make_handle(uint64_t handle_val) const { return Value::from_pod(shapes.handle_shape, handle_val); }
 
-Value RuntimeContext::make_bytes_ptr(const void* data, uint64_t len) {
+Value RuntimeContext::make_raw_bytes(std::string_view data) {
+    return make_raw_bytes(data.data(), data.size());
+}
+
+Value RuntimeContext::make_raw_bytes(const void* data, uint64_t len) {
     uint64_t leaf = shapes.intern_leaf(len, 1);
-    return make_pointer(PointerLayout{reinterpret_cast<uint64_t>(data), leaf, 0});
+    Value out;
+    out.shape_addr = leaf;
+    if (len > 0) {
+        const auto* ptr = static_cast<const uint8_t*>(data);
+        out.bytes.assign(ptr, ptr + len);
+    }
+    return out;
 }
 
 PointerLayout RuntimeContext::field(const PointerLayout& ptr, SymbolId sym) const noexcept {

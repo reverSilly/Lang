@@ -33,6 +33,7 @@ add_library(lang_core STATIC
     runtime/Shape.cpp
     runtime/FrameStack.cpp
     runtime/Prototype.cpp
+    runtime/FfiDispatch.cpp
     runtime/Runtime.cpp
     parser/Peg.cpp
     parser/Layer0.cpp

@@ -22,9 +22,22 @@ uint64_t PrototypeArena::create_native(std::string extern_name, NativeFn fn) {
     return addr;
 }
 
-uint64_t PrototypeArena::create_ffi(FfiBinding binding, NativeFn fn) {
-    auto obj = std::make_unique<PrototypeObject>(
-        PrototypeObject{FfiProto{std::move(binding), std::move(fn)}});
+uint64_t PrototypeArena::create_ffi_extern(FfiBinding binding) {
+    auto obj = std::make_unique<PrototypeObject>(PrototypeObject{FfiProto{std::move(binding)}});
+    uint64_t addr = reinterpret_cast<uint64_t>(obj.get());
+    objects_.push_back(std::move(obj));
+    return addr;
+}
+
+uint64_t PrototypeArena::create_ffi_bind_ptr(FfiBindPtrSpec spec) {
+    auto obj = std::make_unique<PrototypeObject>(PrototypeObject{FfiBindPtrProto{spec}});
+    uint64_t addr = reinterpret_cast<uint64_t>(obj.get());
+    objects_.push_back(std::move(obj));
+    return addr;
+}
+
+uint64_t PrototypeArena::create_bound_ffi(BoundFfiSpec spec) {
+    auto obj = std::make_unique<PrototypeObject>(PrototypeObject{BoundFfiProto{spec}});
     uint64_t addr = reinterpret_cast<uint64_t>(obj.get());
     objects_.push_back(std::move(obj));
     return addr;
