@@ -1,14 +1,14 @@
 ! ============================================================================ !
 ! tests/test_ast_build.lang — Compile-Time AST Construction & Backend Test     !
 ! Staged via `ast.to_proto` + `#block` (runs in compile-time env with          !
-! `#parent.capabilities` and `#parent.fe`).                                    !
+! `#parent(#this).capabilities` and `#parent(#this).fe`).                                    !
 !                                                                              !
 ! Verifies:                                                                    !
 !   1. `capabilities.ast` (`new_arena`, `word`, `value`, `builtin`, `seq`,     !
 !      `to_proto`, `destroy_arena`) + compile-time staging via `#block`        !
 !   2. Multi-module AST composition (`syntax.parse` + `ast.value` + `ast.seq`) !
 !      executed directly via `capabilities.backends.interpreter.run`           !
-!   3. Target isolation: `capabilities` and `#parent` are null inside          !
+!   3. Target isolation: `capabilities` and `#parent(#this)` are null inside          !
 !      `backends.interpreter.run` (brand-new RuntimeContext + Evaluator)       !
 ! ============================================================================ !
 
@@ -16,113 +16,113 @@ assert_true := ^(
     #branch($.cond, ^ok, ^#deref(#field(#this, __assertion_failed__)))
 ) ;
 
-caps  := $#parent.capabilities ;
+caps  := $#parent(#this).capabilities ;
 c_ast := $.caps.ast ;
 c_syn := $.caps.syntax ;
 c_run := $.caps.backends.interpreter.run ;
-fe    := $#parent.fe ;
+fe    := $#parent(#this).fe ;
 
 ! Create an independent AST arena for this compile-time build test !
-arena := #block(^( #break(#evaluate($#parent.c_ast.new_arena)) )) ;
+arena := #block(^( #break(#evaluate($#parent(#this).c_ast.new_arena)) )) ;
 
 ! 1a. Programmatically construct `#bind(k, #allocate_val(42, false)) ; #break(#deref(#field(#this, k)))` !
-a_sym_k := #block(^( arena := $#parent.arena ; sym := k ; #break(#evaluate($#parent.c_ast.word)) )) ;
-a_v42   := #block(^( arena := $#parent.arena ; val := 42 ; #break(#evaluate($#parent.c_ast.value)) )) ;
-a_false := #block(^( arena := $#parent.arena ; val := false ; #break(#evaluate($#parent.c_ast.value)) )) ;
+a_sym_k := #block(^( arena := $#parent(#this).arena ; sym := k ; #break(#evaluate($#parent(#this).c_ast.word)) )) ;
+a_v42   := #block(^( arena := $#parent(#this).arena ; val := 42 ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
+a_false := #block(^( arena := $#parent(#this).arena ; val := false ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
 a_alloc := #block(^(
-    arena := $#parent.arena ;
+    arena := $#parent(#this).arena ;
     kind  := allocate_val ;
-    0     := $#parent.a_v42 ;
-    1     := $#parent.a_false ;
-    #break(#evaluate($#parent.c_ast.builtin))
+    0     := $#parent(#this).a_v42 ;
+    1     := $#parent(#this).a_false ;
+    #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_bind := #block(^(
-    arena := $#parent.arena ;
+    arena := $#parent(#this).arena ;
     kind  := bind ;
-    0     := $#parent.a_sym_k ;
-    1     := $#parent.a_alloc ;
-    #break(#evaluate($#parent.c_ast.builtin))
+    0     := $#parent(#this).a_sym_k ;
+    1     := $#parent(#this).a_alloc ;
+    #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
-a_this := #block(^( arena := $#parent.arena ; kind := this ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
+a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
 a_fld  := #block(^(
-    arena := $#parent.arena ;
+    arena := $#parent(#this).arena ;
     kind  := field ;
-    0     := $#parent.a_this ;
-    1     := $#parent.a_sym_k ;
-    #break(#evaluate($#parent.c_ast.builtin))
+    0     := $#parent(#this).a_this ;
+    1     := $#parent(#this).a_sym_k ;
+    #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_deref := #block(^(
-    arena := $#parent.arena ;
+    arena := $#parent(#this).arena ;
     kind  := deref ;
-    0     := $#parent.a_fld ;
-    #break(#evaluate($#parent.c_ast.builtin))
+    0     := $#parent(#this).a_fld ;
+    #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_brk := #block(^(
-    arena := $#parent.arena ;
+    arena := $#parent(#this).arena ;
     kind  := break ;
-    0     := $#parent.a_deref ;
-    #break(#evaluate($#parent.c_ast.builtin))
+    0     := $#parent(#this).a_deref ;
+    #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_prog := #block(^(
-    arena := $#parent.arena ;
-    0     := $#parent.a_bind ;
-    1     := $#parent.a_brk ;
-    #break(#evaluate($#parent.c_ast.seq))
+    arena := $#parent(#this).arena ;
+    0     := $#parent(#this).a_bind ;
+    1     := $#parent(#this).a_brk ;
+    #break(#evaluate($#parent(#this).c_ast.seq))
 )) ;
 
 ! Stage into current compile-time env via `ast.to_proto` + `#block` !
-p_staged := #block(^( ast := $#parent.a_prog ; #break(#evaluate($#parent.c_ast.to_proto)) )) ;
+p_staged := #block(^( ast := $#parent(#this).a_prog ; #break(#evaluate($#parent(#this).c_ast.to_proto)) )) ;
 staged_res := #block($.p_staged) ;
 cond := $.staged_res == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
-! 1b. Staged `#block` shares compile-time `#parent` !
+! 1b. Staged `#block` shares compile-time `#parent(#this)` !
 host_val := 77 ;
-a_parent := #block(^( arena := $#parent.arena ; kind := parent ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
-a_sym_hv := #block(^( arena := $#parent.arena ; sym := host_val ; #break(#evaluate($#parent.c_ast.word)) )) ;
-a_pfld   := #block(^( arena := $#parent.arena ; kind := field ; 0 := $#parent.a_parent ; 1 := $#parent.a_sym_hv ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
-a_pderef := #block(^( arena := $#parent.arena ; kind := deref ; 0 := $#parent.a_pfld ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
-a_pbrk   := #block(^( arena := $#parent.arena ; kind := break ; 0 := $#parent.a_pderef ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
-p_host   := #block(^( ast := $#parent.a_pbrk ; #break(#evaluate($#parent.c_ast.to_proto)) )) ;
+a_parent := #block(^( arena := $#parent(#this).arena ; kind := parent ; 0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_sym_hv := #block(^( arena := $#parent(#this).arena ; sym := host_val ; #break(#evaluate($#parent(#this).c_ast.word)) )) ;
+a_pfld   := #block(^( arena := $#parent(#this).arena ; kind := field ; 0 := $#parent(#this).a_parent ; 1 := $#parent(#this).a_sym_hv ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_pderef := #block(^( arena := $#parent(#this).arena ; kind := deref ; 0 := $#parent(#this).a_pfld ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_pbrk   := #block(^( arena := $#parent(#this).arena ; kind := break ; 0 := $#parent(#this).a_pderef ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+p_host   := #block(^( ast := $#parent(#this).a_pbrk ; #break(#evaluate($#parent(#this).c_ast.to_proto)) )) ;
 host_res := #block($.p_host) ;
 cond := $.host_res == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 2. Multi-module AST composition + compile-time value lifting -> `backends.interpreter.run` !
-mod_src := "double_it := ^( #break($#parent.n * 2) )" ;
+mod_src := "double_it := ^( #break($#parent(#this).n * 2) )" ;
 app_src := "n := 5 ; $.base_val + #block($.double_it)" ;
 
-mod_ast := #block(^( fe := $#parent.fe ; arena := $#parent.arena ; src := $#parent.mod_src ; #break(#evaluate($#parent.c_syn.parse)) )) ;
-app_ast := #block(^( fe := $#parent.fe ; arena := $#parent.arena ; src := $#parent.app_src ; #break(#evaluate($#parent.c_syn.parse)) )) ;
+mod_ast := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ; src := $#parent(#this).mod_src ; #break(#evaluate($#parent(#this).c_syn.parse)) )) ;
+app_ast := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ; src := $#parent(#this).app_src ; #break(#evaluate($#parent(#this).c_syn.parse)) )) ;
 
 ! Lift compile-time constant `base_val := 32` into target AST via `ast.value` !
-a_sym_bv   := #block(^( arena := $#parent.arena ; sym := base_val ; #break(#evaluate($#parent.c_ast.word)) )) ;
-a_v32      := #block(^( arena := $#parent.arena ; val := 32 ; #break(#evaluate($#parent.c_ast.value)) )) ;
-a_alloc_bv := #block(^( arena := $#parent.arena ; kind := allocate_val ; 0 := $#parent.a_v32 ; 1 := $#parent.a_false ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
-a_bind_bv  := #block(^( arena := $#parent.arena ; kind := bind ; 0 := $#parent.a_sym_bv ; 1 := $#parent.a_alloc_bv ; #break(#evaluate($#parent.c_ast.builtin)) )) ;
+a_sym_bv   := #block(^( arena := $#parent(#this).arena ; sym := base_val ; #break(#evaluate($#parent(#this).c_ast.word)) )) ;
+a_v32      := #block(^( arena := $#parent(#this).arena ; val := 32 ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
+a_alloc_bv := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).a_v32 ; 1 := $#parent(#this).a_false ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_bind_bv  := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).a_sym_bv ; 1 := $#parent(#this).a_alloc_bv ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
 
 combined_ast := #block(^(
-    arena := $#parent.arena ;
-    0     := $#parent.a_bind_bv ;
-    1     := $#parent.mod_ast ;
-    2     := $#parent.app_ast ;
-    #break(#evaluate($#parent.c_ast.seq))
+    arena := $#parent(#this).arena ;
+    0     := $#parent(#this).a_bind_bv ;
+    1     := $#parent(#this).mod_ast ;
+    2     := $#parent(#this).app_ast ;
+    #break(#evaluate($#parent(#this).c_ast.seq))
 )) ;
 
 ! Run directly via `backends.interpreter.run` (zero `to_proto`, fresh RuntimeContext + Evaluator) !
-iso_res := #block(^( ast := $#parent.combined_ast ; #break(#evaluate($#parent.c_run)) )) ;
+iso_res := #block(^( ast := $#parent(#this).combined_ast ; #break(#evaluate($#parent(#this).c_run)) )) ;
 cond := $.iso_res == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
-! 3. Verify strict isolation: `capabilities` and `#parent` are null in `backends.interpreter.run` !
+! 3. Verify strict isolation: `capabilities` and `#parent(#this)` are null in `backends.interpreter.run` !
 src_caps := "p := #field(#this, capabilities) ; $.p.addr" ;
-ast_caps := #block(^( fe := $#parent.fe ; arena := $#parent.arena ; src := $#parent.src_caps ; #break(#evaluate($#parent.c_syn.parse)) )) ;
-caps_addr := #block(^( ast := $#parent.ast_caps ; #break(#evaluate($#parent.c_run)) )) ;
+ast_caps := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ; src := $#parent(#this).src_caps ; #break(#evaluate($#parent(#this).c_syn.parse)) )) ;
+caps_addr := #block(^( ast := $#parent(#this).ast_caps ; #break(#evaluate($#parent(#this).c_run)) )) ;
 cond := $.caps_addr == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
-src_par := "p := #parent ; $.p.addr" ;
-ast_par := #block(^( fe := $#parent.fe ; arena := $#parent.arena ; src := $#parent.src_par ; #break(#evaluate($#parent.c_syn.parse)) )) ;
-par_addr := #block(^( ast := $#parent.ast_par ; #break(#evaluate($#parent.c_run)) )) ;
+src_par := "p := #parent(#this) ; $.p.addr" ;
+ast_par := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ; src := $#parent(#this).src_par ; #break(#evaluate($#parent(#this).c_syn.parse)) )) ;
+par_addr := #block(^( ast := $#parent(#this).ast_par ; #break(#evaluate($#parent(#this).c_run)) )) ;
 cond := $.par_addr == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Clean up local AST arena !
-#block(^( arena := $#parent.arena ; #break(#evaluate($#parent.c_ast.destroy_arena)) )) ;
+#block(^( arena := $#parent(#this).arena ; #break(#evaluate($#parent(#this).c_ast.destroy_arena)) )) ;
 
 ast_build_tests_passed

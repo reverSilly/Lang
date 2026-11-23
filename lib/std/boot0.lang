@@ -365,8 +365,9 @@
 
 ! Construct `#this` AST dynamically inside SelfField handler (zero Handle in ast.value) !
 #bind(kind, #allocate_val(parent, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, b0_this)), #deref(#field(#this, F)))) ;
 #bind(b0_par, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ;
 #bind(sym, #allocate_val(arena, #deref(#field(#this, F)))) ;
 #bind(w_arena_b0, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;

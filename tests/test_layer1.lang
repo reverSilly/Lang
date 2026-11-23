@@ -52,6 +52,19 @@ empty_u := {} ;
 pt := { px := 10 ; py := 32 } ;
 cond := $.pt.px + $.pt.py == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
+! 6b. Multi-level ancestor block access via #parent(#parent(#this)) !
+nested_gp := {
+    outer_v := 99 ;
+    mid := {
+        inner := {
+            #break($#parent(#parent(#this)).outer_v)
+        } ;
+        #break($.inner)
+    } ;
+    #break($.mid)
+} ;
+cond := $.nested_gp == 99 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
 ! 7. Coroutines with `@` (`#resume`) !
 worker := #new(^(
     v1 := $#in ;

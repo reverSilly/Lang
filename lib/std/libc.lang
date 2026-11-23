@@ -1,7 +1,7 @@
 ! ============================================================================ !
 ! lib/std/libc.lang — Standard C89/C99 Declarative FFI Module (Pure Layer 1)   !
 !                                                                              !
-! Evaluates inside a `#block` (reading `#parent.capabilities`) and `#break`s   !
+! Evaluates inside a `#block` (reading `#parent(#this).capabilities`) and `#break`s   !
 ! a 100% pure stageable module struct (zero OS `Handle`, zero `open_lib`)      !
 ! exporting:                                                                   !
 !   - `shapes` : Common C ABI Shapes (`c_void`, `c_u8`, `c_int`, `c_size`,     !
@@ -9,7 +9,7 @@
 !   - 24 standard C symbols (`ffi.extern_symbol`, positional slots `0..3`)     !
 ! ============================================================================ !
 
-caps  := $#parent.capabilities ;
+caps  := $#parent(#this).capabilities ;
 c_con := $.caps.constants ;
 c_ffi := $.caps.ffi ;
 c_int := $.caps.intrinsics ;
@@ -23,38 +23,38 @@ c_ptr   := $.c_con.raw8_shape ;
 
 ! Construct a deterministic 4-byte 0 via Prototype-Factory trunc_int(8 -> 4) !
 trunc_8_4 := #block(^(
-    from := $#parent.c_con.raw8_shape.size ;
-    to   := $#parent.c_con.raw4_shape.size ;
+    from := $#parent(#this).c_con.raw8_shape.size ;
+    to   := $#parent(#this).c_con.raw4_shape.size ;
     src  := x ;
-    #break(#evaluate($#parent.c_int.trunc_int))
+    #break(#evaluate($#parent(#this).c_int.trunc_int))
 )) ;
 i32_0 := #block(^(
     x := 0 ;
-    #break(#evaluate($#parent.trunc_8_4))
+    #break(#evaluate($#parent(#this).trunc_8_4))
 )) ;
 
 f64_s   := #shape({ __raw := 0 ; __f64_tag := {} }) ;
-div_t_s := #shape({ quot := $#parent.i32_0 ; rem := $#parent.i32_0 }) ;
+div_t_s := #shape({ quot := $#parent(#this).i32_0 ; rem := $#parent(#this).i32_0 }) ;
 
 ! Reusable positional argument Shapes (`0`, `1`, `2`, `3`) !
 args_8       := #shape({ 0 := 0 }) ;
-args_4       := #shape({ 0 := $#parent.i32_0 }) ;
+args_4       := #shape({ 0 := $#parent(#this).i32_0 }) ;
 args_8_8     := #shape({ 0 := 0 ; 1 := 0 }) ;
-args_4_4     := #shape({ 0 := $#parent.i32_0 ; 1 := $#parent.i32_0 }) ;
+args_4_4     := #shape({ 0 := $#parent(#this).i32_0 ; 1 := $#parent(#this).i32_0 }) ;
 args_8_8_8   := #shape({ 0 := 0 ; 1 := 0 ; 2 := 0 }) ;
-args_8_4_8   := #shape({ 0 := 0 ; 1 := $#parent.i32_0 ; 2 := 0 }) ;
-args_8_8_4   := #shape({ 0 := 0 ; 1 := 0 ; 2 := $#parent.i32_0 }) ;
+args_8_4_8   := #shape({ 0 := 0 ; 1 := $#parent(#this).i32_0 ; 2 := 0 }) ;
+args_8_8_4   := #shape({ 0 := 0 ; 1 := 0 ; 2 := $#parent(#this).i32_0 }) ;
 args_8_8_8_8 := #shape({ 0 := 0 ; 1 := 0 ; 2 := 0 ; 3 := 0 }) ;
 
 ! Helper: declare a single external C symbol with `lib := ""` and `cc := c` !
 decl_c := ^(
     #block(^(
         lib    := "" ;
-        name   := $#parent.sym_name ;
-        a_args := $#parent.sym_args ;
-        a_ret  := $#parent.sym_ret ;
-        abi    := { args := $#parent.a_args ; ret := $#parent.a_ret ; cc := c } ;
-        #break(#evaluate($#parent.c_ffi.extern_symbol))
+        name   := $#parent(#this).sym_name ;
+        a_args := $#parent(#this).sym_args ;
+        a_ret  := $#parent(#this).sym_ret ;
+        abi    := { args := $#parent(#this).a_args ; ret := $#parent(#this).a_ret ; cc := c } ;
+        #break(#evaluate($#parent(#this).c_ffi.extern_symbol))
     ))
 ) ;
 
@@ -93,40 +93,40 @@ sym_name := "strtoll" ; sym_args := $.args_8_8_4 ; sym_ret := $.c_size  ; f_strt
 sym_name := "exit"    ; sym_args := $.args_4     ; sym_ret := $.c_void  ; f_exit    := #evaluate($.decl_c) ; #drop(.sym_name) ; #drop(.sym_args) ; #drop(.sym_ret) ;
 
 shapes_obj := {
-    c_void := $#parent.c_void ;
-    c_u8   := $#parent.c_u8 ;
-    c_int  := $#parent.c_int_s ;
-    c_size := $#parent.c_size ;
-    c_ptr  := $#parent.c_ptr ;
-    f64    := $#parent.f64_s ;
-    div_t  := $#parent.div_t_s
+    c_void := $#parent(#this).c_void ;
+    c_u8   := $#parent(#this).c_u8 ;
+    c_int  := $#parent(#this).c_int_s ;
+    c_size := $#parent(#this).c_size ;
+    c_ptr  := $#parent(#this).c_ptr ;
+    f64    := $#parent(#this).f64_s ;
+    div_t  := $#parent(#this).div_t_s
 } ;
 
 ! Export 100% pure stageable libc module (zero OS Handle, directly liftable via `ast.value`) !
 #break({
-    shapes  := $#parent.shapes_obj ;
-    malloc  := $#parent.f_malloc ;
-    calloc  := $#parent.f_calloc ;
-    realloc := $#parent.f_realloc ;
-    free    := $#parent.f_free ;
-    memcpy  := $#parent.f_memcpy ;
-    memmove := $#parent.f_memmove ;
-    memset  := $#parent.f_memset ;
-    memcmp  := $#parent.f_memcmp ;
-    strlen  := $#parent.f_strlen ;
-    strcmp  := $#parent.f_strcmp ;
-    strncmp := $#parent.f_strncmp ;
-    fopen   := $#parent.f_fopen ;
-    fread   := $#parent.f_fread ;
-    fwrite  := $#parent.f_fwrite ;
-    fflush  := $#parent.f_fflush ;
-    fclose  := $#parent.f_fclose ;
-    puts    := $#parent.f_puts ;
-    putchar := $#parent.f_putchar ;
-    remove  := $#parent.f_remove ;
-    abs     := $#parent.f_abs ;
-    div     := $#parent.f_div ;
-    strtod  := $#parent.f_strtod ;
-    strtoll := $#parent.f_strtoll ;
-    exit    := $#parent.f_exit
+    shapes  := $#parent(#this).shapes_obj ;
+    malloc  := $#parent(#this).f_malloc ;
+    calloc  := $#parent(#this).f_calloc ;
+    realloc := $#parent(#this).f_realloc ;
+    free    := $#parent(#this).f_free ;
+    memcpy  := $#parent(#this).f_memcpy ;
+    memmove := $#parent(#this).f_memmove ;
+    memset  := $#parent(#this).f_memset ;
+    memcmp  := $#parent(#this).f_memcmp ;
+    strlen  := $#parent(#this).f_strlen ;
+    strcmp  := $#parent(#this).f_strcmp ;
+    strncmp := $#parent(#this).f_strncmp ;
+    fopen   := $#parent(#this).f_fopen ;
+    fread   := $#parent(#this).f_fread ;
+    fwrite  := $#parent(#this).f_fwrite ;
+    fflush  := $#parent(#this).f_fflush ;
+    fclose  := $#parent(#this).f_fclose ;
+    puts    := $#parent(#this).f_puts ;
+    putchar := $#parent(#this).f_putchar ;
+    remove  := $#parent(#this).f_remove ;
+    abs     := $#parent(#this).f_abs ;
+    div     := $#parent(#this).f_div ;
+    strtod  := $#parent(#this).f_strtod ;
+    strtoll := $#parent(#this).f_strtoll ;
+    exit    := $#parent(#this).f_exit
 })
