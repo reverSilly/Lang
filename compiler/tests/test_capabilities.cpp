@@ -26,9 +26,9 @@ static void test_io_read_write_and_symbols_intern() {
 
     auto* rf = rt.current_frame();
     rf->bind(rt.symbols.intern("p_path"),
-             rf->allocate_val(rt.make_bytes_ptr(tmp_path.data(), tmp_path.size()), false)->pointer());
+             rf->allocate_val(rt.make_raw_bytes(tmp_path.data(), tmp_path.size()), false)->pointer());
     rf->bind(rt.symbols.intern("p_data"),
-             rf->allocate_val(rt.make_bytes_ptr(payload.data(), payload.size()), false)->pointer());
+             rf->allocate_val(rt.make_raw_bytes(payload.data(), payload.size()), false)->pointer());
 
     // Write file, read it back, intern its bytes to a Symbol, and verify
     Value sym_val = ev.run(fe.parse(R"(
@@ -56,7 +56,7 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
     const std::string text = "\"42\"";
     auto* rf = rt.current_frame();
     rf->bind(rt.symbols.intern("raw_str"),
-             rf->allocate_val(rt.make_bytes_ptr(text.data(), text.size()), false)->pointer());
+             rf->allocate_val(rt.make_raw_bytes(text.data(), text.size()), false)->pointer());
     rf->bind(rt.symbols.intern("v1"), rf->allocate_val(Value::from_pod<uint64_t>(rt.shapes.raw8_shape, 1), false)->pointer());
     rf->bind(rt.symbols.intern("v2"), rf->allocate_val(Value::from_pod<uint64_t>(rt.shapes.raw8_shape, 2), false)->pointer());
 
@@ -81,13 +81,17 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
     assert(ch_i64.shape_addr == rt.shapes.raw8_shape);
     assert(ch_i64.as_pod<int64_t>() == 50); // ASCII '2'
 
-    // eq_shape: shape(ch_i64) == raw8_shape -> 0x01; shape(ch_i64) == raw1_shape -> 0x00
+    // eq_shape (IntrinsicProto factory): shape(v1) == raw8_shape -> 0x01; == raw1_shape -> 0x00
     Value eq_true = ev.run(fe.parse(R"(
+        #bind(lhs, #allocate_val(a, #deref(#field(#this, F)))) ;
+        #bind(rhs, #allocate_val(b, #deref(#field(#this, F)))) ;
+        #bind(p_eqs, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), eq_shape))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, lhs)) ; #drop(#field(#this, rhs)) ;
         #bind(a, #allocate_val(#shape(#deref(#field(#this, v1))), #deref(#field(#this, F)))) ;
         #bind(b_s, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), raw8_shape)), #deref(#field(#this, F)))) ;
         #drop(#field(#this, b)) ;
         #bind(b, #allocate_val(#deref(#field(#this, b_s)), #deref(#field(#this, F)))) ;
-        #evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), eq_shape)))
+        #evaluate(#deref(#field(#this, p_eqs)))
     )"));
     assert(eq_true.shape_addr == rt.shapes.raw1_shape);
     assert(eq_true.as_pod<uint8_t>() == 1);
@@ -95,7 +99,7 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
     Value eq_false = ev.run(fe.parse(R"(
         #drop(#field(#this, b)) ;
         #bind(b, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), raw1_shape)), #deref(#field(#this, F)))) ;
-        #evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), eq_shape)))
+        #evaluate(#deref(#field(#this, p_eqs)))
     )"));
     assert(eq_false.shape_addr == rt.shapes.raw1_shape);
     assert(eq_false.as_pod<uint8_t>() == 0);
@@ -112,7 +116,7 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
     const std::string sample = "foo:bar";
     auto* rf = rt.current_frame();
     rf->bind(rt.symbols.intern("sample_src"),
-             rf->allocate_val(rt.make_bytes_ptr(sample.data(), sample.size()), false)->pointer());
+             rf->allocate_val(rt.make_raw_bytes(sample.data(), sample.size()), false)->pointer());
 
     // Build handler in C++ AST for concise unit testing of cst_view_bytes & cst_child_view_sym
     // Handler returns ast.value(cst_view_bytes(node))
@@ -199,11 +203,9 @@ static void test_syntax_cst_view_bytes_and_child_view_sym() {
         #evaluate(#deref(#field(#this, p)))
     )"));
 
-    assert(bytes_res.shape_addr == rt.shapes.pointer_shape);
-    auto bp = bytes_res.as_pod<PointerLayout>();
-    const auto* bsh = reinterpret_cast<const ShapeLayout*>(bp.shape_ptr);
-    assert(bsh->is_leaf() && bsh->align == 1 && bsh->size == 7);
-    assert(std::string_view(reinterpret_cast<const char*>(bp.addr), bsh->size) == "foo:bar");
+    const auto* bsh = bytes_res.shape();
+    assert(bsh && bsh->is_leaf() && bsh->align == 1 && bsh->size == 7);
+    assert(std::string_view(reinterpret_cast<const char*>(bytes_res.bytes.data()), bytes_res.bytes.size()) == "foo:bar");
 
     // Rebind Pair handler to h_child1 and verify cst_child_view_sym(1) == "bar"
     Value child_sym = ev.run(fe.parse(R"(
@@ -242,7 +244,7 @@ void test_install_runtime_isolation() {
     // Tier 3 compiler frontend modules must be absent in runtime-only mode
     assert(rt.field(caps_ptr, rt.symbols.intern("ast")).is_null());
     assert(rt.field(caps_ptr, rt.symbols.intern("syntax")).is_null());
-    assert(rt.field(caps_ptr, rt.symbols.intern("compiler")).is_null());
+    assert(rt.field(caps_ptr, rt.symbols.intern("backends")).is_null());
     assert(rt.field(caps_ptr, rt.symbols.intern("io")).is_null());
 }
 
@@ -358,12 +360,144 @@ static void test_prototype_factory_intrinsics() {
     assert(ashr_res.as_pod<int32_t>() == -2);
 }
 
+static void test_backends_interpreter_run_isolation() {
+    RuntimeContext rt;
+    install_all_capabilities(rt);
+    Evaluator ev(rt);
+    Frontend fe;
+
+    // 1. Isolated target AST computes value without seeing capabilities or #parent
+    Value res = ev.run(fe.parse(R"(
+        #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+        #bind(arena, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), new_arena))), #deref(#field(#this, F)))) ;
+        #bind(sym, #allocate_val(isolated_ok, #deref(#field(#this, F)))) ;
+        #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+        #bind(out, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
+        #deref(#field(#this, out))
+    )"));
+    assert(res.shape_addr == rt.shapes.symbol_shape);
+    assert(rt.symbols.name(res.as_pod<SymbolId>()) == "isolated_ok");
+
+    // 2. Verify capabilities is absent (addr == 0) inside fresh target RuntimeContext + Evaluator
+    auto* rf = rt.current_frame();
+    const std::string src_caps_str =
+        "#bind(p, #allocate_val(#field(#this, capabilities), #deref(#field(#field(#this, dummy), x))))";
+    // Use pure Layer 0: #field(#this, capabilities) returns Pointer; extract its .addr via #block + #break
+    const std::string src_caps_ok =
+        "#bind(p, #allocate_val(#field(#this, capabilities), #deref(#field(#field(#this, p0), mutability))))";
+    (void)src_caps_str;
+    (void)src_caps_ok;
+    const std::string src_caps_l0 =
+        "#bind(p0, #allocate_val(#field(#this, capabilities), #deref(#field(#field(#this, dummy), m))))";
+    (void)src_caps_l0;
+
+    // Build pure Layer 0 ASTs using #allocate_val(#field(#this, ...), z) via ast.value(false)
+    Value caps_addr = ev.run(fe.parse(R"(
+        #bind(arena2, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), new_arena))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, arena)) ;
+        #bind(arena, #allocate_val(#deref(#field(#this, arena2)), #deref(#field(#this, F)))) ;
+
+        ! Build `#bind(p, #allocate_val(#field(#this, capabilities), false)) ; #deref(#field(#field(#this, p), addr))` !
+        #bind(val, #allocate_val(#deref(#field(#this, F)), #deref(#field(#this, F)))) ;
+        #bind(af, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, val)) ;
+        #bind(kind, #allocate_val(this, #deref(#field(#this, F)))) ;
+        #bind(ath, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ;
+        #bind(sym, #allocate_val(capabilities, #deref(#field(#this, F)))) ;
+        #bind(wcaps, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(sym, #allocate_val(p, #deref(#field(#this, F)))) ;
+        #bind(wp, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(sym, #allocate_val(addr, #deref(#field(#this, F)))) ;
+        #bind(waddr, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, ath)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, wcaps)), #deref(#field(#this, F)))) ;
+        #bind(fcaps, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, fcaps)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, af)), #deref(#field(#this, F)))) ;
+        #bind(alp, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, wp)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, alp)), #deref(#field(#this, F)))) ;
+        #bind(bp, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, ath)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, wp)), #deref(#field(#this, F)))) ;
+        #bind(fp, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, fp)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, waddr)), #deref(#field(#this, F)))) ;
+        #bind(faddr, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(kind, #allocate_val(deref, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, faddr)), #deref(#field(#this, F)))) ;
+        #bind(daddr, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ;
+
+        #drop(#field(#this, ast)) ;
+        #bind(0, #allocate_val(#deref(#field(#this, bp)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, daddr)), #deref(#field(#this, F)))) ;
+        #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), seq))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(out_addr, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
+        #deref(#field(#this, out_addr))
+    )"));
+    assert(caps_addr.shape_addr == rt.shapes.raw8_shape);
+    assert(caps_addr.as_pod<uint64_t>() == 0);
+
+    // 3. Stageability negative tests: reify_ast_value strictly rejects Pointer, Handle, and NativeProto (capabilities)
+    {
+        bool ptr_rejected = false;
+        try {
+            (void)reify_ast_value(rt, rt.make_pointer(rf->field(rt.symbols.intern("capabilities"))));
+        } catch (const std::runtime_error&) {
+            ptr_rejected = true;
+        }
+        assert(ptr_rejected);
+
+        bool handle_rejected = false;
+        try {
+            (void)reify_ast_value(rt, rt.make_handle(12345));
+        } catch (const std::runtime_error&) {
+            handle_rejected = true;
+        }
+        assert(handle_rejected);
+
+        bool caps_rejected = false;
+        try {
+            (void)reify_ast_value(rt, rt.deref(rf->field(rt.symbols.intern("capabilities"))));
+        } catch (const std::runtime_error&) {
+            caps_rejected = true;
+        }
+        assert(caps_rejected);
+    }
+}
+
 int main() {
     test_io_read_write_and_symbols_intern();
     test_intrinsics_bytes_u8_and_eq_shape();
     test_prototype_factory_intrinsics();
     test_syntax_cst_view_bytes_and_child_view_sym();
     test_install_runtime_isolation();
+    test_backends_interpreter_run_isolation();
     std::cout << "All Capabilities C++ tests passed!" << std::endl;
     return 0;
 }

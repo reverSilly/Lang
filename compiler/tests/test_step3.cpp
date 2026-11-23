@@ -111,7 +111,7 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
                 make_expr<WordExpr>("nested_var"),
                 make_expr<BuiltinExpr>(
                     BuiltinKind::AllocateVal,
-                    std::vector<ExprPtr>{make_expr<WordExpr>("inner_val"), make_expr<ValueExpr>(Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0))}),
+                    std::vector<ExprPtr>{make_expr<WordExpr>("inner_val"), make_expr<ValueExpr>(reify_ast_value(rt, Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0)))}),
             }),
         fe.parse("#resume(#caller, first_reply)"),
     });
@@ -124,11 +124,11 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
                 make_expr<WordExpr>("secret"),
                 make_expr<BuiltinExpr>(
                     BuiltinKind::AllocateVal,
-                    std::vector<ExprPtr>{make_expr<WordExpr>("root_val"), make_expr<ValueExpr>(Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0))}),
+                    std::vector<ExprPtr>{make_expr<WordExpr>("root_val"), make_expr<ValueExpr>(reify_ast_value(rt, Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0)))}),
             }),
         make_expr<BuiltinExpr>(
             BuiltinKind::Block,
-            std::vector<ExprPtr>{make_expr<ValueExpr>(rt.make_proto(inner_proto))}),
+            std::vector<ExprPtr>{make_expr<ValueExpr>(reify_ast_value(rt, rt.make_proto(inner_proto)))}),
         fe.parse("#break(#deref(#in))"),
     });
 
@@ -194,7 +194,7 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         "#block(^#bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent, capabilities), constants), false)))))";
     rt.current_frame()->bind(
         rt.symbols.intern("target_src"),
-        rt.current_frame()->allocate_val(rt.make_bytes_ptr(target_src.data(), target_src.size()), false)->pointer());
+        rt.current_frame()->allocate_val(rt.make_raw_bytes(target_src.data(), target_src.size()), false)->pointer());
 
     const char* bootstrap_src = R"(
         #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
@@ -215,17 +215,74 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         #bind(n_Z, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
         #drop(#field(#this, val)) ;
 
-        #bind(val, #allocate_val(#deref(#field(#field(#this, c_syn), cst_eval_child)), #deref(#field(#this, F)))) ;
-        #bind(n_eval_child_fn, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
-        #drop(#field(#this, val)) ;
+        #bind(kind, #allocate_val(this, #deref(#field(#this, F)))) ;
+        #bind(t3_this, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ;
+        #bind(sym, #allocate_val(capabilities, #deref(#field(#this, F)))) ;
+        #bind(w_c, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, t3_this)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, w_c)), #deref(#field(#this, F)))) ;
+        #bind(p_c, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
 
-        #bind(val, #allocate_val(#deref(#field(#field(#this, c_ast), to_proto)), #deref(#field(#this, F)))) ;
-        #bind(n_to_proto_fn, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
-        #drop(#field(#this, val)) ;
+        #bind(sym, #allocate_val(syntax, #deref(#field(#this, F)))) ;
+        #bind(w_s, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_c)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, w_s)), #deref(#field(#this, F)))) ;
+        #bind(p_s, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
 
-        #bind(val, #allocate_val(#deref(#field(#field(#this, c_ast), value)), #deref(#field(#this, F)))) ;
-        #bind(n_ast_val_fn, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
-        #drop(#field(#this, val)) ;
+        #bind(sym, #allocate_val(ast, #deref(#field(#this, F)))) ;
+        #bind(w_a, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_c)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, w_a)), #deref(#field(#this, F)))) ;
+        #bind(p_a, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+        #bind(sym, #allocate_val(cst_eval_child, #deref(#field(#this, F)))) ;
+        #bind(w_t, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_s)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, w_t)), #deref(#field(#this, F)))) ;
+        #bind(p_t, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, w_t)) ;
+        #bind(kind, #allocate_val(deref, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_t)), #deref(#field(#this, F)))) ;
+        #bind(n_eval_child_fn, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, p_t)) ;
+
+        #bind(sym, #allocate_val(to_proto, #deref(#field(#this, F)))) ;
+        #bind(w_t, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_a)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, w_t)), #deref(#field(#this, F)))) ;
+        #bind(p_t, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, w_t)) ;
+        #bind(kind, #allocate_val(deref, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_t)), #deref(#field(#this, F)))) ;
+        #bind(n_to_proto_fn, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, p_t)) ;
+
+        #bind(sym, #allocate_val(value, #deref(#field(#this, F)))) ;
+        #bind(w_t, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, sym)) ;
+        #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_a)), #deref(#field(#this, F)))) ;
+        #bind(1, #allocate_val(#deref(#field(#this, w_t)), #deref(#field(#this, F)))) ;
+        #bind(p_t, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, w_t)) ;
+        #bind(kind, #allocate_val(deref, #deref(#field(#this, F)))) ;
+        #bind(0, #allocate_val(#deref(#field(#this, p_t)), #deref(#field(#this, F)))) ;
+        #bind(n_ast_val_fn, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+        #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, p_t)) ;
 
         #bind(sym, #allocate_val(index, #deref(#field(#this, F)))) ;
         #bind(w_index, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
