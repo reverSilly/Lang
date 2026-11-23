@@ -27,9 +27,14 @@ static void test_pure_layer0_slots_and_intrinsics() {
     root_frame->bind(rt.symbols.intern("v32"), s_32->pointer());
 
     const char* src = R"(
-        #bind(a, #allocate_val(#deref(#field(#this, v10)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
-        #bind(b, #allocate_val(#deref(#field(#this, v32)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
-        #evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), add_i64)))
+        #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+        #bind(width, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(lhs, #allocate_val(a, #deref(#field(#this, F)))) ;
+        #bind(rhs, #allocate_val(b, #deref(#field(#this, F)))) ;
+        #bind(add8, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), add_int))), #deref(#field(#this, F)))) ;
+        #bind(a, #allocate_val(#deref(#field(#this, v10)), #deref(#field(#this, F)))) ;
+        #bind(b, #allocate_val(#deref(#field(#this, v32)), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, add8)))
     )";
 
     Value res = ev.run(fe.parse(src));

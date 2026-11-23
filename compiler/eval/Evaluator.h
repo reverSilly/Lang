@@ -133,6 +133,7 @@ private:
     CoroEntry run_proto_entry(uint64_t proto_addr);
     CoroEntry run_child_coro(Runtime::Coroutine* self, uint64_t proto_addr);
     EvalTask eval_proto(uint64_t proto_addr);
+    Runtime::Value eval_intrinsic(const Runtime::IntrinsicSpec& spec);
     EvalTask eval_expr(const Ast::ExprPtr& expr);
     EvalTask eval_builtin(const Ast::BuiltinExpr& b);
 };

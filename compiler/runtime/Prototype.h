@@ -6,9 +6,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace reverSilly::Lang::Eval {
@@ -16,11 +16,6 @@ class Evaluator;
 }
 
 namespace reverSilly::Lang::Runtime {
-
-enum class CodeKind : uint8_t {
-    Ast = 1,
-    NativeSym = 2,
-};
 
 using NativeFn = std::function<Value(Eval::Evaluator&)>;
 
@@ -33,14 +28,87 @@ struct FfiBinding {
     SymbolId cc = 0;           // Calling convention symbol (e.g. "c")
 };
 
-// Live, linked code object residing in PrototypeArena (.rodata).
-// Exposed in Lang as an 8-byte opaque Handle of shape `prototype_shape`.
-struct PrototypeObject {
-    CodeKind kind = CodeKind::Ast;
+// Signedness is encoded directly into LLVM-aligned opcodes — zero redundant fields across all 5 variants.
+enum class IntBinKind : uint8_t {
+    Add, Sub, Mul, SDiv, UDiv, SRem, URem, BitAnd, BitOr, BitXor, Shl, AShr, LShr,
+};
+
+enum class IntUnaryKind : uint8_t {
+    BitNot,
+};
+
+enum class FloatBinKind : uint8_t {
+    Add, Sub, Mul, Div,
+};
+
+enum class CastKind : uint8_t {
+    SExt, ZExt, Trunc, FPExt, FPTrunc, SIToFP, UIToFP, FPToSI, FPToUI,
+};
+
+enum class CmpKind : uint8_t {
+    EqBytes, SLt, ULt, SLe, ULe, FEq, FLt, FLe,
+};
+
+struct IntBinOp {
+    IntBinKind op;
+    uint8_t width = 0;
+    SymbolId lhs = 0;
+    SymbolId rhs = 0;
+};
+
+struct IntUnaryOp {
+    IntUnaryKind op;
+    uint8_t width = 0;
+    SymbolId src = 0;
+};
+
+struct FloatBinOp {
+    FloatBinKind op;
+    uint8_t width = 0;
+    SymbolId lhs = 0;
+    SymbolId rhs = 0;
+};
+
+struct CastOp {
+    CastKind op;
+    uint8_t from_width = 0;
+    uint8_t to_width = 0;
+    SymbolId src = 0;
+};
+
+struct CmpOp {
+    CmpKind op;
+    uint8_t width = 0;
+    SymbolId lhs = 0;
+    SymbolId rhs = 0;
+};
+
+// Pure-data hardware / LLVM IR intrinsic specification (zero std::function closure).
+using IntrinsicSpec = std::variant<IntBinOp, IntUnaryOp, FloatBinOp, CastOp, CmpOp>;
+
+struct AstProto {
     Ast::ExprPtr ast;
+};
+
+struct NativeProto {
     std::string extern_name;
-    NativeFn native_fn;
-    std::optional<FfiBinding> ffi_binding;
+    NativeFn fn;
+};
+
+struct FfiProto {
+    FfiBinding binding;
+    NativeFn fn;
+};
+
+struct IntrinsicProto {
+    IntrinsicSpec spec;
+};
+
+// Pure-data closed sum type residing in PrototypeArena (.rodata).
+// Exposed in Lang as an 8-byte opaque handle of shape `prototype_shape`.
+// All consumers (Phase 1 Evaluator, Phase 2 LLVM codegen, serializer) dispatch externally via std::visit.
+struct PrototypeObject {
+    std::variant<AstProto, NativeProto, FfiProto, IntrinsicProto> payload;
 };
 
 class PrototypeArena {
@@ -52,6 +120,7 @@ public:
     uint64_t create_ast(Ast::ExprPtr expr);
     uint64_t create_native(std::string extern_name, NativeFn fn);
     uint64_t create_ffi(FfiBinding binding, NativeFn fn);
+    uint64_t create_intrinsic(IntrinsicSpec spec);
     const PrototypeObject* get(uint64_t addr) const;
     uint64_t find_native(const std::string& extern_name) const noexcept;
     size_t count() const noexcept { return objects_.size(); }

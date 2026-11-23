@@ -65,14 +65,6 @@
 #bind(n_ast_builtin, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, val)) ;
 
-#bind(val, #allocate_val(#deref(#field(#field(#this, c_int), lt_i64)), #deref(#field(#this, F)))) ;
-#bind(n_lt_i64, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, val)) ;
-
-#bind(val, #allocate_val(#deref(#field(#field(#this, c_int), add_i64)), #deref(#field(#this, F)))) ;
-#bind(n_add_i64, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), value))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, val)) ;
-
 ! Common AST word nodes !
 #bind(sym, #allocate_val(index, #deref(#field(#this, F)))) ;
 #bind(w_index, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;

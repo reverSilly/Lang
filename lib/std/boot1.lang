@@ -58,6 +58,20 @@
     #bind(c_syn, #allocate_val($#field(.caps, syntax), $.F)) ;
     #bind(c_ast, #allocate_val($#field(.caps, ast), $.F)) ;
     #bind(c_int, #allocate_val($#field(.caps, intrinsics), $.F)) ;
+    #bind(W8, #allocate_val($#field(#field(#field(.caps, constants), raw8_shape), size), $.F)) ;
+    #bind(lt_u64, #allocate_val(#block(^(
+        #bind(signed, #allocate_val($#field(#parent, F), $#field(#parent, F))) ;
+        #bind(width, #allocate_val($#field(#parent, W8), $#field(#parent, F))) ;
+        #bind(lhs, #allocate_val(a, $#field(#parent, F))) ;
+        #bind(rhs, #allocate_val(b, $#field(#parent, F))) ;
+        #break(#evaluate($#field(#field(#parent, c_int), lt_int)))
+    )), $.F)) ;
+    #bind(add_u64, #allocate_val(#block(^(
+        #bind(width, #allocate_val($#field(#parent, W8), $#field(#parent, F))) ;
+        #bind(lhs, #allocate_val(a, $#field(#parent, F))) ;
+        #bind(rhs, #allocate_val(b, $#field(#parent, F))) ;
+        #break(#evaluate($#field(#field(#parent, c_int), add_int)))
+    )), $.F)) ;
 
     #bind(cnt, #allocate_val(#evaluate($#field(.c_syn, cst_child_count)), $.F)) ;
     #bind(index, #allocate_val($.Z, $.T)) ;
@@ -67,7 +81,7 @@
     #bind(loop_p, #allocate_val(^(
         #bind(a, #allocate_val($.index, $.F)) ;
         #bind(b, #allocate_val($.cnt, $.F)) ;
-        #bind(cond, #allocate_val(#evaluate($#field(.c_int, lt_i64)), $.F)) ;
+        #bind(cond, #allocate_val(#evaluate($.lt_u64), $.F)) ;
         #drop(.a) ; #drop(.b) ;
         #branch($.cond, ^(
             #drop(.cond) ;
@@ -80,7 +94,7 @@
 
             #bind(a, #allocate_val($.index, $.F)) ;
             #bind(b, #allocate_val($.ONE, $.F)) ;
-            #write(.index, #evaluate($#field(.c_int, add_i64))) ;
+            #write(.index, #evaluate($.add_u64)) ;
             #drop(.a) ; #drop(.b) ;
             #evaluate($.loop_p)
         ), ^(

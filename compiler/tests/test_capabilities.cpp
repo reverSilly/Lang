@@ -71,7 +71,12 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
         #bind(bytes, #allocate_val(#deref(#field(#this, sliced)), #deref(#field(#this, F)))) ;
         #bind(index, #allocate_val(#deref(#field(#this, v1)), #deref(#field(#this, F)))) ;
         #bind(b, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), bytes_at))), #deref(#field(#this, F)))) ;
-        #evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), u8_to_i64)))
+        #bind(signed, #allocate_val(#deref(#field(#this, F)), #deref(#field(#this, F)))) ;
+        #bind(from, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw1_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(to, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(src, #allocate_val(b, #deref(#field(#this, F)))) ;
+        #bind(zext_1_8, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), ext_int))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, zext_1_8)))
     )"));
     assert(ch_i64.shape_addr == rt.shapes.raw8_shape);
     assert(ch_i64.as_pod<int64_t>() == 50); // ASCII '2'
@@ -241,9 +246,122 @@ void test_install_runtime_isolation() {
     assert(rt.field(caps_ptr, rt.symbols.intern("io")).is_null());
 }
 
+static void test_prototype_factory_intrinsics() {
+    RuntimeContext rt;
+    install_runtime_capabilities(rt);
+    Evaluator ev(rt);
+    Frontend fe;
+
+    auto* rf = rt.current_frame();
+    auto bind_val = [&](const char* name, const Value& v) {
+        rf->bind(rt.symbols.intern(name), rf->allocate_val(v, false)->pointer());
+    };
+
+    // Integer arithmetic, signed vs unsigned div/rem, shifts, bitwise, sext/zext/trunc
+    bind_val("i32_neg10", Value::from_pod<int32_t>(rt.shapes.raw4_shape, -10));
+    bind_val("i32_3", Value::from_pod<int32_t>(rt.shapes.raw4_shape, 3));
+    bind_val("i8_neg5", Value::from_pod<int8_t>(rt.shapes.raw1_shape, -5));
+    bind_val("i64_big", Value::from_pod<uint64_t>(rt.shapes.raw8_shape, 0x123456789ABCDEF0ULL));
+    bind_val("f64_a", Value::from_pod<double>(rt.shapes.raw8_shape, 7.5));
+    bind_val("f64_b", Value::from_pod<double>(rt.shapes.raw8_shape, 2.5));
+    bind_val("f32_a", Value::from_pod<float>(rt.shapes.raw4_shape, 1.5f));
+
+    // 1. sdiv(-10, 3) == -3, srem(-10, 3) == -1 (4B signed) + verify IntrinsicProto variant
+    Value sdiv_res = ev.run(fe.parse(R"(
+        #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+        #bind(T, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), true)), #deref(#field(#this, F)))) ;
+        #bind(W1, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw1_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(W2, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw2_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(W4, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw4_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(W8, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(signed, #allocate_val(#deref(#field(#this, T)), #deref(#field(#this, F)))) ;
+        #bind(width, #allocate_val(#deref(#field(#this, W4)), #deref(#field(#this, F)))) ;
+        #bind(lhs, #allocate_val(i32_neg10, #deref(#field(#this, F)))) ;
+        #bind(rhs, #allocate_val(i32_3, #deref(#field(#this, F)))) ;
+        #bind(p_sdiv, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), div_int))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_sdiv)))
+    )"));
+    assert(sdiv_res.shape_addr == rt.shapes.raw4_shape);
+    assert(sdiv_res.as_pod<int32_t>() == -3);
+    {
+        Value pv = rt.deref(rf->field(rt.symbols.intern("p_sdiv")));
+        const auto* ip = std::get_if<IntrinsicProto>(&rt.prototypes.get(pv.as_pod<uint64_t>())->payload);
+        assert(ip != nullptr);
+        const auto* ib = std::get_if<IntBinOp>(&ip->spec);
+        assert(ib != nullptr && ib->op == IntBinKind::SDiv && ib->width == 4);
+    }
+
+    // 2. sext i8(-5) -> i32(-5) & trunc u64(0x123456789ABCDEF0) -> u16(0xDEF0)
+    Value sext_res = ev.run(fe.parse(R"(
+        #bind(from, #allocate_val(#deref(#field(#this, W1)), #deref(#field(#this, F)))) ;
+        #bind(to, #allocate_val(#deref(#field(#this, W4)), #deref(#field(#this, F)))) ;
+        #bind(src, #allocate_val(i8_neg5, #deref(#field(#this, F)))) ;
+        #bind(p_sext, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), ext_int))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_sext)))
+    )"));
+    assert(sext_res.shape_addr == rt.shapes.raw4_shape);
+    assert(sext_res.as_pod<int32_t>() == -5);
+
+    Value trunc_res = ev.run(fe.parse(R"(
+        #drop(#field(#this, from)) ; #drop(#field(#this, to)) ; #drop(#field(#this, src)) ;
+        #bind(from, #allocate_val(#deref(#field(#this, W8)), #deref(#field(#this, F)))) ;
+        #bind(to, #allocate_val(#deref(#field(#this, W2)), #deref(#field(#this, F)))) ;
+        #bind(src, #allocate_val(i64_big, #deref(#field(#this, F)))) ;
+        #bind(p_trunc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), trunc_int))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_trunc)))
+    )"));
+    assert(trunc_res.shape_addr == rt.shapes.raw2_shape);
+    assert(trunc_res.as_pod<uint16_t>() == 0xDEF0);
+
+    // 3. Float ops: div_float(7.5, 2.5) == 3.0, ext_float(1.5f) == 1.5, float_to_int(7.5) == 7, lt_float
+    Value fdiv_res = ev.run(fe.parse(R"(
+        #drop(#field(#this, width)) ; #drop(#field(#this, lhs)) ; #drop(#field(#this, rhs)) ;
+        #bind(width, #allocate_val(#deref(#field(#this, W8)), #deref(#field(#this, F)))) ;
+        #bind(lhs, #allocate_val(f64_a, #deref(#field(#this, F)))) ;
+        #bind(rhs, #allocate_val(f64_b, #deref(#field(#this, F)))) ;
+        #bind(p_fdiv, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), div_float))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_fdiv)))
+    )"));
+    assert(fdiv_res.shape_addr == rt.shapes.raw8_shape);
+    assert(fdiv_res.as_pod<double>() == 3.0);
+
+    Value fext_res = ev.run(fe.parse(R"(
+        #drop(#field(#this, src)) ;
+        #bind(src, #allocate_val(f32_a, #deref(#field(#this, F)))) ;
+        #bind(p_fext, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), ext_float))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_fext)))
+    )"));
+    assert(fext_res.shape_addr == rt.shapes.raw8_shape);
+    assert(fext_res.as_pod<double>() == 1.5);
+
+    Value f2i_res = ev.run(fe.parse(R"(
+        #drop(#field(#this, from)) ; #drop(#field(#this, to)) ; #drop(#field(#this, src)) ;
+        #bind(from, #allocate_val(#deref(#field(#this, W8)), #deref(#field(#this, F)))) ;
+        #bind(to, #allocate_val(#deref(#field(#this, W4)), #deref(#field(#this, F)))) ;
+        #bind(src, #allocate_val(f64_a, #deref(#field(#this, F)))) ;
+        #bind(p_f2i, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), float_to_int))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_f2i)))
+    )"));
+    assert(f2i_res.shape_addr == rt.shapes.raw4_shape);
+    assert(f2i_res.as_pod<int32_t>() == 7);
+
+    // 4. Bitwise & arithmetic shr: (-10 >> 1) == -5, bit_xor, eq_bytes
+    Value ashr_res = ev.run(fe.parse(R"(
+        #drop(#field(#this, width)) ; #drop(#field(#this, lhs)) ; #drop(#field(#this, rhs)) ;
+        #bind(width, #allocate_val(#deref(#field(#this, W4)), #deref(#field(#this, F)))) ;
+        #bind(lhs, #allocate_val(i32_neg10, #deref(#field(#this, F)))) ;
+        #bind(rhs, #allocate_val(i32_3, #deref(#field(#this, F)))) ;
+        #bind(p_shr, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), shr))), #deref(#field(#this, F)))) ;
+        #evaluate(#deref(#field(#this, p_shr)))
+    )"));
+    assert(ashr_res.shape_addr == rt.shapes.raw4_shape);
+    assert(ashr_res.as_pod<int32_t>() == -2);
+}
+
 int main() {
     test_io_read_write_and_symbols_intern();
     test_intrinsics_bytes_u8_and_eq_shape();
+    test_prototype_factory_intrinsics();
     test_syntax_cst_view_bytes_and_child_view_sym();
     test_install_runtime_isolation();
     std::cout << "All Capabilities C++ tests passed!" << std::endl;

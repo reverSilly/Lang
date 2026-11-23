@@ -10,17 +10,40 @@
 !   - English-order suffix control flow: `e1 if cond else e2`, `body while c`  !
 ! ============================================================================ !
 
-! --- Shorthand aliases in root #this --- !
+! --- Shorthand aliases & Prototype-Factory intrinsics in root #this --- !
 c_con := $.caps.constants ;
-TWO := #block(^( a := $#parent.caps.constants.u64_one ; b := $#parent.caps.constants.u64_one ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
-FOUR := #block(^( a := $#parent.TWO ; b := $#parent.TWO ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
-EIGHT := #block(^( a := $#parent.FOUR ; b := $#parent.FOUR ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
-TEN := #block(^( a := $#parent.EIGHT ; b := $#parent.TWO ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+W1 := $.c_con.raw1_shape.size ;
+W2 := $.c_con.raw2_shape.size ;
+W4 := $.c_con.raw4_shape.size ;
+W8 := $.c_con.raw8_shape.size ;
+
+p_add_i64  := #block(^( width := $#parent.W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.add_int)) )) ;
+p_sub_i64  := #block(^( width := $#parent.W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.sub_int)) )) ;
+p_mul_i64  := #block(^( width := $#parent.W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.mul_int)) )) ;
+p_lt_i64   := #block(^( signed := $#parent.T ; width := $#parent.W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.lt_int)) )) ;
+p_eq_i64   := #block(^( width := $#parent.W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.eq_bytes)) )) ;
+p_eq_sym   := #block(^( width := $#parent.W4 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.eq_bytes)) )) ;
+p_u8_to_i64 := #block(^( signed := $#parent.F ; from := $#parent.W1 ; to := $#parent.W8 ; src := b ; #break(#evaluate($#parent.caps.intrinsics.ext_int)) )) ;
+
+iops := #block(^(
+    add_i64 := $#parent.p_add_i64 ;
+    sub_i64 := $#parent.p_sub_i64 ;
+    mul_i64 := $#parent.p_mul_i64 ;
+    lt_i64  := $#parent.p_lt_i64 ;
+    eq_i64  := $#parent.p_eq_i64 ;
+    eq_sym  := $#parent.p_eq_sym ;
+    u8_to_i64 := $#parent.p_u8_to_i64
+)) ;
+
+TWO   := $.W2 ;
+FOUR  := $.W4 ;
+EIGHT := $.W8 ;
+TEN   := #block(^( a := $#parent.EIGHT ; b := $#parent.TWO ; #break(#evaluate($#parent.p_add_i64)) )) ;
 ASCII_ZERO := #block(^(
     sym := 0 ;
     index := $#parent.Z ;
     b := #evaluate($#parent.caps.symbols.byte_at) ;
-    #break(#evaluate($#parent.caps.intrinsics.u8_to_i64))
+    #break(#evaluate($#parent.p_u8_to_i64))
 )) ;
 
 ! --- Runtime Shape-dispatched operator prototypes --- !
@@ -31,7 +54,7 @@ std_ops := #block(^(
             b := $#parent.caps.constants.raw8_shape ;
             #break(#evaluate($#parent.caps.intrinsics.eq_shape))
         )) ;
-        #branch($.is_i64, ^#evaluate($.caps.intrinsics.add_i64), ^#break(type_error_add))
+        #branch($.is_i64, ^#evaluate($.iops.add_i64), ^#break(type_error_add))
     ) ;
     sub := ^(
         is_i64 := #block(^(
@@ -39,7 +62,7 @@ std_ops := #block(^(
             b := $#parent.caps.constants.raw8_shape ;
             #break(#evaluate($#parent.caps.intrinsics.eq_shape))
         )) ;
-        #branch($.is_i64, ^#evaluate($.caps.intrinsics.sub_i64), ^#break(type_error_sub))
+        #branch($.is_i64, ^#evaluate($.iops.sub_i64), ^#break(type_error_sub))
     ) ;
     mul := ^(
         is_i64 := #block(^(
@@ -47,7 +70,7 @@ std_ops := #block(^(
             b := $#parent.caps.constants.raw8_shape ;
             #break(#evaluate($#parent.caps.intrinsics.eq_shape))
         )) ;
-        #branch($.is_i64, ^#evaluate($.caps.intrinsics.mul_i64), ^#break(type_error_mul))
+        #branch($.is_i64, ^#evaluate($.iops.mul_i64), ^#break(type_error_mul))
     ) ;
     lt := ^(
         is_i64 := #block(^(
@@ -55,7 +78,7 @@ std_ops := #block(^(
             b := $#parent.caps.constants.raw8_shape ;
             #break(#evaluate($#parent.caps.intrinsics.eq_shape))
         )) ;
-        #branch($.is_i64, ^#evaluate($.caps.intrinsics.lt_i64), ^#break(type_error_lt))
+        #branch($.is_i64, ^#evaluate($.iops.lt_i64), ^#break(type_error_lt))
     ) ;
     eq := ^(
         is_i64 := #block(^(
@@ -63,13 +86,13 @@ std_ops := #block(^(
             b := $#parent.caps.constants.raw8_shape ;
             #break(#evaluate($#parent.caps.intrinsics.eq_shape))
         )) ;
-        #branch($.is_i64, ^#evaluate($.caps.intrinsics.eq_i64), ^(
+        #branch($.is_i64, ^#evaluate($.iops.eq_i64), ^(
             is_sym := #block(^(
                 a := #shape($#parent.a) ;
                 b := $#parent.caps.constants.symbol_shape ;
                 #break(#evaluate($#parent.caps.intrinsics.eq_shape))
             )) ;
-            #branch($.is_sym, ^#evaluate($.caps.intrinsics.eq_sym), ^(
+            #branch($.is_sym, ^#evaluate($.iops.eq_sym), ^(
                 is_sh := #block(^(
                     a := #shape($#parent.a) ;
                     b := $#parent.caps.constants.shape_meta ;
@@ -81,20 +104,25 @@ std_ops := #block(^(
     )
 )) ;
 
-! Wrap each runtime op so it carries its own `caps` without needing root #this !
+! Wrap each runtime op so it carries its own `caps` and `iops` without needing root #this !
 wrap_op := ^(
     #block(^(
         p_caps := $#parent.caps ;
+        p_iops := $#parent.iops ;
         arena  := $#parent.arena ;
         p_raw  := $#parent.op_raw ;
+        val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
         sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
         val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
-        val := $.p_raw ; n_r := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
-        val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
         kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t_al := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
         kind := bind ; 0 := $.w_c ; 1 := $.t_al ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
-        kind := evaluate ; 0 := $.n_r ; s2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
-        0 := $.s1 ; 1 := $.s2 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ;
+        sym := iops ; w_i := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        val := $.p_iops ; n_i := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; 0 := $.n_i ; 1 := $.n_f ; t_ai := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := bind ; 0 := $.w_i ; 1 := $.t_ai ; s2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        val := $.p_raw ; n_r := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        kind := evaluate ; 0 := $.n_r ; s3 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
+        0 := $.s1 ; 1 := $.s2 ; 2 := $.s3 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ; #drop(.2) ;
         #break(#evaluate($#parent.c_ast.to_proto))
     ))
 ) ;
@@ -111,6 +139,7 @@ ops_env := #block(^(
     mul := $#parent.op_mul ;
     lt  := $#parent.op_lt ;
     eq  := $#parent.op_eq ;
+    iops := $#parent.iops ;
     ten := $#parent.TEN ;
     two := $#parent.TWO ;
     zero_ch := $#parent.ASCII_ZERO
@@ -230,22 +259,22 @@ raw_h := ^(
     #bind(acc, #allocate_val($.Z, $.T) ) ;
     #bind(i, #allocate_val($.Z, $.T) ) ;
     loop_p := ^(
-        cond := #block(^( a := $#parent.i ; b := $#parent.n ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        cond := #block(^( a := $#parent.i ; b := $#parent.n ; #break(#evaluate($#parent.env.iops.lt_i64)) )) ;
         #branch($.cond, ^(
             #drop(.cond) ;
             digit := #block(^(
                 bytes := $#parent.bs ; index := $#parent.i ;
                 b := #evaluate($#parent.caps.intrinsics.bytes_at) ;
-                a := #evaluate($#parent.caps.intrinsics.u8_to_i64) ;
+                a := #evaluate($#parent.env.iops.u8_to_i64) ;
                 #drop(.b) ;
                 b := $#parent.env.zero_ch ;
-                #break(#evaluate($#parent.caps.intrinsics.sub_i64))
+                #break(#evaluate($#parent.env.iops.sub_i64))
             )) ;
-            acc10 := #block(^( a := $#parent.acc ; b := $#parent.env.ten ; #break(#evaluate($#parent.caps.intrinsics.mul_i64)) )) ;
-            next_acc := #block(^( a := $#parent.acc10 ; b := $#parent.digit ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            acc10 := #block(^( a := $#parent.acc ; b := $#parent.env.ten ; #break(#evaluate($#parent.env.iops.mul_i64)) )) ;
+            next_acc := #block(^( a := $#parent.acc10 ; b := $#parent.digit ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             #write(.acc, $.next_acc) ;
             #drop(.digit) ; #drop(.acc10) ; #drop(.next_acc) ;
-            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             #write(.i, $.next_i) ;
             #drop(.next_i) ;
             #evaluate($.loop_p)
@@ -273,7 +302,7 @@ e_int := #block(^( fe := $#parent.fe ; 0 := $#parent.digits_plus ; 1 := $#parent
 raw_h := ^(
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
     bs_sh := #block(^( ptr := $#parent.bs ; #break(#evaluate($#parent.caps.field_map.ptr_shape)) )) ;
-    inner_len := #block(^( a := $#parent.bs_sh.size ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.sub_i64)) )) ;
+    inner_len := #block(^( a := $#parent.bs_sh.size ; b := $#parent.env.two ; #break(#evaluate($#parent.env.iops.sub_i64)) )) ;
     sliced := #block(^(
         bytes := $#parent.bs ; start := $#parent.caps.constants.u64_one ; len := $#parent.inner_len ;
         #break(#evaluate($#parent.caps.intrinsics.bytes_slice))
@@ -487,6 +516,7 @@ ops_env2 := #block(^(
     mul := $#parent.op_mul ;
     lt  := $#parent.op_lt ;
     eq  := $#parent.op_eq ;
+    iops := $#parent.iops ;
     ten := $#parent.TEN ;
     two := $#parent.TWO ;
     zero_ch := $#parent.ASCII_ZERO ;
@@ -529,7 +559,7 @@ raw_h := ^(
     #bind(i, #allocate_val($.ONE, $.T) ) ;
     b_sym_a := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
     loop_p := ^(
-        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.env.iops.lt_i64)) )) ;
         #branch($.cond, ^(
             #drop(.cond) ;
             b_lhs := $.acc ;
@@ -537,7 +567,7 @@ raw_h := ^(
             b_op  := $.env.mul ;
             #write(.acc, #evaluate($.env.binop)) ;
             #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.b_op) ;
-            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             #write(.i, $.next_i) ;
             #drop(.next_i) ;
             #evaluate($.loop_p)
@@ -570,18 +600,18 @@ raw_h := ^(
     #bind(i, #allocate_val($.ONE, $.T) ) ;
     b_sym_a := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
     loop_p := ^(
-        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.env.iops.lt_i64)) )) ;
         #branch($.cond, ^(
             #drop(.cond) ;
             op_sym := #block(^( node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_child_view_sym)) )) ;
-            rhs_idx := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            rhs_idx := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             b_lhs := $.acc ;
             b_rhs := #block(^( arena := $#parent.arena ; node := $#parent.node ; index := $#parent.rhs_idx ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
-            is_plus := #block(^( a := $#parent.op_sym ; b := + ; #break(#evaluate($#parent.caps.intrinsics.eq_sym)) )) ;
+            is_plus := #block(^( a := $#parent.op_sym ; b := + ; #break(#evaluate($#parent.env.iops.eq_sym)) )) ;
             b_op := #branch($.is_plus, ^$.env.add, ^$.env.sub) ;
             #write(.acc, #evaluate($.env.binop)) ;
             #drop(.op_sym) ; #drop(.rhs_idx) ; #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.is_plus) ; #drop(.b_op) ;
-            next_i := #block(^( a := $#parent.i ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.env.two ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             #write(.i, $.next_i) ;
             #drop(.next_i) ;
             #evaluate($.loop_p)
@@ -614,18 +644,18 @@ raw_h := ^(
     #bind(i, #allocate_val($.ONE, $.T) ) ;
     b_sym_a := #block(^( node := $#parent.node ; bytes := #evaluate($#parent.caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent.caps.symbols.intern_bytes)) )) ;
     loop_p := ^(
-        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.env.iops.lt_i64)) )) ;
         #branch($.cond, ^(
             #drop(.cond) ;
             op_sym := #block(^( node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_child_view_sym)) )) ;
-            rhs_idx := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            rhs_idx := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             b_lhs := $.acc ;
             b_rhs := #block(^( arena := $#parent.arena ; node := $#parent.node ; index := $#parent.rhs_idx ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
-            is_lt := #block(^( a := $#parent.op_sym ; b := < ; #break(#evaluate($#parent.caps.intrinsics.eq_sym)) )) ;
+            is_lt := #block(^( a := $#parent.op_sym ; b := < ; #break(#evaluate($#parent.env.iops.eq_sym)) )) ;
             b_op := #branch($.is_lt, ^$.env.lt, ^$.env.eq) ;
             #write(.acc, #evaluate($.env.binop)) ;
             #drop(.op_sym) ; #drop(.rhs_idx) ; #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.is_lt) ; #drop(.b_op) ;
-            next_i := #block(^( a := $#parent.i ; b := $#parent.env.two ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.env.two ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             #write(.i, $.next_i) ;
             #drop(.next_i) ;
             #evaluate($.loop_p)
@@ -653,14 +683,14 @@ raw_h := ^(
     #bind(acc, #allocate_val(#block(^( arena := $#parent.arena ; node := $#parent.node ; index := $#parent.Z ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )), $.T)) ;
     #bind(i, #allocate_val($.ONE, $.T) ) ;
     loop_p := ^(
-        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.caps.intrinsics.lt_i64)) )) ;
+        cond := #block(^( a := $#parent.i ; b := $#parent.cnt ; #break(#evaluate($#parent.env.iops.lt_i64)) )) ;
         #branch($.cond, ^(
             #drop(.cond) ;
             rhs := #block(^( arena := $#parent.arena ; node := $#parent.node ; index := $#parent.i ; #break(#evaluate($#parent.caps.syntax.cst_eval_child)) )) ;
             nxt := #block(^( arena := $#parent.arena ; kind := resume ; 0 := $#parent.acc ; 1 := $#parent.rhs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
             #write(.acc, $.nxt) ;
             #drop(.rhs) ; #drop(.nxt) ;
-            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.caps.intrinsics.add_i64)) )) ;
+            next_i := #block(^( a := $#parent.i ; b := $#parent.ONE ; #break(#evaluate($#parent.env.iops.add_i64)) )) ;
             #write(.i, $.next_i) ;
             #drop(.next_i) ;
             #evaluate($.loop_p)

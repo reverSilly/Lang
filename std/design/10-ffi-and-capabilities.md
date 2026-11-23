@@ -145,14 +145,19 @@ struct FfiBinding {
     SymbolId cc;               // Calling convention symbol (e.g. "c")
 };
 
-struct IntrinsicSpec {
-    IntrinsicKind kind;
-    uint8_t width = 0;         // Operating width in bytes (1, 2, 4, 8), or from_width for casts
-    uint8_t to_width = 0;      // Destination width for ext/trunc/int<->float casts
-    bool is_signed = false;    // Signedness flag for div/rem/shr/ext/lt/le/int<->float
-    SymbolId lhs = 0;          // lhs (binary) or src (unary) slot symbol in #this
-    SymbolId rhs = 0;          // rhs slot symbol in #this (binary only)
-};
+enum class IntBinKind   : uint8_t { Add, Sub, Mul, SDiv, UDiv, SRem, URem, BitAnd, BitOr, BitXor, Shl, AShr, LShr };
+enum class IntUnaryKind : uint8_t { BitNot };
+enum class FloatBinKind : uint8_t { Add, Sub, Mul, Div };
+enum class CastKind     : uint8_t { SExt, ZExt, Trunc, FPExt, FPTrunc, SIToFP, UIToFP, FPToSI, FPToUI };
+enum class CmpKind      : uint8_t { EqBytes, SLt, ULt, SLe, ULe, FEq, FLt, FLe };
+
+struct IntBinOp   { IntBinKind op;   uint8_t width; SymbolId lhs, rhs; };             // -> bytes(width)
+struct IntUnaryOp { IntUnaryKind op; uint8_t width; SymbolId src; };                  // -> bytes(width)
+struct FloatBinOp { FloatBinKind op; uint8_t width; SymbolId lhs, rhs; };             // -> bytes(width)
+struct CastOp     { CastKind op;     uint8_t from_width, to_width; SymbolId src; };   // -> bytes(to_width)
+struct CmpOp      { CmpKind op;      uint8_t width; SymbolId lhs, rhs; };             // -> bytes(1, 1)
+
+using IntrinsicSpec = std::variant<IntBinOp, IntUnaryOp, FloatBinOp, CastOp, CmpOp>;
 
 struct AstProto       { Ast::ExprPtr ast; };
 struct NativeProto    { std::string extern_name; NativeFn fn; };

@@ -1,9 +1,80 @@
 #include "Evaluator.h"
 
+#include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace reverSilly::Lang::Eval {
+
+namespace {
+
+template <class... Ts>
+struct Overloaded : Ts... {
+    using Ts::operator()...;
+};
+
+uint64_t raw_shape_for_width(const Runtime::ShapeArena& shapes, uint8_t width) {
+    switch (width) {
+        case 1: return shapes.raw1_shape;
+        case 2: return shapes.raw2_shape;
+        case 4: return shapes.raw4_shape;
+        case 8: return shapes.raw8_shape;
+        default:
+            throw std::runtime_error("intrinsic: unsupported byte width " + std::to_string(width));
+    }
+}
+
+Runtime::Value read_slot_bytes(Runtime::RuntimeContext& rt, Runtime::SymbolId sym, uint8_t expected_width) {
+    Runtime::ConstructingFrame* f = rt.current_frame();
+    if (!f) throw std::runtime_error("intrinsic: no active frame");
+    Runtime::PointerLayout p = f->field(sym);
+    if (p.is_null()) {
+        throw std::runtime_error("intrinsic: missing slot '" + std::string(rt.symbols.name(sym)) + "' in #this");
+    }
+    Runtime::Value v = rt.deref(p);
+    if (v.bytes.size() != expected_width) {
+        throw std::runtime_error(
+            "intrinsic: slot '" + std::string(rt.symbols.name(sym)) + "' byte width mismatch (got " +
+            std::to_string(v.bytes.size()) + ", expected " + std::to_string(expected_width) + ")");
+    }
+    return v;
+}
+
+template <typename Fn>
+decltype(auto) dispatch_sint(uint8_t width, Fn&& fn) {
+    switch (width) {
+        case 1: return fn.template operator()<int8_t>();
+        case 2: return fn.template operator()<int16_t>();
+        case 4: return fn.template operator()<int32_t>();
+        case 8: return fn.template operator()<int64_t>();
+    }
+    throw std::runtime_error("intrinsic: unsupported signed integer width " + std::to_string(width));
+}
+
+template <typename Fn>
+decltype(auto) dispatch_uint(uint8_t width, Fn&& fn) {
+    switch (width) {
+        case 1: return fn.template operator()<uint8_t>();
+        case 2: return fn.template operator()<uint16_t>();
+        case 4: return fn.template operator()<uint32_t>();
+        case 8: return fn.template operator()<uint64_t>();
+    }
+    throw std::runtime_error("intrinsic: unsupported unsigned integer width " + std::to_string(width));
+}
+
+template <typename Fn>
+decltype(auto) dispatch_float(uint8_t width, Fn&& fn) {
+    switch (width) {
+        case 4: return fn.template operator()<float>();
+        case 8: return fn.template operator()<double>();
+    }
+    throw std::runtime_error("intrinsic: unsupported float width " + std::to_string(width));
+}
+
+} // namespace
 
 Runtime::Value Evaluator::run(const Ast::ExprPtr& expr) {
     auto entry = run_main_entry(expr);
@@ -120,15 +191,253 @@ Runtime::Value Evaluator::ResumeAwaiter::await_resume() {
     return ev.rt.make_unit();
 }
 
+Runtime::Value Evaluator::eval_intrinsic(const Runtime::IntrinsicSpec& spec) {
+    auto raw_out = [&](uint8_t w, const auto& val) {
+        return Runtime::Value::from_pod(raw_shape_for_width(rt.shapes, w), val);
+    };
+    auto flag_out = [&](bool b) {
+        return Runtime::Value::from_pod<uint8_t>(rt.shapes.raw1_shape, b ? 1 : 0);
+    };
+
+    return std::visit(Overloaded{
+        [&](const Runtime::IntBinOp& op) -> Runtime::Value {
+            using K = Runtime::IntBinKind;
+            auto a_val = read_slot_bytes(rt, op.lhs, op.width);
+            auto b_val = read_slot_bytes(rt, op.rhs, op.width);
+            switch (op.op) {
+                case K::Add:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(a_val.as_pod<U>() + b_val.as_pod<U>()));
+                    });
+                case K::Sub:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(a_val.as_pod<U>() - b_val.as_pod<U>()));
+                    });
+                case K::Mul:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(a_val.as_pod<U>() * b_val.as_pod<U>()));
+                    });
+                case K::SDiv:
+                    return dispatch_sint(op.width, [&]<typename S>() {
+                        S a = a_val.as_pod<S>(), b = b_val.as_pod<S>();
+                        if (b == 0) throw std::runtime_error("intrinsic sdiv: division by zero");
+                        if (a == std::numeric_limits<S>::min() && b == static_cast<S>(-1)) {
+                            throw std::runtime_error("intrinsic sdiv: signed overflow");
+                        }
+                        return raw_out(op.width, static_cast<S>(a / b));
+                    });
+                case K::UDiv:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        U a = a_val.as_pod<U>(), b = b_val.as_pod<U>();
+                        if (b == 0) throw std::runtime_error("intrinsic udiv: division by zero");
+                        return raw_out(op.width, static_cast<U>(a / b));
+                    });
+                case K::SRem:
+                    return dispatch_sint(op.width, [&]<typename S>() {
+                        S a = a_val.as_pod<S>(), b = b_val.as_pod<S>();
+                        if (b == 0) throw std::runtime_error("intrinsic srem: division by zero");
+                        if (a == std::numeric_limits<S>::min() && b == static_cast<S>(-1)) {
+                            return raw_out(op.width, static_cast<S>(0));
+                        }
+                        return raw_out(op.width, static_cast<S>(a % b));
+                    });
+                case K::URem:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        U a = a_val.as_pod<U>(), b = b_val.as_pod<U>();
+                        if (b == 0) throw std::runtime_error("intrinsic urem: division by zero");
+                        return raw_out(op.width, static_cast<U>(a % b));
+                    });
+                case K::BitAnd:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(a_val.as_pod<U>() & b_val.as_pod<U>()));
+                    });
+                case K::BitOr:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(a_val.as_pod<U>() | b_val.as_pod<U>()));
+                    });
+                case K::BitXor:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(a_val.as_pod<U>() ^ b_val.as_pod<U>()));
+                    });
+                case K::Shl:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        U a = a_val.as_pod<U>(), b = b_val.as_pod<U>();
+                        if (b >= sizeof(U) * 8) throw std::runtime_error("intrinsic shl: shift amount out of range");
+                        return raw_out(op.width, static_cast<U>(a << b));
+                    });
+                case K::AShr:
+                    return dispatch_sint(op.width, [&]<typename S>() {
+                        using U = std::make_unsigned_t<S>;
+                        S a = a_val.as_pod<S>();
+                        U b = b_val.as_pod<U>();
+                        if (b >= sizeof(S) * 8) throw std::runtime_error("intrinsic ashr: shift amount out of range");
+                        return raw_out(op.width, static_cast<S>(a >> b));
+                    });
+                case K::LShr:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        U a = a_val.as_pod<U>(), b = b_val.as_pod<U>();
+                        if (b >= sizeof(U) * 8) throw std::runtime_error("intrinsic lshr: shift amount out of range");
+                        return raw_out(op.width, static_cast<U>(a >> b));
+                    });
+            }
+            throw std::runtime_error("Evaluator::eval_intrinsic: unknown IntBinKind");
+        },
+
+        [&](const Runtime::IntUnaryOp& op) -> Runtime::Value {
+            auto src_val = read_slot_bytes(rt, op.src, op.width);
+            switch (op.op) {
+                case Runtime::IntUnaryKind::BitNot:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return raw_out(op.width, static_cast<U>(~src_val.as_pod<U>()));
+                    });
+            }
+            throw std::runtime_error("Evaluator::eval_intrinsic: unknown IntUnaryKind");
+        },
+
+        [&](const Runtime::FloatBinOp& op) -> Runtime::Value {
+            using K = Runtime::FloatBinKind;
+            auto a_val = read_slot_bytes(rt, op.lhs, op.width);
+            auto b_val = read_slot_bytes(rt, op.rhs, op.width);
+            return dispatch_float(op.width, [&]<typename F>() {
+                F a = a_val.as_pod<F>(), b = b_val.as_pod<F>();
+                switch (op.op) {
+                    case K::Add: return raw_out(op.width, a + b);
+                    case K::Sub: return raw_out(op.width, a - b);
+                    case K::Mul: return raw_out(op.width, a * b);
+                    case K::Div: return raw_out(op.width, a / b);
+                }
+                throw std::runtime_error("Evaluator::eval_intrinsic: unknown FloatBinKind");
+            });
+        },
+
+        [&](const Runtime::CastOp& op) -> Runtime::Value {
+            using K = Runtime::CastKind;
+            auto src_val = read_slot_bytes(rt, op.src, op.from_width);
+            switch (op.op) {
+                case K::SExt:
+                    return dispatch_sint(op.from_width, [&]<typename Src>() {
+                        Src v = src_val.as_pod<Src>();
+                        return dispatch_sint(op.to_width, [&]<typename Dst>() {
+                            return raw_out(op.to_width, static_cast<Dst>(v));
+                        });
+                    });
+                case K::ZExt:
+                    return dispatch_uint(op.from_width, [&]<typename Src>() {
+                        Src v = src_val.as_pod<Src>();
+                        return dispatch_uint(op.to_width, [&]<typename Dst>() {
+                            return raw_out(op.to_width, static_cast<Dst>(v));
+                        });
+                    });
+                case K::Trunc:
+                    return dispatch_uint(op.from_width, [&]<typename Src>() {
+                        Src v = src_val.as_pod<Src>();
+                        return dispatch_uint(op.to_width, [&]<typename Dst>() {
+                            return raw_out(op.to_width, static_cast<Dst>(v));
+                        });
+                    });
+                case K::FPExt:
+                    return raw_out(8, static_cast<double>(src_val.as_pod<float>()));
+                case K::FPTrunc:
+                    return raw_out(4, static_cast<float>(src_val.as_pod<double>()));
+                case K::SIToFP:
+                    return dispatch_sint(op.from_width, [&]<typename I>() {
+                        I v = src_val.as_pod<I>();
+                        return dispatch_float(op.to_width, [&]<typename F>() {
+                            return raw_out(op.to_width, static_cast<F>(v));
+                        });
+                    });
+                case K::UIToFP:
+                    return dispatch_uint(op.from_width, [&]<typename I>() {
+                        I v = src_val.as_pod<I>();
+                        return dispatch_float(op.to_width, [&]<typename F>() {
+                            return raw_out(op.to_width, static_cast<F>(v));
+                        });
+                    });
+                case K::FPToSI:
+                    return dispatch_float(op.from_width, [&]<typename F>() {
+                        F v = src_val.as_pod<F>();
+                        return dispatch_sint(op.to_width, [&]<typename I>() {
+                            return raw_out(op.to_width, static_cast<I>(v));
+                        });
+                    });
+                case K::FPToUI:
+                    return dispatch_float(op.from_width, [&]<typename F>() {
+                        F v = src_val.as_pod<F>();
+                        return dispatch_uint(op.to_width, [&]<typename I>() {
+                            return raw_out(op.to_width, static_cast<I>(v));
+                        });
+                    });
+            }
+            throw std::runtime_error("Evaluator::eval_intrinsic: unknown CastKind");
+        },
+
+        [&](const Runtime::CmpOp& op) -> Runtime::Value {
+            using K = Runtime::CmpKind;
+            auto a_val = read_slot_bytes(rt, op.lhs, op.width);
+            auto b_val = read_slot_bytes(rt, op.rhs, op.width);
+            switch (op.op) {
+                case K::EqBytes:
+                    return flag_out(std::memcmp(a_val.bytes.data(), b_val.bytes.data(), op.width) == 0);
+                case K::SLt:
+                    return dispatch_sint(op.width, [&]<typename S>() {
+                        return flag_out(a_val.as_pod<S>() < b_val.as_pod<S>());
+                    });
+                case K::ULt:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return flag_out(a_val.as_pod<U>() < b_val.as_pod<U>());
+                    });
+                case K::SLe:
+                    return dispatch_sint(op.width, [&]<typename S>() {
+                        return flag_out(a_val.as_pod<S>() <= b_val.as_pod<S>());
+                    });
+                case K::ULe:
+                    return dispatch_uint(op.width, [&]<typename U>() {
+                        return flag_out(a_val.as_pod<U>() <= b_val.as_pod<U>());
+                    });
+                case K::FEq:
+                    return dispatch_float(op.width, [&]<typename F>() {
+                        return flag_out(a_val.as_pod<F>() == b_val.as_pod<F>());
+                    });
+                case K::FLt:
+                    return dispatch_float(op.width, [&]<typename F>() {
+                        return flag_out(a_val.as_pod<F>() < b_val.as_pod<F>());
+                    });
+                case K::FLe:
+                    return dispatch_float(op.width, [&]<typename F>() {
+                        return flag_out(a_val.as_pod<F>() <= b_val.as_pod<F>());
+                    });
+            }
+            throw std::runtime_error("Evaluator::eval_intrinsic: unknown CmpKind");
+        },
+    }, spec);
+}
+
 EvalTask Evaluator::eval_proto(uint64_t proto_addr) {
     const Runtime::PrototypeObject* obj = rt.prototypes.get(proto_addr);
-    if (obj->kind == Runtime::CodeKind::NativeSym) {
-        if (!obj->native_fn) {
-            throw std::runtime_error("#evaluate: unbound native prototype '" + obj->extern_name + "'");
-        }
-        co_return obj->native_fn(*this);
+    if (const auto* ast_p = std::get_if<Runtime::AstProto>(&obj->payload)) {
+        co_return co_await eval_expr(ast_p->ast);
     }
-    co_return co_await eval_expr(obj->ast);
+    // Exhaustive std::visit across all PrototypeObject variants (compile-time checked).
+    co_return std::visit(Overloaded{
+        [](const Runtime::AstProto&) -> Runtime::Value {
+            throw std::logic_error("Evaluator::eval_proto: AstProto handled above");
+        },
+        [&](const Runtime::NativeProto& p) -> Runtime::Value {
+            if (!p.fn) {
+                throw std::runtime_error("#evaluate: unbound native prototype '" + p.extern_name + "'");
+            }
+            return p.fn(*this);
+        },
+        [&](const Runtime::FfiProto& p) -> Runtime::Value {
+            if (!p.fn) {
+                throw std::runtime_error("#evaluate: unbound ffi prototype '" + p.binding.symbol_name + "'");
+            }
+            return p.fn(*this);
+        },
+        [&](const Runtime::IntrinsicProto& p) -> Runtime::Value {
+            return eval_intrinsic(p.spec);
+        },
+    }, obj->payload);
 }
 
 EvalTask Evaluator::eval_expr(const Ast::ExprPtr& expr) {
@@ -219,7 +528,8 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
         }
         case K::Destroy: {
             expect_shape(args[0], rt.shapes.handle_shape, "#destroy: argument must be a Handle");
-            co_return Runtime::Value::from_pod<uint8_t>(rt.shapes.raw1_shape, rt.coroutines.destroy(args[0].as_pod<uint64_t>()) ? 1 : 0);
+            co_return Runtime::Value::from_pod<uint8_t>(
+                rt.shapes.raw1_shape, rt.coroutines.destroy(args[0].as_pod<uint64_t>()) ? 1 : 0);
         }
         case K::CoroRootFrame: {
             expect_shape(args[0], rt.shapes.handle_shape, "#coro_root_frame: argument must be a Handle");

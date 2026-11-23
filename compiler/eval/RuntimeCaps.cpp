@@ -2,8 +2,109 @@
 
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace reverSilly::Lang::Eval::CapabilitiesDetail {
+
+namespace {
+
+uint8_t read_int_width(Evaluator& ev, std::string_view field_name, std::string_view op_name) {
+    uint64_t w = read_field(ev, field_name).as_pod<uint64_t>();
+    if (w != 1 && w != 2 && w != 4 && w != 8) {
+        throw std::runtime_error(
+            "capabilities.intrinsics." + std::string(op_name) + ": invalid integer width " + std::to_string(w));
+    }
+    return static_cast<uint8_t>(w);
+}
+
+uint8_t read_float_width(Evaluator& ev, std::string_view field_name, std::string_view op_name) {
+    uint64_t w = read_field(ev, field_name).as_pod<uint64_t>();
+    if (w != 4 && w != 8) {
+        throw std::runtime_error(
+            "capabilities.intrinsics." + std::string(op_name) + ": invalid float width " + std::to_string(w));
+    }
+    return static_cast<uint8_t>(w);
+}
+
+bool read_signed_flag(Evaluator& ev) {
+    return read_field(ev, "signed").as_pod<uint8_t>() != 0;
+}
+
+Runtime::SymbolId read_sym_field(Evaluator& ev, std::string_view field_name) {
+    Runtime::Value v = read_field(ev, field_name);
+    if (v.shape_addr != ev.rt.shapes.symbol_shape) {
+        throw std::runtime_error(
+            "capabilities.intrinsics: field '" + std::string(field_name) + "' must be a Symbol");
+    }
+    return v.as_pod<Runtime::SymbolId>();
+}
+
+template <Runtime::IntBinKind Kind>
+Runtime::Value make_int_binop_factory(Runtime::RuntimeContext& rt, std::string name) {
+    return native_proto(rt, "capabilities.intrinsics." + name, [name](Evaluator& ev) {
+        Runtime::IntBinOp op{
+            Kind,
+            read_int_width(ev, "width", name),
+            read_sym_field(ev, "lhs"),
+            read_sym_field(ev, "rhs"),
+        };
+        return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+    });
+}
+
+template <Runtime::IntBinKind SignedKind, Runtime::IntBinKind UnsignedKind>
+Runtime::Value make_signed_int_binop_factory(Runtime::RuntimeContext& rt, std::string name) {
+    return native_proto(rt, "capabilities.intrinsics." + name, [name](Evaluator& ev) {
+        Runtime::IntBinOp op{
+            read_signed_flag(ev) ? SignedKind : UnsignedKind,
+            read_int_width(ev, "width", name),
+            read_sym_field(ev, "lhs"),
+            read_sym_field(ev, "rhs"),
+        };
+        return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+    });
+}
+
+template <Runtime::FloatBinKind Kind>
+Runtime::Value make_float_binop_factory(Runtime::RuntimeContext& rt, std::string name) {
+    return native_proto(rt, "capabilities.intrinsics." + name, [name](Evaluator& ev) {
+        Runtime::FloatBinOp op{
+            Kind,
+            read_float_width(ev, "width", name),
+            read_sym_field(ev, "lhs"),
+            read_sym_field(ev, "rhs"),
+        };
+        return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+    });
+}
+
+template <Runtime::CmpKind SignedKind, Runtime::CmpKind UnsignedKind>
+Runtime::Value make_int_cmp_factory(Runtime::RuntimeContext& rt, std::string name) {
+    return native_proto(rt, "capabilities.intrinsics." + name, [name](Evaluator& ev) {
+        Runtime::CmpOp op{
+            read_signed_flag(ev) ? SignedKind : UnsignedKind,
+            read_int_width(ev, "width", name),
+            read_sym_field(ev, "lhs"),
+            read_sym_field(ev, "rhs"),
+        };
+        return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+    });
+}
+
+template <Runtime::CmpKind Kind>
+Runtime::Value make_float_cmp_factory(Runtime::RuntimeContext& rt, std::string name) {
+    return native_proto(rt, "capabilities.intrinsics." + name, [name](Evaluator& ev) {
+        Runtime::CmpOp op{
+            Kind,
+            read_float_width(ev, "width", name),
+            read_sym_field(ev, "lhs"),
+            read_sym_field(ev, "rhs"),
+        };
+        return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+    });
+}
+
+} // namespace
 
 Runtime::Value build_constants_module(Runtime::RuntimeContext& rt) {
     auto& s = rt.shapes;
@@ -99,34 +200,99 @@ Runtime::Value build_symbols_module(Runtime::RuntimeContext& rt) {
 }
 
 Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
+    using IB = Runtime::IntBinKind;
+    using IU = Runtime::IntUnaryKind;
+    using FB = Runtime::FloatBinKind;
+    using CK = Runtime::CastKind;
+    using CM = Runtime::CmpKind;
+
     return build_struct(rt, {
-        {"add_i64", native_proto(rt, "capabilities.intrinsics.add_i64", [](Evaluator& ev) {
-            return Runtime::Value::from_pod<int64_t>(
-                ev.rt.shapes.raw8_shape, read_field(ev, "a").as_pod<int64_t>() + read_field(ev, "b").as_pod<int64_t>());
+        // Integer binary arithmetic -> bytes(width)
+        {"add_int", make_int_binop_factory<IB::Add>(rt, "add_int")},
+        {"sub_int", make_int_binop_factory<IB::Sub>(rt, "sub_int")},
+        {"mul_int", make_int_binop_factory<IB::Mul>(rt, "mul_int")},
+        {"div_int", make_signed_int_binop_factory<IB::SDiv, IB::UDiv>(rt, "div_int")},
+        {"rem_int", make_signed_int_binop_factory<IB::SRem, IB::URem>(rt, "rem_int")},
+
+        // Bitwise & shift -> bytes(width)
+        {"bit_and", make_int_binop_factory<IB::BitAnd>(rt, "bit_and")},
+        {"bit_or", make_int_binop_factory<IB::BitOr>(rt, "bit_or")},
+        {"bit_xor", make_int_binop_factory<IB::BitXor>(rt, "bit_xor")},
+        {"bit_not", native_proto(rt, "capabilities.intrinsics.bit_not", [](Evaluator& ev) {
+            Runtime::IntUnaryOp op{IU::BitNot, read_int_width(ev, "width", "bit_not"), read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
-        {"sub_i64", native_proto(rt, "capabilities.intrinsics.sub_i64", [](Evaluator& ev) {
-            return Runtime::Value::from_pod<int64_t>(
-                ev.rt.shapes.raw8_shape, read_field(ev, "a").as_pod<int64_t>() - read_field(ev, "b").as_pod<int64_t>());
+        {"shl", make_int_binop_factory<IB::Shl>(rt, "shl")},
+        {"shr", make_signed_int_binop_factory<IB::AShr, IB::LShr>(rt, "shr")},
+
+        // Integer width conversions -> bytes(to_width)
+        {"ext_int", native_proto(rt, "capabilities.intrinsics.ext_int", [](Evaluator& ev) {
+            bool is_signed = read_signed_flag(ev);
+            uint8_t from_w = read_int_width(ev, "from", "ext_int");
+            uint8_t to_w = read_int_width(ev, "to", "ext_int");
+            if (from_w >= to_w) throw std::runtime_error("capabilities.intrinsics.ext_int: requires from < to");
+            Runtime::CastOp op{is_signed ? CK::SExt : CK::ZExt, from_w, to_w, read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
-        {"mul_i64", native_proto(rt, "capabilities.intrinsics.mul_i64", [](Evaluator& ev) {
-            return Runtime::Value::from_pod<int64_t>(
-                ev.rt.shapes.raw8_shape, read_field(ev, "a").as_pod<int64_t>() * read_field(ev, "b").as_pod<int64_t>());
+        {"trunc_int", native_proto(rt, "capabilities.intrinsics.trunc_int", [](Evaluator& ev) {
+            uint8_t from_w = read_int_width(ev, "from", "trunc_int");
+            uint8_t to_w = read_int_width(ev, "to", "trunc_int");
+            if (from_w <= to_w) throw std::runtime_error("capabilities.intrinsics.trunc_int: requires from > to");
+            Runtime::CastOp op{CK::Trunc, from_w, to_w, read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
-        {"lt_i64", native_proto(rt, "capabilities.intrinsics.lt_i64", [](Evaluator& ev) {
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, read_field(ev, "a").as_pod<int64_t>() < read_field(ev, "b").as_pod<int64_t>() ? 1 : 0);
+
+        // Float binary arithmetic -> bytes(width)
+        {"add_float", make_float_binop_factory<FB::Add>(rt, "add_float")},
+        {"sub_float", make_float_binop_factory<FB::Sub>(rt, "sub_float")},
+        {"mul_float", make_float_binop_factory<FB::Mul>(rt, "mul_float")},
+        {"div_float", make_float_binop_factory<FB::Div>(rt, "div_float")},
+
+        // Float / integer conversions -> bytes(to_width)
+        {"ext_float", native_proto(rt, "capabilities.intrinsics.ext_float", [](Evaluator& ev) {
+            Runtime::CastOp op{CK::FPExt, 4, 8, read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
-        {"eq_i64", native_proto(rt, "capabilities.intrinsics.eq_i64", [](Evaluator& ev) {
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, read_field(ev, "a").as_pod<int64_t>() == read_field(ev, "b").as_pod<int64_t>() ? 1 : 0);
+        {"trunc_float", native_proto(rt, "capabilities.intrinsics.trunc_float", [](Evaluator& ev) {
+            Runtime::CastOp op{CK::FPTrunc, 8, 4, read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
-        {"eq_sym", native_proto(rt, "capabilities.intrinsics.eq_sym", [](Evaluator& ev) {
-            return Runtime::Value::from_pod<uint8_t>(
-                ev.rt.shapes.raw1_shape,
-                read_field(ev, "a").as_pod<Runtime::SymbolId>() == read_field(ev, "b").as_pod<Runtime::SymbolId>() ? 1 : 0);
+        {"int_to_float", native_proto(rt, "capabilities.intrinsics.int_to_float", [](Evaluator& ev) {
+            bool is_signed = read_signed_flag(ev);
+            uint8_t from_w = read_int_width(ev, "from", "int_to_float");
+            uint8_t to_w = read_float_width(ev, "to", "int_to_float");
+            Runtime::CastOp op{is_signed ? CK::SIToFP : CK::UIToFP, from_w, to_w, read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
+        {"float_to_int", native_proto(rt, "capabilities.intrinsics.float_to_int", [](Evaluator& ev) {
+            bool is_signed = read_signed_flag(ev);
+            uint8_t from_w = read_float_width(ev, "from", "float_to_int");
+            uint8_t to_w = read_int_width(ev, "to", "float_to_int");
+            Runtime::CastOp op{is_signed ? CK::FPToSI : CK::FPToUI, from_w, to_w, read_sym_field(ev, "src")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+        })},
+
+        // Comparisons -> bytes(1, 1) (0x01 / 0x00)
+        {"eq_bytes", native_proto(rt, "capabilities.intrinsics.eq_bytes", [](Evaluator& ev) {
+            uint64_t w = read_field(ev, "width").as_pod<uint64_t>();
+            if (w == 0 || w > 255) {
+                throw std::runtime_error("capabilities.intrinsics.eq_bytes: width must be in 1..255");
+            }
+            Runtime::CmpOp op{CM::EqBytes, static_cast<uint8_t>(w), read_sym_field(ev, "lhs"), read_sym_field(ev, "rhs")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
+        })},
+        {"lt_int", make_int_cmp_factory<CM::SLt, CM::ULt>(rt, "lt_int")},
+        {"le_int", make_int_cmp_factory<CM::SLe, CM::ULe>(rt, "le_int")},
+        {"eq_float", make_float_cmp_factory<CM::FEq>(rt, "eq_float")},
+        {"lt_float", make_float_cmp_factory<CM::FLt>(rt, "lt_float")},
+        {"le_float", make_float_cmp_factory<CM::FLe>(rt, "le_float")},
+
+        // Structural Shape equality & raw byte-buffer indexing
         {"eq_shape", native_proto(rt, "capabilities.intrinsics.eq_shape", [](Evaluator& ev) {
             auto a = read_field(ev, "a").as_pod<Runtime::ShapeLayout>();
             auto b = read_field(ev, "b").as_pod<Runtime::ShapeLayout>();
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, ev.canonical_shape_addr(a) == ev.canonical_shape_addr(b) ? 1 : 0);
+            return Runtime::Value::from_pod<uint8_t>(
+                ev.rt.shapes.raw1_shape, ev.canonical_shape_addr(a) == ev.canonical_shape_addr(b) ? 1 : 0);
         })},
         {"bytes_at", native_proto(rt, "capabilities.intrinsics.bytes_at", [](Evaluator& ev) {
             auto span = read_bytes_ptr(ev, "bytes");
@@ -142,10 +308,6 @@ Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
                 throw std::out_of_range("capabilities.intrinsics.bytes_slice: out of range");
             }
             return ev.rt.make_bytes_ptr(span.data() + start, len);
-        })},
-        {"u8_to_i64", native_proto(rt, "capabilities.intrinsics.u8_to_i64", [](Evaluator& ev) {
-            int64_t v = static_cast<int64_t>(read_field(ev, "b").as_pod<uint8_t>());
-            return Runtime::Value::from_pod<int64_t>(ev.rt.shapes.raw8_shape, v);
         })},
     });
 }

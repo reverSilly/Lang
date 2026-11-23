@@ -87,14 +87,14 @@ static void test_ffi_strlen_named_abs_positional_and_close_lib() {
     assert(len_val.shape_addr == rt.shapes.raw8_shape);
     assert(len_val.as_pod<uint64_t>() == 9);
 
-    // Verify FfiBinding metadata is preserved on PrototypeObject for Phase 2 LLVM AOT
+    // Verify FfiProto variant & FfiBinding metadata on PrototypeObject for Phase 2 LLVM AOT
     Value proto_v = rt.deref(root->field(rt.symbols.intern("c_strlen")));
     const PrototypeObject* pobj = rt.prototypes.get(proto_v.as_pod<uint64_t>());
-    assert(pobj->kind == CodeKind::NativeSym);
-    assert(pobj->ffi_binding.has_value());
-    assert(pobj->ffi_binding->symbol_name == "strlen");
-    assert(pobj->ffi_binding->args_shape_addr == strlen_args);
-    assert(pobj->ffi_binding->ret_shape_addr == rt.shapes.raw8_shape);
+    const auto* fp = std::get_if<FfiProto>(&pobj->payload);
+    assert(fp != nullptr);
+    assert(fp->binding.symbol_name == "strlen");
+    assert(fp->binding.args_shape_addr == strlen_args);
+    assert(fp->binding.ret_shape_addr == rt.shapes.raw8_shape);
 
     // 2. Positional argument call with 32-bit int return: abs(0 = -42) -> 42
     Value abs_val = ev.run(fe.parse(R"(
