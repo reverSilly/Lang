@@ -55,16 +55,16 @@
 
 判据：**凡是触碰求值器栈帧、槽三态机与内存读写的入核；凡是 RAII（`__destroy`）、POD Gate、`move`、`swap`、`recast`、字段 map 遍历（归 `capabilities.map`）、符号文本互转（归 `capabilities.symbols`）、算术指令（归 `capabilities.intrinsics`）、多层 `break`、模式匹配与所有语法糖（`.`、`$`、`{}`、`""` 等）全部归元层能力或标准库。**
 
-Core 共包含 **2 个语法级原语** + **21 个 `#` 前缀 Builtin（4 个零参 + 17 个带参）**：
+Core 共包含 **2 个语法级原语** + **21 个 `#` 前缀 Builtin（3 个零参 + 18 个带参）**：
 
 | 分类 | Core 原语 | 签名与语义 |
 | :--- | :--- | :--- |
 | **1. 延迟与序列（2）** | `^Expr` / `a ; b` | 唯一延迟特殊形式生成 `Prototype` / 顺序求值并丢弃前值（无析构） |
 | **2. 环境求值与阶段（4）** | `#evaluate(p)` / `#block(p)` / `#new(p)` / `#compile(e)` | 当前帧就地求值 / 开辟子构建帧并在闭合时剥离 `uninit` 与 `empty` 槽、将 `live` 绑定槽压平为连续对象 / 惰性创建独立协程返回 `Handle` / 强制编译期求值并固化 |
-| **3. 环境与槽游标（5，皆零参）** | `#this` / `#parent` / `#unbound` / `#caller` / `#in` | 当前构建帧指针 / 构建栈直接父帧指针 / 当前帧栈顶未 `#bind` 的匿名 `live` 子槽指针（无则 `null`）/ 恢复者协程 `Handle` / 本协程来信槽指针 |
+| **3. 环境与协程游标（3，皆零参）** | `#this` / `#caller` / `#in` | 当前构建帧指针 / 恢复者协程 `Handle` / 本协程来信槽指针 |
 | **4. 槽分配与状态演进（5）** | `#allocate(s, is_mut)` / `#allocate_val(v, is_mut)` / `#touch(ptr)` / `#bind(sym, val)` / `#drop(ptr)` | 按 `Shape` `s` 分配 `uninitialized` 真槽 / 按 `v` 直接分配 `live` 真槽 / 将直接子槽零开销置为 `live` / 绑定未命名直接子槽（返 `bytes(1, 1)`：`0x01`/`0x00`，若旧同名槽为 `empty` 则重绑）/ 将构建链直接子槽置为 `empty`（零 RAII） |
 | **5. 比特读写（2，零 POD/RAII 检查）** | `#deref(ptr)` / `#write(dst_ptr, val)` | 从 `live` 槽无条件按位读出 `val` / 当 `dst_ptr.shape_ptr == (#shape(val)).addr` 且 `dst_ptr` 为 `uninitialized` 或 `mutable`（含已闭合对象的 `mutable live` 字段）时，无条件按位写入并置为 `live` |
-| **6. 导航与反射（2）** | `#field(ptr, sym)` / `#shape(val)` | 胖指针偏移寻址 / 取值的透明 `Shape` 元数据 |
+| **6. 导航与反射（3）** | `#parent(ptr)` / `#field(ptr, sym)` / `#shape(val)` | 活跃 OpenFrame 的父构建帧指针（非 OpenFrame 或根帧返 `null`）/ 胖指针偏移寻址 / 取值的透明 `Shape` 元数据 |
 | **7. 控制流与协程切换（3）** | `#branch(c, p1, p2)` / `#break(val)` / `#resume(coro, val)` | 透明二路分支 / **仅退出当前最内层构建帧 `#this`** 并将 `val` 直接填入当前块 `self root` 结果槽（零 POD/RAII 检查）/ 原子地将 `val` 填入目标 `#in` 槽并切换协程（零 POD/RAII 检查） |
 
 ## 四、验收用例（自检清单）

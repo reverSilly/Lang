@@ -8,7 +8,7 @@
 1. **同一套内核求值语义**：编译期脚本与运行期目标程序共享同一套 Core 语义（21 个 `#` 内建原语、三态槽状态机、透明 `Shape` 与对称协程）。
 2. **严格的编译期 / 目标运行期隔离**：不存在把编译器前端泄入运行期的“运行时 `import`”或隐式 `#compile` 魔法；构建脚本（编译期）与目标程序（运行期）通过**环境无关的 Standalone `Ast`** 严格解耦：
    - **编译期（Build Script）**：在挂载了 `capabilities`（Tier 1–3）的宿主 `RuntimeContext` 中运行，负责自举语法前端、读取并解析多文件源码、构造/拼装 Core IR（`Ast`）、实例化编译期常量与外部声明（`intrinsics`、`ffi`），最后将封闭的 `Ast` 交给后端。
-   - **目标运行期（Target Program）**：在**完全孤立的运行环境**中执行（Phase 1 由 `capabilities.backends.interpreter.run` 创建全新的 `RuntimeContext` + `Evaluator`；Phase 2 由 `capabilities.backends.llvm.emit_executable` 生成独立原生可执行文件），**根帧不含 `capabilities`、`#parent = null`**。
+   - **目标运行期（Target Program）**：在**完全孤立的运行环境**中执行（Phase 1 由 `capabilities.backends.interpreter.run` 创建全新的 `RuntimeContext` + `Evaluator`；Phase 2 由 `capabilities.backends.llvm.emit_executable` 生成独立原生可执行文件），**根帧不含 `capabilities`、`#parent(#this) = null`**。
 
 ## 二、`Ast`、`Prototype` 与后端的职责划分
 
@@ -52,7 +52,7 @@
 
 ## 五、验收用例（自检清单）
 
-1. **孤立执行验证**：通过 `backends.interpreter.run({ ast })` 运行目标程序时，目标根帧内 `#field(#this, capabilities)` 与 `#parent` 均为 `null` 指针，且使用独立 `RuntimeContext` + `Evaluator`。
+1. **孤立执行验证**：通过 `backends.interpreter.run({ ast })` 运行目标程序时，目标根帧内 `#field(#this, capabilities)` 与 `#parent(#this)` 均为 `null` 指针，且使用独立 `RuntimeContext` + `Evaluator`。
 2. **非法跨阶段值拦截**：试图将 `Pointer`、`Handle`、`NativeProto`（如 `capabilities`）或 `BoundFfiProto` 传入 `ast.value` 时静态抛错拒绝；8 种可移植 `AstValue`（含 `libc` 声明式符号与 `IntrinsicProto`）正常提升并在新 `RuntimeContext` 中无损 intern。
 3. **多文件编译脚本拼装**：构建脚本用 `syntax.parse` 解析多个模块为 `Ast`，通过 `ast.seq` + `ast.value` 合并为单一封闭 `Ast` 并直接交由后端执行，全程无需 `to_proto`。
 4. **纯字节字符串与零 `#freeze`**：`"hello"` 求值为 `Shape{ size = 5, align = 1 }` 的 `RawBytes` 值，可直接参与结构体构造与 FFI，全内核零 `#freeze` 原语。

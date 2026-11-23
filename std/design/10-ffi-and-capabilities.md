@@ -19,7 +19,7 @@ In Lang, `capabilities` is mounted under root `#this.capabilities` strictly in t
 | **3. Compiler Frontend & Backends** | `ast`, `syntax`, `backends` (`interpreter`, future `llvm`) *(+ temporary `io`)* | Yes | **No** | Compiler process only; never mounted in target root frames or emitted executables |
 
 - **Complete Target Isolation (Phase 1 & Phase 2 Isomorphism)**:
-  - When a compile script invokes **`capabilities.backends.interpreter.run({ ast })`**, the interpreter backend creates a **brand-new, completely independent `RuntimeContext` + `Evaluator`** (`#parent = nullptr`, **zero `capabilities`**, independent `SymbolPool` / `ShapeArena` / `PrototypeArena` / `CoroutinePool` / `FfiDispatchCache`), interns the standalone `Ast` into it, executes it, and tears down all target resources (including any lazily opened FFI libraries) on return.
+  - When a compile script invokes **`capabilities.backends.interpreter.run({ ast })`**, the interpreter backend creates a **brand-new, completely independent `RuntimeContext` + `Evaluator`** (`#parent(#this) = null`, **zero `capabilities`**, independent `SymbolPool` / `ShapeArena` / `PrototypeArena` / `CoroutinePool` / `FfiDispatchCache`), interns the standalone `Ast` into it, executes it, and tears down all target resources (including any lazily opened FFI libraries) on return.
   - When a compile script invokes **`capabilities.backends.llvm.emit_executable({ ast, ... })`** *(Phase 2)*, the LLVM backend lowers the **exact same standalone `Ast`**: embedded `IntrinsicVal` lowers to single LLVM instructions, `FfiExternVal` lowers to `declare external` + linker flags, `FfiBindPtrVal` lowers to a statically compiled indirect-call trampoline (zero runtime `libffi`), and no `capabilities` struct exists in the binary.
   - Runtime dynamic library loading in target programs requires no special compiler capability: target code simply declares `dlopen`/`dlsym`/`dlclose` (or Win32 `LoadLibraryA`/`GetProcAddress`) via `ffi.extern_symbol` and binds returned function pointers via `ffi.bind_ptr`.
 - **Retirement of Temporary `capabilities.io`**:
@@ -40,13 +40,13 @@ Every heap-allocated compiler resource uses an explicit symmetric `new_*`/`destr
    - `lit`, `range`, `ref`, `any`, `eof`, `seq`, `choice`, `repeat`, `lookahead`, `get_rule`, `set_rule`, `parse`, and CST readers (`cst_child_count`, `cst_view_sym`, `cst_view_bytes`, `cst_child_view_sym`, `cst_eval_child`).
 3. **Target Backends (`capabilities.backends`)**:
    - Backends consume **standalone `Ast` handles** directly — never host `Prototype` objects.
-   - **`capabilities.backends.interpreter.run({ ast: Handle }) -> Value`** *(Phase 1)*: Creates a fresh `RuntimeContext` + `Evaluator`, interns `ast`, executes it in an isolated root frame (`#parent = nullptr`, zero `capabilities`), and reifies/interns any stageable return value back to the caller (or `Unit`).
+   - **`capabilities.backends.interpreter.run({ ast: Handle }) -> Value`** *(Phase 1)*: Creates a fresh `RuntimeContext` + `Evaluator`, interns `ast`, executes it in an isolated root frame (`#parent(#this) = null`, zero `capabilities`), and reifies/interns any stageable return value back to the caller (or `Unit`).
    - **`capabilities.backends.llvm`** *(Phase 2)*: Symmetrical AOT codegen sub-namespace (`emit_ir`, `emit_object`, `emit_executable`) consuming the exact same standalone `Ast` handle.
 
 ```text
                                                                ┌──▶ ast.to_proto({ast}) ──▶ Prototype (stage into compile-time env: #evaluate / #block)
                                                                ├──▶ ast.serialize({ast}) ──▶ Bytes (portable binary IR cache)
-RawBytes (source) ──▶ syntax.parse({fe, src, arena}) ──▶ Ast ──▶ [AST composition / lifting via ast.*] ──┤
+BytePtr (source) ──▶ syntax.parse({fe, src, arena}) ──▶ Ast ──▶ [AST composition / lifting via ast.*] ──┤
                                                                ├──▶ backends.interpreter.run({ast}) ──▶ Fresh RuntimeContext + Evaluator (Phase 1)
                                                                └──▶ backends.llvm.emit_executable({ast, ...}) ──▶ Native Binary (Phase 2 AOT)
 ```
@@ -121,7 +121,7 @@ Lang's Core has **no function-call syntax and no separate C type system**. Every
 
 1. **`capabilities.ffi.extern_symbol`** *(Direct External C Call)*
    - **Input fields in `#this`**:
-     - `lib: RawBytes` (leaf `Shape{ size = N, align = 1 }`) — library name (e.g., `""` for default process/libc symbols, `"m"`, `"sqlite3"`).
+     - `lib: RawBytes` (leaf `Shape{ size = N, align = 1 }`, or `Pointer` to leaf bytes during bootstrap) — library name (e.g., `""` for default process/libc symbols, `"m"`, `"sqlite3"`).
      - `name: RawBytes` — exact C symbol name (e.g., `"malloc"`, `"strlen"`, `"div"`, `"dlopen"`).
      - `abi: Abi`:
        ```text

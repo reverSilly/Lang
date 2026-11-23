@@ -23,7 +23,7 @@ This document records the architectural refinements finalized during Compiler St
 *(`GroupExpr` and `PrototypeExpr` are removed from Core IR.)*
 
 ### 1.3 Core `#` Builtins (21 total — Fully Symmetric)
-- **4 Nullary Environment & Coroutine Cursors**: `#this`, `#parent`, `#caller`, `#in` *(note: `#unbound` removed — replaced by reverse scanning `#this`'s `Shape` via `capabilities.field_map.at`)*
+- **3 Nullary Environment & Coroutine Cursors**: `#this`, `#caller`, `#in` *(note: `#unbound` removed — replaced by reverse scanning `#this`'s `Shape` via `capabilities.field_map.at`)*
 - **5 Evaluation & Coroutine Lifecycle / Reflection**:
   - `#evaluate(p)` — Execute `Prototype` `p` in current `#this` frame.
   - `#block(p)` — Push child `ConstructingFrame` (mounted as an active anonymous child slot in parent's `live_shape`), execute `p`, close & flatten on normal completion, pop frame.
@@ -32,7 +32,7 @@ This document records the architectural refinements finalized during Compiler St
   - `#coro_root_frame(coro)` — Return the fat `Pointer` to a `Suspended` coroutine's root `ConstructingFrame` (enabling Stdlib recursive Mark-Sweep GC and RAII cleanup).
 - **5 Allocation & Three-State Slot Machine**: `#allocate(s, is_mut)`, `#allocate_val(v, is_mut)`, `#touch(ptr)`, `#bind(sym, ptr)`, `#drop(ptr)`
 - **2 Raw Bit Read/Write (POD/RAII-agnostic)**: `#deref(ptr)`, `#write(dst_ptr, val)`
-- **2 Navigation & Reflection**: `#field(ptr, sym)`, `#shape(val)`
+- **3 Navigation & Reflection**: `#parent(ptr)` (returns the parent OpenFrame pointer for an active `ConstructingFrame`, or null for root/non-open-frame pointers, enabling multi-level `#parent(#parent(#this))` traversal), `#field(ptr, sym)`, `#shape(val)`
 - **3 Control Flow**:
   - `#branch(cond, p1, p2)` — `cond` is `bytes(1, 1)` (non-zero is truthy, `0x00` is falsy).
   - `#break(val)` — Single-layer exit from the innermost `#block` (pops `#this` and returns `val` directly). At a coroutine's root frame, terminates the coroutine (`Dead`), delivers `val` into `#caller`'s `#in` slot, immediately reclaims its resources, and symmetrically transfers to `#caller`.
@@ -61,7 +61,7 @@ ShapeLayout (40B, align 8):
   @40  __shape_tag: {} (0B)
 ```
 
-- **Ordinary Fat Pointer `#this` / `#parent` / `#coro_root_frame`**: Each returns a regular `PointerLayout { addr = frame_addr, shape_ptr = &frame->live_shape, mutability = 1 }`. Every slot's `FieldEntry.ptr.addr` stores the 64-bit unsigned delta `slot_addr - frame_addr` (mod $2^{64}$), so `ptr.addr + fe.ptr.addr == slot_addr`.
+- **Ordinary Fat Pointer `#this` / `#parent(ptr)` / `#coro_root_frame(coro)`**: Each returns a regular `PointerLayout { addr = frame_addr, shape_ptr = &frame->live_shape, mutability = 1 }`. Every slot's `FieldEntry.ptr.addr` stores the 64-bit unsigned delta `slot_addr - frame_addr` (mod $2^{64}$), so `ptr.addr + fe.ptr.addr == slot_addr`.
 - **Single Path for `#field(ptr, sym)`**: Open frames, closed objects, and `addr == 0` zero-base reflection pointers all execute the exact same lookup (`fields.find(sym)` + `ptr.addr + fe.ptr.addr`), with zero open-frame special cases.
 - **Unified Call Stack & Object Tree**: When `#block(p)` pushes child frame `B`, `B` is mounted as an active `Live` anonymous child slot inside parent frame `A`'s `live_shape` (at most one active child frame slot per frame). Consequently:
   1. Stdlib computes `top_frame` itself by descending from `#coro_root_frame(coro)` through the unique open-frame child slot.
