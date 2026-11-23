@@ -1,5 +1,11 @@
 ! ============================================================================ !
-! tests/run_tests.lang — Bootstraps Layer 1 from Layer 0 & runs Layer 1 tests  !
+! tests/run_tests.lang — Unified Build & Test Driver                           !
+!   1. Bootstraps Layer 1 (boot0 -> boot1 -> layer1)                           !
+!   2. Stages lib/std/libc.lang at compile time (`to_proto` + `#block`)        !
+!   3. Runs compile-time test `tests/test_ast_build.lang` (`to_proto`+`#block`)!
+!   4. Runs isolated target `tests/test_layer1.lang` (`backends.interpreter`)  !
+!   5. Lifts `libc` + cast intrinsics into `tests/test_ffi.lang` AST and runs  !
+!      it in a brand-new RuntimeContext + Evaluator (`backends.interpreter`)   !
 ! ============================================================================ !
 
 ! 1. Load and run lib/std/boot0.lang in root #this -> binds fe (fe_layer1) & arena !
@@ -27,37 +33,136 @@
 ! Run full boot0 -> boot1 -> layer1 bootstrap (binds fe & arena for fe_layer1) !
 #evaluate(#deref(#field(#this, boot_p))) ;
 
-! 2. Parse lib/std/libc.lang with fe_layer1 and materialize `libc` module !
+! 2. Compile-time stage lib/std/libc.lang -> pure stageable `libc` module value !
 #bind(sym, #allocate_val(lib/std/libc.lang, #deref(#field(#this, F)))) ;
 #bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;
-
 #bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, path)) ;
-
 #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, src)) ;
 #bind(libc_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, ast)) ;
 #bind(libc, #allocate_val(#block(#deref(#field(#this, libc_p))), #deref(#field(#this, F)))) ;
 
-! 3. Parse tests/test_layer1.lang with fe_layer1 and run in an isolated #block !
+! 3. Compile-time script test: tests/test_ast_build.lang (staged via `to_proto` + `#block`) !
+#bind(sym, #allocate_val(tests/test_ast_build.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+#bind(ast_build_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+#bind(res_ast_build, #allocate_val(#block(#deref(#field(#this, ast_build_p))), #deref(#field(#this, F)))) ;
+
+! 4. Isolated target test: tests/test_layer1.lang (direct `backends.interpreter.run`, zero `to_proto`) !
 #bind(sym, #allocate_val(tests/test_layer1.lang, #deref(#field(#this, F)))) ;
 #bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;
-
 #bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, path)) ;
-
 #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, src)) ;
-#bind(test_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#bind(res_layer1, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, ast)) ;
+
+! 5. Isolated target FFI test: lift `libc` + cast intrinsics into `tests/test_ffi.lang` AST -> `backends.interpreter.run` !
+#bind(sym, #allocate_val(tests/test_ffi.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+#bind(ffi_body_ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+
+! Materialize compile-time cast intrinsics (`trunc_8_4`, `sext_4_8`) !
+#bind(from, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+#bind(to, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw4_shape), size)), #deref(#field(#this, F)))) ;
+#bind(src, #allocate_val(x, #deref(#field(#this, F)))) ;
+#bind(trunc_8_4, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), trunc_int))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, from)) ; #drop(#field(#this, to)) ; #drop(#field(#this, src)) ;
+
+#bind(signed, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), true)), #deref(#field(#this, F)))) ;
+#bind(from, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw4_shape), size)), #deref(#field(#this, F)))) ;
+#bind(to, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+#bind(src, #allocate_val(x, #deref(#field(#this, F)))) ;
+#bind(sext_4_8, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), ext_int))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, signed)) ; #drop(#field(#this, from)) ; #drop(#field(#this, to)) ; #drop(#field(#this, src)) ;
+
+! Helper AST for `false` !
+#bind(val, #allocate_val(#deref(#field(#this, F)), #deref(#field(#this, F)))) ;
+#bind(a_false, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, val)) ;
+
+! Build `#bind(libc, #allocate_val(<lit libc>, false))` !
+#bind(sym, #allocate_val(libc, #deref(#field(#this, F)))) ;
+#bind(a_w_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(val, #allocate_val(#deref(#field(#this, libc)), #deref(#field(#this, F)))) ;
+#bind(a_v_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, val)) ;
+#bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, a_v_libc)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_false)), #deref(#field(#this, F)))) ;
+#bind(a_alloc_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+#bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, a_w_libc)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_alloc_libc)), #deref(#field(#this, F)))) ;
+#bind(a_bind_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+! Build `#bind(trunc_8_4, #allocate_val(<lit trunc_8_4>, false))` !
+#bind(sym, #allocate_val(trunc_8_4, #deref(#field(#this, F)))) ;
+#bind(a_w_t84, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(val, #allocate_val(#deref(#field(#this, trunc_8_4)), #deref(#field(#this, F)))) ;
+#bind(a_v_t84, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, val)) ;
+#bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, a_v_t84)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_false)), #deref(#field(#this, F)))) ;
+#bind(a_alloc_t84, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+#bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, a_w_t84)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_alloc_t84)), #deref(#field(#this, F)))) ;
+#bind(a_bind_t84, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+! Build `#bind(sext_4_8, #allocate_val(<lit sext_4_8>, false))` !
+#bind(sym, #allocate_val(sext_4_8, #deref(#field(#this, F)))) ;
+#bind(a_w_s48, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(val, #allocate_val(#deref(#field(#this, sext_4_8)), #deref(#field(#this, F)))) ;
+#bind(a_v_s48, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, val)) ;
+#bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, a_v_s48)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_false)), #deref(#field(#this, F)))) ;
+#bind(a_alloc_s48, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+#bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, a_w_s48)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_alloc_s48)), #deref(#field(#this, F)))) ;
+#bind(a_bind_s48, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
+
+! Sequence prologue + test_ffi.lang body -> run in brand-new isolated RuntimeContext + Evaluator !
+#bind(0, #allocate_val(#deref(#field(#this, a_bind_libc)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, a_bind_t84)), #deref(#field(#this, F)))) ;
+#bind(2, #allocate_val(#deref(#field(#this, a_bind_s48)), #deref(#field(#this, F)))) ;
+#bind(3, #allocate_val(#deref(#field(#this, ffi_body_ast)), #deref(#field(#this, F)))) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), seq))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, 2)) ; #drop(#field(#this, 3)) ;
+
+#bind(res_ffi, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+
+! 6. Release compiler arena & frontend (target FFI libraries auto-closed on target RuntimeContext teardown) !
 #evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
 #evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
 
-! Run tests/test_layer1.lang (assertions abort on any mismatch), then close libc handle !
-#bind(test_res, #allocate_val(#block(#deref(#field(#this, test_p))), #deref(#field(#this, F)))) ;
-#bind(lib, #allocate_val(#deref(#field(#field(#this, libc), lib)), #deref(#field(#this, F)))) ;
-#evaluate(#deref(#field(#field(#field(#this, capabilities), ffi), close_lib))) ;
-#deref(#field(#this, test_res))
+all_tests_passed

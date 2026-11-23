@@ -24,15 +24,20 @@ p_lt_i64   := #block(^( signed := $#parent.T ; width := $#parent.W8 ; lhs := a ;
 p_eq_i64   := #block(^( width := $#parent.W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.eq_bytes)) )) ;
 p_eq_sym   := #block(^( width := $#parent.W4 ; lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.eq_bytes)) )) ;
 p_u8_to_i64 := #block(^( signed := $#parent.F ; from := $#parent.W1 ; to := $#parent.W8 ; src := b ; #break(#evaluate($#parent.caps.intrinsics.ext_int)) )) ;
+p_eq_shape  := #block(^( lhs := a ; rhs := b ; #break(#evaluate($#parent.caps.intrinsics.eq_shape)) )) ;
 
 iops := #block(^(
-    add_i64 := $#parent.p_add_i64 ;
-    sub_i64 := $#parent.p_sub_i64 ;
-    mul_i64 := $#parent.p_mul_i64 ;
-    lt_i64  := $#parent.p_lt_i64 ;
-    eq_i64  := $#parent.p_eq_i64 ;
-    eq_sym  := $#parent.p_eq_sym ;
-    u8_to_i64 := $#parent.p_u8_to_i64
+    add_i64      := $#parent.p_add_i64 ;
+    sub_i64      := $#parent.p_sub_i64 ;
+    mul_i64      := $#parent.p_mul_i64 ;
+    lt_i64       := $#parent.p_lt_i64 ;
+    eq_i64       := $#parent.p_eq_i64 ;
+    eq_sym       := $#parent.p_eq_sym ;
+    u8_to_i64    := $#parent.p_u8_to_i64 ;
+    eq_shape     := $#parent.p_eq_shape ;
+    raw8_shape   := $#parent.c_con.raw8_shape ;
+    symbol_shape := $#parent.c_con.symbol_shape ;
+    shape_meta   := $#parent.c_con.shape_meta
 )) ;
 
 TWO   := $.W2 ;
@@ -51,78 +56,73 @@ std_ops := #block(^(
     add := ^(
         is_i64 := #block(^(
             a := #shape($#parent.a) ;
-            b := $#parent.caps.constants.raw8_shape ;
-            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+            b := $#parent.iops.raw8_shape ;
+            #break(#evaluate($#parent.iops.eq_shape))
         )) ;
         #branch($.is_i64, ^#evaluate($.iops.add_i64), ^#break(type_error_add))
     ) ;
     sub := ^(
         is_i64 := #block(^(
             a := #shape($#parent.a) ;
-            b := $#parent.caps.constants.raw8_shape ;
-            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+            b := $#parent.iops.raw8_shape ;
+            #break(#evaluate($#parent.iops.eq_shape))
         )) ;
         #branch($.is_i64, ^#evaluate($.iops.sub_i64), ^#break(type_error_sub))
     ) ;
     mul := ^(
         is_i64 := #block(^(
             a := #shape($#parent.a) ;
-            b := $#parent.caps.constants.raw8_shape ;
-            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+            b := $#parent.iops.raw8_shape ;
+            #break(#evaluate($#parent.iops.eq_shape))
         )) ;
         #branch($.is_i64, ^#evaluate($.iops.mul_i64), ^#break(type_error_mul))
     ) ;
     lt := ^(
         is_i64 := #block(^(
             a := #shape($#parent.a) ;
-            b := $#parent.caps.constants.raw8_shape ;
-            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+            b := $#parent.iops.raw8_shape ;
+            #break(#evaluate($#parent.iops.eq_shape))
         )) ;
         #branch($.is_i64, ^#evaluate($.iops.lt_i64), ^#break(type_error_lt))
     ) ;
     eq := ^(
         is_i64 := #block(^(
             a := #shape($#parent.a) ;
-            b := $#parent.caps.constants.raw8_shape ;
-            #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+            b := $#parent.iops.raw8_shape ;
+            #break(#evaluate($#parent.iops.eq_shape))
         )) ;
         #branch($.is_i64, ^#evaluate($.iops.eq_i64), ^(
             is_sym := #block(^(
                 a := #shape($#parent.a) ;
-                b := $#parent.caps.constants.symbol_shape ;
-                #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+                b := $#parent.iops.symbol_shape ;
+                #break(#evaluate($#parent.iops.eq_shape))
             )) ;
             #branch($.is_sym, ^#evaluate($.iops.eq_sym), ^(
                 is_sh := #block(^(
                     a := #shape($#parent.a) ;
-                    b := $#parent.caps.constants.shape_meta ;
-                    #break(#evaluate($#parent.caps.intrinsics.eq_shape))
+                    b := $#parent.iops.shape_meta ;
+                    #break(#evaluate($#parent.iops.eq_shape))
                 )) ;
-                #branch($.is_sh, ^#evaluate($.caps.intrinsics.eq_shape), ^#break(type_error_eq))
+                #branch($.is_sh, ^#evaluate($.iops.eq_shape), ^#break(type_error_eq))
             ))
         ))
     )
 )) ;
 
-! Wrap each runtime op so it carries its own `caps` and `iops` without needing root #this !
+! Wrap each runtime op so it carries ONLY pure stageable `iops` (zero `caps` / zero NativeProto) !
 wrap_op := ^(
     #block(^(
-        p_caps := $#parent.caps ;
         p_iops := $#parent.iops ;
         arena  := $#parent.arena ;
         p_raw  := $#parent.op_raw ;
         val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
-        sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
-        val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
-        kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t_al := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
-        kind := bind ; 0 := $.w_c ; 1 := $.t_al ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
         sym := iops ; w_i := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
         val := $.p_iops ; n_i := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
         kind := allocate_val ; 0 := $.n_i ; 1 := $.n_f ; t_ai := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
         kind := bind ; 0 := $.w_i ; 1 := $.t_ai ; s2 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
         val := $.p_raw ; n_r := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
         kind := evaluate ; 0 := $.n_r ; s3 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
-        0 := $.s1 ; 1 := $.s2 ; 2 := $.s3 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ; #drop(.2) ;
+        0 := $.s2 ; 1 := $.s3 ; ast := #evaluate($#parent.c_ast.seq) ; #drop(.0) ; #drop(.1) ;
         #break(#evaluate($#parent.c_ast.to_proto))
     ))
 ) ;
@@ -148,14 +148,16 @@ ops_env := #block(^(
 ! Helper: wrap_h_env(raw_h) -> Prototype with both `caps` and `env` injected !
 wrap_h_env := ^(
     #block(^(
-        p_caps := $#parent.caps ;
         arena  := $#parent.arena ;
         p_env  := $#parent.ops_env ;
         p_raw  := $#parent.raw_h ;
         val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
 
         sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
-        val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        sym := capabilities ; w_cap_f := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        kind := this ; a_th := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ;
+        kind := field ; 0 := $.a_th ; 1 := $.w_cap_f ; p_cf := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := deref ; 0 := $.p_cf ; n_c := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
         kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
         kind := bind ; 0 := $.w_c ; 1 := $.t1 ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
 
@@ -254,7 +256,7 @@ raw_h := ^(
     Z := $.caps.constants.u64_zero ;
     ONE := $.caps.constants.u64_one ;
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
-    bs_sh := #block(^( ptr := $#parent.bs ; #break(#evaluate($#parent.caps.field_map.ptr_shape)) )) ;
+    bs_sh := #shape($.bs) ;
     n := $.bs_sh.size ;
     #bind(acc, #allocate_val($.Z, $.T) ) ;
     #bind(i, #allocate_val($.Z, $.T) ) ;
@@ -301,7 +303,7 @@ e_int := #block(^( fe := $#parent.fe ; 0 := $#parent.digits_plus ; 1 := $#parent
 ! StrLit = '"' (not_'"' any)* '"' -> bytes_slice(raw, 1, len - 2) -> ast.value(Bytes) !
 raw_h := ^(
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
-    bs_sh := #block(^( ptr := $#parent.bs ; #break(#evaluate($#parent.caps.field_map.ptr_shape)) )) ;
+    bs_sh := #shape($.bs) ;
     inner_len := #block(^( a := $#parent.bs_sh.size ; b := $#parent.env.two ; #break(#evaluate($#parent.env.iops.sub_i64)) )) ;
     sliced := #block(^(
         bytes := $#parent.bs ; start := $#parent.caps.constants.u64_one ; len := $#parent.inner_len ;
@@ -398,7 +400,7 @@ raw_h := ^(
     v_ps    := #block(^( arena := $#parent.arena ; val := $#parent.caps.constants.pointer_shape ; #break(#evaluate($#parent.caps.ast.value)) )) ;
     al_b    := #block(^( arena := $#parent.arena ; kind := allocate_val ; 0 := $#parent.v_ps ; 1 := $#parent.n_F ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
     b_b     := #block(^( arena := $#parent.arena ; kind := bind ; 0 := $#parent.w_b ; 1 := $#parent.al_b ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
-    v_eqs   := #block(^( arena := $#parent.arena ; val := $#parent.caps.intrinsics.eq_shape ; #break(#evaluate($#parent.caps.ast.value)) )) ;
+    v_eqs   := #block(^( arena := $#parent.arena ; val := $#parent.env.iops.eq_shape ; #break(#evaluate($#parent.caps.ast.value)) )) ;
     ev_eqs  := #block(^( arena := $#parent.arena ; kind := evaluate ; 0 := $#parent.v_eqs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
     brk_eq  := #block(^( arena := $#parent.arena ; kind := break ; 0 := $#parent.ev_eqs ; #break(#evaluate($#parent.caps.ast.builtin)) )) ;
     cond_seq := #block(^( arena := $#parent.arena ; 0 := $#parent.b_a ; 1 := $#parent.b_b ; 2 := $#parent.brk_eq ; #break(#evaluate($#parent.caps.ast.seq)) )) ;
@@ -525,14 +527,16 @@ ops_env2 := #block(^(
 
 wrap_h_env2 := ^(
     #block(^(
-        p_caps := $#parent.caps ;
         arena  := $#parent.arena ;
         p_env  := $#parent.ops_env2 ;
         p_raw  := $#parent.raw_h ;
         val := $#parent.F ; n_f := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
 
         sym := caps ; w_c := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
-        val := $.p_caps ; n_c := #evaluate($#parent.c_ast.value) ; #drop(.val) ;
+        sym := capabilities ; w_cap_f := #evaluate($#parent.c_ast.word) ; #drop(.sym) ;
+        kind := this ; a_th := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ;
+        kind := field ; 0 := $.a_th ; 1 := $.w_cap_f ; p_cf := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
+        kind := deref ; 0 := $.p_cf ; n_c := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ;
         kind := allocate_val ; 0 := $.n_c ; 1 := $.n_f ; t1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
         kind := bind ; 0 := $.w_c ; 1 := $.t1 ; s1 := #evaluate($#parent.c_ast.builtin) ; #drop(.kind) ; #drop(.0) ; #drop(.1) ;
 

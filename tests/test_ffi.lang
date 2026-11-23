@@ -1,0 +1,56 @@
+! ============================================================================ !
+! tests/test_ffi.lang — Standard C FFI Target Program Test Suite               !
+! Executed via capabilities.backends.interpreter.run in a brand-new isolated   !
+! RuntimeContext + Evaluator (zero capabilities). `libc`, `trunc_8_4`, and     !
+! `sext_4_8` are lifted into the standalone Ast at compile time.               !
+! ============================================================================ !
+
+assert_true := ^(
+    #branch($.cond, ^ok, ^#deref(#field(#this, __assertion_failed__)))
+) ;
+
+! 1. Zero-FFI stack NUL-terminated C string: `{ body := $.s ; nul := false }` -> strlen == 12 !
+s := "hello_layer1" ;
+cs_hello := { body := $#parent.s ; nul := false } ;
+p_cs := .cs_hello ;
+c_len := #block(^(
+    0 := $#parent.p_cs.addr ;
+    #break(#evaluate($#parent.libc.strlen))
+)) ;
+cond := $.c_len == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. malloc + memset + memcpy + memcmp + free !
+buf1 := #block(^( 0 := 16 ; #break(#evaluate($#parent.libc.malloc)) )) ;
+buf2 := #block(^( 0 := 16 ; #break(#evaluate($#parent.libc.malloc)) )) ;
+fill_ch := #block(^( x := 65 ; #break(#evaluate($#parent.trunc_8_4)) )) ;
+#block(^( 0 := $#parent.buf1 ; 1 := $#parent.fill_ch ; 2 := 16 ; #break(#evaluate($#parent.libc.memset)) )) ;
+#block(^( 0 := $#parent.buf2 ; 1 := $#parent.buf1 ; 2 := 16 ; #break(#evaluate($#parent.libc.memcpy)) )) ;
+cmp_i32 := #block(^( 0 := $#parent.buf1 ; 1 := $#parent.buf2 ; 2 := 16 ; #break(#evaluate($#parent.libc.memcmp)) )) ;
+cmp_i64 := #block(^( x := $#parent.cmp_i32 ; #break(#evaluate($#parent.sext_4_8)) )) ;
+cond := $.cmp_i64 == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+#block(^( 0 := $#parent.buf1 ; #break(#evaluate($#parent.libc.free)) )) ;
+#block(^( 0 := $#parent.buf2 ; #break(#evaluate($#parent.libc.free)) )) ;
+
+! 3. Composite struct by value: div(17, 5) -> { quot = 3, rem = 2 } !
+i32_17 := #block(^( x := 17 ; #break(#evaluate($#parent.trunc_8_4)) )) ;
+i32_5  := #block(^( x := 5  ; #break(#evaluate($#parent.trunc_8_4)) )) ;
+d_res  := #block(^( 0 := $#parent.i32_17 ; 1 := $#parent.i32_5 ; #break(#evaluate($#parent.libc.div)) )) ;
+d_quot := #block(^( x := $#parent.d_res.quot ; #break(#evaluate($#parent.sext_4_8)) )) ;
+d_rem  := #block(^( x := $#parent.d_res.rem  ; #break(#evaluate($#parent.sext_4_8)) )) ;
+cond := $.d_quot == 3 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.d_rem == 2  ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 4. strtoll("12345\0", NULL, 10) == 12345 !
+s_num := "12345" ;
+cs_num := { body := $#parent.s_num ; nul := false } ;
+p_num := .cs_num ;
+i32_10 := #block(^( x := 10 ; #break(#evaluate($#parent.trunc_8_4)) )) ;
+parsed_num := #block(^(
+    0 := $#parent.p_num.addr ;
+    1 := 0 ;
+    2 := $#parent.i32_10 ;
+    #break(#evaluate($#parent.libc.strtoll))
+)) ;
+cond := $.parsed_num == 12345 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+ffi_tests_passed
