@@ -377,13 +377,21 @@ raw_h := ^(
     rhs := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
 
     ! Common AST pieces !
-    n_F   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
-    w_tmp := #block(^( arena := $#parent(#this).arena ; sym := __bind_v ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    w_key  := #block(^( arena := $#parent(#this).arena ; sym := __bind_k ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    w_tmp  := #block(^( arena := $#parent(#this).arena ; sym := __bind_v ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
     a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     a_par  := #block(^( arena := $#parent(#this).arena ; kind := parent ; 0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    p_key  := #block(^( arena := $#parent(#this).arena ; kind := field ; 0 := $#parent(#this).a_this ; 1 := $#parent(#this).w_key ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    v_key  := #block(^( arena := $#parent(#this).arena ; kind := deref ; 0 := $#parent(#this).p_key ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    drop_key := #block(^( arena := $#parent(#this).arena ; kind := drop ; 0 := $#parent(#this).p_key ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     p_tmp  := #block(^( arena := $#parent(#this).arena ; kind := field ; 0 := $#parent(#this).a_this ; 1 := $#parent(#this).w_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     v_tmp  := #block(^( arena := $#parent(#this).arena ; kind := deref ; 0 := $#parent(#this).p_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     drop_tmp := #block(^( arena := $#parent(#this).arena ; kind := drop ; 0 := $#parent(#this).p_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    ! stmt0: #bind(__bind_k, #allocate_val(lhs, false)) !
+    al_lhs := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).lhs ; 1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    stmt0  := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).w_key ; 1 := $#parent(#this).al_lhs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
     ! stmt1: #bind(__bind_v, #allocate_val(rhs, false)) !
     al_rhs := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).rhs ; 1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
@@ -408,35 +416,43 @@ raw_h := ^(
     v_cond_p := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).cond_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
     cond_blk := #block(^( arena := $#parent(#this).arena ; kind := block ; 0 := $#parent(#this).v_cond_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
-    ! fallback_proto: ^(#bind(lhs, #allocate_val($.__bind_v, false)) ; #drop(.__bind_v)) !
+    ! fallback_proto: ^(#bind($.__bind_k, #allocate_val($.__bind_v, false)) ; #drop(.__bind_v) ; #drop(.__bind_k)) !
     al_v    := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).v_tmp ; 1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-    bind_fb := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).lhs ; 1 := $#parent(#this).al_v ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-    fb_seq  := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).bind_fb ; 1 := $#parent(#this).drop_tmp ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    bind_fb := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).v_key ; 1 := $#parent(#this).al_v ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    fb_seq  := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).bind_fb ; 1 := $#parent(#this).drop_tmp ; 2 := $#parent(#this).drop_key ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
     fb_pr   := #block(^( ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
     v_fb_p  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).fb_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
 
-    ! drop_proto: ^(#drop(.__bind_v)) !
-    dr_pr   := #block(^( ast := $#parent(#this).drop_tmp ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
+    ! drop_proto: ^(#drop(.__bind_v) ; #drop(.__bind_k)) !
+    dr_seq  := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).drop_tmp ; 1 := $#parent(#this).drop_key ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    dr_pr   := #block(^( ast := $#parent(#this).dr_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
     v_dr_p  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).dr_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
 
-    ! ptr_branch: ^(#branch(#bind(lhs, $.__bind_v), drop_proto, fallback_proto)) !
-    try_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).lhs ; 1 := $#parent(#this).v_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    ! ptr_branch: ^(#branch(#bind($.__bind_k, $.__bind_v), drop_proto, fallback_proto)) !
+    try_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).v_key ; 1 := $#parent(#this).v_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     inner_br := #block(^( arena := $#parent(#this).arena ; kind := branch ; 0 := $#parent(#this).try_bind ; 1 := $#parent(#this).v_dr_p ; 2 := $#parent(#this).v_fb_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     ptr_pr   := #block(^( ast := $#parent(#this).inner_br ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
     v_ptr_p  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).ptr_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
 
     ! outer_br: #branch(cond_blk, ptr_branch, fallback_proto) !
     outer_br := #block(^( arena := $#parent(#this).arena ; kind := branch ; 0 := $#parent(#this).cond_blk ; 1 := $#parent(#this).v_ptr_p ; 2 := $#parent(#this).v_fb_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-    0 := $.stmt1 ; 1 := $.outer_br ;
+    0 := $.stmt0 ; 1 := $.stmt1 ; 2 := $.outer_br ;
     #evaluate($.caps.ast.seq)
 ) ;
 h_smart_bind := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
 
-e_bind := #block(^( fe := $#parent(#this).fe ; name := BindInfix ; #break(#evaluate($#parent(#this).c_syn.get_rule)) )) ;
+ref_ctrl := #block(^( fe := $#parent(#this).fe ; name := ControlExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+e_bind := #block(^(
+    fe := $#parent(#this).fe ;
+    0 := $#parent(#this).ref_ctrl ; 1 := $#parent(#this).ref_ws ;
+    2 := $#parent(#this).lit_def ; 3 := $#parent(#this).ref_ws ;
+    4 := $#parent(#this).ref_infix ;
+    #break(#evaluate($#parent(#this).c_syn.seq))
+)) ;
 #block(^( fe := $#parent(#this).fe ; name := BindInfix ; expr := $#parent(#this).e_bind ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_smart_bind ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
 ! ============================================================================ !
-! 5. Assignment `ptr = val` (AssignInfix = Postfix _ "=" not_"=" _ Infix)         !
+! 5. Assignment `ptr = val` (AssignInfix = ControlExpr _ "=" not_"=" _ Infix)  !
 ! ============================================================================ !
 raw_h := ^(
     lhs := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
@@ -450,7 +466,7 @@ lit_eq1 := #block(^( fe := $#parent(#this).fe ; sym := \= ; #break(#evaluate($#p
 not_eq1 := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).lit_eq1 ; positive := $#parent(#this).F ; #break(#evaluate($#parent(#this).c_syn.lookahead)) )) ;
 e_assign := #block(^(
     fe := $#parent(#this).fe ;
-    0 := $#parent(#this).ref_postfix ; 1 := $#parent(#this).ref_ws ;
+    0 := $#parent(#this).ref_ctrl ; 1 := $#parent(#this).ref_ws ;
     2 := $#parent(#this).lit_eq1 ; 3 := $#parent(#this).not_eq1 ;
     4 := $#parent(#this).ref_ws ; 5 := $#parent(#this).ref_infix ;
     #break(#evaluate($#parent(#this).c_syn.seq))
@@ -498,7 +514,6 @@ build_binop_ast := ^(
         bb   := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).w_b ; 1 := $#parent(#this).al_b ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
         dr_a := #block(^( arena := $#parent(#this).arena ; kind := drop ; 0 := $#parent(#this).p_sa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
         dr_b := #block(^( arena := $#parent(#this).arena ; kind := drop ; 0 := $#parent(#this).p_sb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-
         v_op := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).b_op ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
         ev_o := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; 0 := $#parent(#this).v_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
         br_o := #block(^( arena := $#parent(#this).arena ; kind := break ; 0 := $#parent(#this).ev_o ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
@@ -680,7 +695,13 @@ e_cmp := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_add ; 1 :
 #block(^( fe := $#parent(#this).fe ; name := CmpExpr ; expr := $#parent(#this).e_cmp ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_cmp ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 ref_cmp := #block(^( fe := $#parent(#this).fe ; name := CmpExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 
-! --- CoroExpr = CmpExpr (_ "@" _ CmpExpr)* -> left-fold #resume(lhs, rhs) --- !
+! --- DerefPrefix ($) > CoroExpr (@) > Prefix (^) > MulExpr > AddExpr > CmpExpr --- !
+ref_deref_p := #block(^( fe := $#parent(#this).fe ; name := DerefPrefix ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+e_deref2 := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_dollar ; 1 := $#parent(#this).ref_ws ; 2 := $#parent(#this).ref_deref_p ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := Deref ; expr := $#parent(#this).e_deref2 ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_deref ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+e_deref_p := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_deref ; 1 := $#parent(#this).ref_postfix ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := DerefPrefix ; expr := $#parent(#this).e_deref_p ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
 raw_h := ^(
     T := $.caps.constants.true ;
     Z := $.caps.constants.u64_zero ;
@@ -709,16 +730,19 @@ raw_h := ^(
 ) ;
 h_coro := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
 
-coro_body := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_ws ; 1 := $#parent(#this).lit_at ; 2 := $#parent(#this).ref_ws ; 3 := $#parent(#this).ref_cmp ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+coro_body := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_ws ; 1 := $#parent(#this).lit_at ; 2 := $#parent(#this).ref_ws ; 3 := $#parent(#this).ref_deref_p ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
 coro_tail := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).coro_body ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
-e_coro := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_cmp ; 1 := $#parent(#this).coro_tail ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+e_coro := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_deref_p ; 1 := $#parent(#this).coro_tail ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
 #block(^( fe := $#parent(#this).fe ; name := CoroExpr ; expr := $#parent(#this).e_coro ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_coro ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 ref_coro := #block(^( fe := $#parent(#this).fe ; name := CoroExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 
+e_prefix2 := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_proto ; 1 := $#parent(#this).ref_coro ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := Prefix ; expr := $#parent(#this).e_prefix2 ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
 ! ============================================================================ !
 ! 7. English-Order Suffix Control Flow:                                        !
-!    IfExpr    = CoroExpr _ "if" not_WordChar _ CoroExpr _ "else" not_WordChar _ ControlExpr !
-!    WhileExpr = CoroExpr _ "while" not_WordChar _ CoroExpr                       !
+!    IfExpr    = CmpExpr _ "if" not_WordChar _ CmpExpr _ "else" not_WordChar _ ControlExpr !
+!    WhileExpr = CmpExpr _ "while" not_WordChar _ CmpExpr                      !
 ! ============================================================================ !
 raw_h := ^(
     e_then := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
@@ -769,12 +793,11 @@ raw_h := ^(
 ) ;
 h_while := #evaluate($.wrap_h_env2) ; #drop(.raw_h) ;
 
-ref_ctrl := #block(^( fe := $#parent(#this).fe ; name := ControlExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 e_if := #block(^(
     fe := $#parent(#this).fe ;
-    0 := $#parent(#this).ref_coro ; 1 := $#parent(#this).ref_ws ;
+    0 := $#parent(#this).ref_cmp ; 1 := $#parent(#this).ref_ws ;
     2 := $#parent(#this).lit_if ; 3 := $#parent(#this).not_wc ; 4 := $#parent(#this).ref_ws ;
-    5 := $#parent(#this).ref_coro ; 6 := $#parent(#this).ref_ws ;
+    5 := $#parent(#this).ref_cmp ; 6 := $#parent(#this).ref_ws ;
     7 := $#parent(#this).lit_else ; 8 := $#parent(#this).not_wc ; 9 := $#parent(#this).ref_ws ;
     10 := $#parent(#this).ref_ctrl ;
     #break(#evaluate($#parent(#this).c_syn.seq))
@@ -783,16 +806,16 @@ e_if := #block(^(
 
 e_while := #block(^(
     fe := $#parent(#this).fe ;
-    0 := $#parent(#this).ref_coro ; 1 := $#parent(#this).ref_ws ;
+    0 := $#parent(#this).ref_cmp ; 1 := $#parent(#this).ref_ws ;
     2 := $#parent(#this).lit_while ; 3 := $#parent(#this).not_wc ; 4 := $#parent(#this).ref_ws ;
-    5 := $#parent(#this).ref_coro ;
+    5 := $#parent(#this).ref_cmp ;
     #break(#evaluate($#parent(#this).c_syn.seq))
 )) ;
 #block(^( fe := $#parent(#this).fe ; name := WhileExpr ; expr := $#parent(#this).e_while ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_while ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
 ref_if    := #block(^( fe := $#parent(#this).fe ; name := IfExpr    ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 ref_while := #block(^( fe := $#parent(#this).fe ; name := WhileExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
-e_ctrl := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_if ; 1 := $#parent(#this).ref_while ; 2 := $#parent(#this).ref_coro ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+e_ctrl := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_if ; 1 := $#parent(#this).ref_while ; 2 := $#parent(#this).ref_cmp ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
 #block(^( fe := $#parent(#this).fe ; name := ControlExpr ; expr := $#parent(#this).e_ctrl ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
 ! Final Infix = BindInfix / AssignInfix / ControlExpr !
