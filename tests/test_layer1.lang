@@ -80,4 +80,10 @@ $.worker @ 5 ;
 out2 := $#in ;
 cond := $.out2 == 105 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
+! Symbol as value test !
+
+sym:=another;
+($.sym):=1;
+cond:=$.another==1;#evaluate($.assert_true);#drop(.cond);
+
 layer1_tests_passed
