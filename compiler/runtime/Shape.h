@@ -83,6 +83,7 @@ public:
     // Bootstrapped leaf Shapes
     uint64_t unit_shape = 0;  // 0B / align 1
     uint64_t raw1_shape = 0;  // 1B / align 1
+    uint64_t raw2_shape = 0;  // 2B / align 2
     uint64_t raw4_shape = 0;  // 4B / align 4
     uint64_t raw8_shape = 0;  // 8B / align 8
 
@@ -90,7 +91,6 @@ public:
     uint64_t field_map_shape = 0;   // 24B/8
     uint64_t shape_meta = 0;        // 40B/8
     uint64_t symbol_shape = 0;      // 4B/4
-    uint64_t boolean_shape = 0;     // 1B/1
     uint64_t pointer_shape = 0;     // 24B/8
     uint64_t field_entry_shape = 0; // { sym: Symbol @0, state: 1B @4, ptr: Pointer @8 } (32B/8)
     uint64_t prototype_shape = 0;   // 8B/8

@@ -122,6 +122,7 @@ PointerLayout ShapeArena::field_of(const PointerLayout& ptr, SymbolId sym) const
 void ShapeArena::bootstrap(SymbolPool& syms) {
     unit_shape = intern_leaf(0, 1);
     raw1_shape = intern_leaf(1, 1);
+    raw2_shape = intern_leaf(2, 2);
     raw4_shape = intern_leaf(4, 4);
     raw8_shape = intern_leaf(8, 8);
 
@@ -143,11 +144,6 @@ void ShapeArena::bootstrap(SymbolPool& syms) {
     symbol_shape = intern_struct_auto({
         {syms.intern("__raw"), raw4_shape, 0},
         {syms.intern("__sym_tag"), unit_shape, 0},
-    });
-
-    boolean_shape = intern_struct_auto({
-        {syms.intern("__raw"), raw1_shape, 0},
-        {syms.intern("__bool_tag"), unit_shape, 0},
     });
 
     pointer_shape = intern_struct_auto({

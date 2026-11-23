@@ -25,7 +25,6 @@ public:
     ConstructingFrame* current_frame() noexcept;
 
     Value make_unit() const;
-    Value make_bool(bool b) const;
     Value make_symbol(SymbolId id) const;
     Value make_pointer(const PointerLayout& p) const;
     Value make_proto(uint64_t proto_addr) const;

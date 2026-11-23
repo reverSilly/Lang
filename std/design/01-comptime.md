@@ -30,7 +30,7 @@
 ## 四、阶段边界规则
 
 1. **固化（Reification）**：编译期求值结果跨阶段进入运行期时，只允许以下不可变 `value` 跨越边界：
-   - **非指针 POD `value`**（底层为无子字段叶子 `Shape` 的值，如各类整数、浮点数、`Boolean`、`Symbol` 等）：按位深拷贝为二进制常量数据；
+   - **非指针 POD `value`**（底层为无子字段叶子 `Shape` 的值，如各类整数、浮点数、`bytes(1, 1)`、`Symbol` 等）：按位深拷贝为二进制常量数据；
    - **指向只读常量区（`frozen` 区）的安全只读 `Pointer`**：包括已闭合对象的 `Shape` 指针（`#shape(val)`）、编译期冻结的模块与只读对象快照（`#freeze(ptr)`）。编译器将指针指向的只读常量对象一并迁入二进制 `.rodata` 段并重定位地址；
    - **`Prototype`（纯代码值）**：包括由 `^Expr` 构造或由 `capabilities.intrinsics` 生成的底层算术/比较 `Prototype`，固化为可序列化的中间表示（IR）/机器码并参与后续编译。
    - **严禁固化**：指向编译期栈或协程堆上普通 `location` 的 `Pointer`、外部 OS 资源句柄、活跃块指针（`#this`）及协程 `Handle`（`#caller`）。

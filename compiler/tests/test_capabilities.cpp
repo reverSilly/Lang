@@ -76,7 +76,7 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
     assert(ch_i64.shape_addr == rt.shapes.raw8_shape);
     assert(ch_i64.as_pod<int64_t>() == 50); // ASCII '2'
 
-    // eq_shape: shape(ch_i64) == raw8_shape -> true; shape(ch_i64) == boolean_shape -> false
+    // eq_shape: shape(ch_i64) == raw8_shape -> 0x01; shape(ch_i64) == raw1_shape -> 0x00
     Value eq_true = ev.run(fe.parse(R"(
         #bind(a, #allocate_val(#shape(#deref(#field(#this, v1))), #deref(#field(#this, F)))) ;
         #bind(b_s, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), raw8_shape)), #deref(#field(#this, F)))) ;
@@ -84,15 +84,15 @@ static void test_intrinsics_bytes_u8_and_eq_shape() {
         #bind(b, #allocate_val(#deref(#field(#this, b_s)), #deref(#field(#this, F)))) ;
         #evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), eq_shape)))
     )"));
-    assert(eq_true.shape_addr == rt.shapes.boolean_shape);
+    assert(eq_true.shape_addr == rt.shapes.raw1_shape);
     assert(eq_true.as_pod<uint8_t>() == 1);
 
     Value eq_false = ev.run(fe.parse(R"(
         #drop(#field(#this, b)) ;
-        #bind(b, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), boolean_shape)), #deref(#field(#this, F)))) ;
+        #bind(b, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), raw1_shape)), #deref(#field(#this, F)))) ;
         #evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), eq_shape)))
     )"));
-    assert(eq_false.shape_addr == rt.shapes.boolean_shape);
+    assert(eq_false.shape_addr == rt.shapes.raw1_shape);
     assert(eq_false.as_pod<uint8_t>() == 0);
 }
 

@@ -113,7 +113,7 @@ static void test_ffi_strlen_named_abs_positional_and_close_lib() {
     Value closed = ev.run(fe.parse(R"(
         #evaluate(#deref(#field(#field(#field(#this, capabilities), ffi), close_lib)))
     )"));
-    assert(closed.shape_addr == rt.shapes.boolean_shape);
+    assert(closed.shape_addr == rt.shapes.raw1_shape);
     assert(closed.as_pod<uint8_t>() == 1);
 }
 

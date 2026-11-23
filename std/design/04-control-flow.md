@@ -8,7 +8,7 @@
 语言内核**只提供三个最底层的控制流与调度原语**，且**内核控制流原语完全不认识 `__destroy`、不处理 RAII 析构回调、不检查 POD、不处理跨多层栈帧回退、也不认识错误类型**：
 
 1. **`a ; b`（顺序原语）**：先求值 `a` 并直接丢弃其结果 `value`，再求值并返回 `b`。
-2. **`#branch(cond, thenProto, elseProto)`（透明二路分支原语）**：根据布尔值 `cond` 选择其中一个 `Prototype` 在**当前环境（`#evaluate`）**透明求值。
+2. **`#branch(cond, thenProto, elseProto)`（透明二路分支原语）**：根据 `bytes(1, 1)` 条件 `cond`（非零即真，`0x00` 为假）选择其中一个 `Prototype` 在**当前环境（`#evaluate`）**透明求值。
 3. **`#break(val)`（单层构建帧退出原语）**：**仅退出当前最内层构建帧 `#this`**，将 `val` 直接装入当前 `block` 的 `self root` 结果槽并弹出当前帧。
 
 语言内核**没有** `return`、`throw/try/catch`、循环帧、`label`、`continue`、`defer` 原语；所有伴随控制流跳转的 POD Gate 检验、RAII 逆序析构以及**跨多层块的 `break target_ptr val` 栈展开接力**全部在标准库中由上述原语组合实现（见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）。

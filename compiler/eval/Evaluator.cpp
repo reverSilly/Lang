@@ -219,7 +219,7 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
         }
         case K::Destroy: {
             expect_shape(args[0], rt.shapes.handle_shape, "#destroy: argument must be a Handle");
-            co_return rt.make_bool(rt.coroutines.destroy(args[0].as_pod<uint64_t>()));
+            co_return Runtime::Value::from_pod<uint8_t>(rt.shapes.raw1_shape, rt.coroutines.destroy(args[0].as_pod<uint64_t>()) ? 1 : 0);
         }
         case K::CoroRootFrame: {
             expect_shape(args[0], rt.shapes.handle_shape, "#coro_root_frame: argument must be a Handle");
@@ -232,7 +232,7 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
 
         case K::Allocate: {
             expect_shape(args[0], rt.shapes.shape_meta, "#allocate: arg 0 must be a Shape");
-            expect_shape(args[1], rt.shapes.boolean_shape, "#allocate: arg 1 must be a Boolean");
+            expect_shape(args[1], rt.shapes.raw1_shape, "#allocate: arg 1 must be bytes(1, 1)");
             auto sl = args[0].as_pod<Runtime::ShapeLayout>();
             uint64_t s_addr = canonical_shape_addr(sl);
             bool is_mut = args[1].as_pod<uint8_t>() != 0;
@@ -240,7 +240,7 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
             co_return rt.make_pointer(slot->pointer());
         }
         case K::AllocateVal: {
-            expect_shape(args[1], rt.shapes.boolean_shape, "#allocate_val: arg 1 must be a Boolean");
+            expect_shape(args[1], rt.shapes.raw1_shape, "#allocate_val: arg 1 must be bytes(1, 1)");
             bool is_mut = args[1].as_pod<uint8_t>() != 0;
             Runtime::FrameSlot* slot = frame->allocate_val(args[0], is_mut);
             co_return rt.make_pointer(slot->pointer());
@@ -255,7 +255,7 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
             expect_shape(args[1], rt.shapes.pointer_shape, "#bind: arg 1 must be a Pointer");
             bool ok = frame->bind(
                 args[0].as_pod<Runtime::SymbolId>(), args[1].as_pod<Runtime::PointerLayout>());
-            co_return rt.make_bool(ok);
+            co_return Runtime::Value::from_pod<uint8_t>(rt.shapes.raw1_shape, ok ? 1 : 0);
         }
         case K::Drop: {
             expect_shape(args[0], rt.shapes.pointer_shape, "#drop: argument must be a Pointer");
@@ -292,7 +292,7 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
         }
 
         case K::Branch: {
-            expect_shape(args[0], rt.shapes.boolean_shape, "#branch: arg 0 must be a Boolean");
+            expect_shape(args[0], rt.shapes.raw1_shape, "#branch: arg 0 must be bytes(1, 1)");
             expect_shape(args[1], rt.shapes.prototype_shape, "#branch: arg 1 must be a Prototype");
             expect_shape(args[2], rt.shapes.prototype_shape, "#branch: arg 2 must be a Prototype");
             bool cond = args[0].as_pod<uint8_t>() != 0;

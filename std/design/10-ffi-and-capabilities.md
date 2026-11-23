@@ -6,7 +6,7 @@ This document specifies (1) the **100% stateless** three-tier modularization of 
 
 ## 1. Stateless Three-Tier `capabilities` Architecture
 
-`capabilities` holds **zero hidden host state** — there is no `CapabilityHost` / `xxxHost` singleton owning internal pools. Every capability primitive is a pure stateless `NativeSym` `Prototype` operating solely on `#this` and `RuntimeContext`.
+`capabilities` holds **zero hidden host state** — there is no `CapabilityHost` / `xxxHost` singleton owning internal pools. Every capability primitive is a pure stateless `NativeProto` `Prototype` operating solely on `#this` and `RuntimeContext`.
 
 ### 1.1 Three-Tier Logical Split (Compile-Time vs. Runtime Boundary)
 
@@ -20,7 +20,7 @@ In Lang, `capabilities` remains mounted under root `#this.capabilities` with the
 
 - **Interpreter vs. AOT Runtime Semantics**:
   - In the **Phase 1 interpreter**, `install_runtime_capabilities(rt)` mounts Tier 1 only, `install_runtime_with_ffi(rt)` mounts Tier 1 + Tier 2, and `install_all_capabilities(rt)` mounts all three tiers.
-  - In **Phase 2 AOT executables**, no monolithic `capabilities` struct is injected into the binary: `NativeSym` `Prototype` values captured at compile time (e.g., `intrinsics.add_i64`, `ffi.load_symbol(...)`) are lowered directly into native LLVM instructions (`add i64`) or `declare external` calls, and `liblang_rt` is linked only for operations invoked dynamically at runtime (such as dynamic `field_map`/`symbols` reflection or runtime `dlopen`).
+  - In **Phase 2 AOT executables**, no monolithic `capabilities` struct is injected into the binary: `IntrinsicProto` and `FfiProto` `Prototype` values captured at compile time (e.g., `intrinsics.add_int(...)`, `ffi.load_symbol(...)`) are lowered directly into native LLVM instructions (`add i64`) or `declare external` calls, and `liblang_rt` is linked only for operations invoked dynamically at runtime (such as dynamic `field_map`/`symbols` reflection or runtime `dlopen`).
 - **Retirement of Temporary `capabilities.io`**:
   - `capabilities.io.read_file` and `capabilities.io.write_file` are Phase 1 bootstrap placeholders. Immutable byte buffers returned by `io.read_file` and `syntax.cst_view_bytes` are allocated directly in `rt.shapes.freeze_bytes` (the same `.rodata` arena as `#freeze`), eliminating any separate byte-buffer pool.
 
@@ -74,7 +74,7 @@ Lang's Core has **no function-call syntax and no separate C type system**. Becau
 2. **`capabilities.ffi.close_lib`**
    - **Input fields in `#this`**:
      - `lib: Handle` — library handle returned by `open_lib`.
-   - **Return**: `Boolean` (`true` if `dlclose` / `FreeLibrary` succeeded, `false` otherwise).
+   - **Return**: `bytes(1, 1)` (`0x01` if `dlclose` / `FreeLibrary` succeeded, `0x00` otherwise).
    - **Semantics**: Directly releases the OS handle with zero hidden refcounting or dangling-handle tracking (mirroring manual C `dlclose`; Stdlib layers deterministic RAII via `__destroy`).
 
 3. **`capabilities.ffi.load_symbol`**
@@ -89,7 +89,7 @@ Lang's Core has **no function-call syntax and no separate C type system**. Becau
          cc:   Symbol   ! Calling convention: `c` (platform default C ABI) !
        }
        ```
-   - **Return**: `Prototype` (`CodeKind::NativeSym`), indistinguishable at the call site from any other `Prototype`.
+   - **Return**: `Prototype` (`FfiProto` variant), indistinguishable at the call site from any other `Prototype`.
 
 ### 2.2 Invocation Semantics (`#evaluate(native_proto)`)
 
@@ -114,14 +114,14 @@ Because Core has no function semantics, `#evaluate(p)` always executes in the ca
 
 In hardware ABIs (SysV AMD64, AAPCS64, Win64), integer and floating-point values of the same size use different register classes (GPR vs. XMM/VFP), and C structs passed/returned by value follow platform register-classification rules.
 
-Following the same zero-overhead convention used by `Symbol` (`__sym_tag: {}`) and `Boolean` (`__bool_tag: {}`), floating-point `Shape`s are identified by a zero-byte tag field:
+Following the same zero-overhead convention used by `Symbol` (`__sym_tag: {}`), floating-point `Shape`s are identified by a zero-byte tag field:
 
 | Lang `Shape` | Detection Rule | `libffi` Type (`Phase 1`) | LLVM Type (`Phase 2`) |
 | :--- | :--- | :--- | :--- |
 | `unit_shape` (`0B/1`, leaf) | `size == 0 && is_leaf()` | `ffi_type_void` *(return only; 0-arg `args` yields `nargs = 0`)* | `void` |
 | `f32` (`4B/4` with `__f32_tag`) | `size == 4` and has field `__f32_tag` (`0B`) | `ffi_type_float` | `float` |
 | `f64` (`8B/8` with `__f64_tag`) | `size == 8` and has field `__f64_tag` (`0B`) | `ffi_type_double` | `double` |
-| 1-byte leaf / single-scalar tagged (`Boolean`, `raw1`) | `size == 1`, no float tag | `ffi_type_uint8` | `i8` |
+| 1-byte leaf / single-scalar tagged (`raw1`, Stdlib `Bool`) | `size == 1`, no float tag | `ffi_type_uint8` | `i8` |
 | 2-byte leaf / single-scalar tagged | `size == 2`, no float tag | `ffi_type_uint16` | `i16` |
 | 4-byte leaf / single-scalar tagged (`Symbol`, `raw4`) | `size == 4`, no float tag | `ffi_type_uint32` | `i32` |
 | 8-byte leaf / single-scalar tagged (`raw8`, `Handle`, C ptr) | `size == 8`, no float tag | `ffi_type_uint64` | `i64` / `ptr` |
@@ -135,7 +135,7 @@ Following the same zero-overhead convention used by `Symbol` (`__sym_tag: {}`) a
 
 ## 4. Two-Phase Unification: Interpreter vs. Phase 2 LLVM AOT
 
-`PrototypeObject` (`CodeKind::NativeSym`) stores the portable ABI contract alongside the Phase 1 execution closure:
+`PrototypeObject` is a **pure-data closed sum type (`std::variant`)** carrying no virtual dispatch or backend methods. Every consumer (Phase 1 `Evaluator`, Phase 2 `LlvmCodegen`, `serialize_proto`, debug dump) dispatches externally via `std::visit` with compile-time exhaustiveness checking:
 
 ```cpp
 struct FfiBinding {
@@ -144,10 +144,28 @@ struct FfiBinding {
     uint64_t ret_shape_addr;   // Canonical closed ShapeLayout*
     SymbolId cc;               // Calling convention symbol (e.g. "c")
 };
+
+struct IntrinsicSpec {
+    IntrinsicKind kind;
+    uint8_t width = 0;         // Operating width in bytes (1, 2, 4, 8), or from_width for casts
+    uint8_t to_width = 0;      // Destination width for ext/trunc/int<->float casts
+    bool is_signed = false;    // Signedness flag for div/rem/shr/ext/lt/le/int<->float
+    SymbolId lhs = 0;          // lhs (binary) or src (unary) slot symbol in #this
+    SymbolId rhs = 0;          // rhs slot symbol in #this (binary only)
+};
+
+struct AstProto       { Ast::ExprPtr ast; };
+struct NativeProto    { std::string extern_name; NativeFn fn; };
+struct FfiProto       { FfiBinding binding; NativeFn fn; };
+struct IntrinsicProto { IntrinsicSpec spec; }; // Pure POD data, zero std::function closure
+
+struct PrototypeObject {
+    std::variant<AstProto, NativeProto, FfiProto, IntrinsicProto> payload;
+};
 ```
 
 - **Phase 1 (Interpreter)**:
-  - `load_symbol` resolves `fn_ptr = dlsym(lib, name)`, verifies struct layouts, compiles `ffi_prep_cif` once, and captures the precompiled `ffi_cif` in `PrototypeObject::native_fn`.
+  - `Evaluator` uses `std::visit` on `PrototypeObject::payload`: `AstProto` runs the coroutine AST evaluator, `NativeProto` and `FfiProto` invoke `fn(*this)` (where `load_symbol` precompiles `ffi_cif` once into `FfiProto::fn`), and `IntrinsicProto` dispatches directly through C++23 width/type templates on `spec` with zero closure overhead.
 - **Phase 2 (LLVM AOT & `serialize_proto`)**:
-  - `serialize_proto` writes **only** `{ symbol_name, args_shape, ret_shape, cc }` — never raw pointers or OS library binaries.
-  - `emit_executable` lowers each `NativeSym` `Prototype` into an LLVM `declare external` function using the exact same `Shape -> llvm::Type` table in §3 and emits direct native C ABI calls.
+  - `serialize_proto` writes only the portable payload (`FfiBinding`, `IntrinsicSpec`, or serialized AST) — never raw pointers or OS library binaries.
+  - `emit_executable` uses `std::visit` to lower `IntrinsicProto` directly into single LLVM IR instructions and `FfiProto` into `declare external` + native C ABI calls using the exact same `Shape -> llvm::Type` table in §3.

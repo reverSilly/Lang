@@ -64,7 +64,7 @@ ffi_type* map_shape_to_ffi_type(
         return &ffi_type_double;
     }
 
-    // Collect non-zero-sized fields (skipping 0B tag fields like __sym_tag, __bool_tag, __ptr_tag).
+    // Collect non-zero-sized fields (skipping 0B tag fields like __sym_tag, __ptr_tag, __f64_tag).
     std::vector<const Runtime::FieldEntry*> non_zero;
     if (!s->is_leaf()) {
         const Runtime::FieldEntry* arr = s->fields.entries_begin();
@@ -183,13 +183,13 @@ Runtime::Value build_ffi_module(Runtime::RuntimeContext& rt) {
         {"close_lib", native_proto(rt, "capabilities.ffi.close_lib", [](Evaluator& ev) {
             uint64_t raw = read_field(ev, "lib").as_pod<uint64_t>();
             if (raw == 0) {
-                return ev.rt.make_bool(false);
+                return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, 0);
             }
             void* handle = reinterpret_cast<void*>(raw);
 #ifdef _WIN32
-            return ev.rt.make_bool(FreeLibrary(static_cast<HMODULE>(handle)) != 0);
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, FreeLibrary(static_cast<HMODULE>(handle)) != 0 ? 1 : 0);
 #else
-            return ev.rt.make_bool(dlclose(handle) == 0);
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, dlclose(handle) == 0 ? 1 : 0);
 #endif
         })},
 

@@ -26,11 +26,6 @@ ConstructingFrame* RuntimeContext::current_frame() noexcept {
 
 Value RuntimeContext::make_unit() const { return Value{shapes.unit_shape, {}}; }
 
-Value RuntimeContext::make_bool(bool b) const {
-    uint8_t v = b ? 1 : 0;
-    return Value::from_pod(shapes.boolean_shape, v);
-}
-
 Value RuntimeContext::make_symbol(SymbolId id) const { return Value::from_pod(shapes.symbol_shape, id); }
 Value RuntimeContext::make_pointer(const PointerLayout& p) const { return Value::from_pod(shapes.pointer_shape, p); }
 Value RuntimeContext::make_proto(uint64_t proto_addr) const { return Value::from_pod(shapes.prototype_shape, proto_addr); }

@@ -12,17 +12,17 @@ Runtime::Value build_constants_module(Runtime::RuntimeContext& rt) {
     };
 
     return build_struct(rt, {
-        {"true", rt.make_bool(true)},
-        {"false", rt.make_bool(false)},
+        {"true", Runtime::Value::from_pod<uint8_t>(s.raw1_shape, 1)},
+        {"false", Runtime::Value::from_pod<uint8_t>(s.raw1_shape, 0)},
         {"u64_zero", Runtime::Value::from_pod<uint64_t>(s.raw8_shape, 0ULL)},
         {"u64_one", Runtime::Value::from_pod<uint64_t>(s.raw8_shape, 1ULL)},
         {"u64_max", Runtime::Value::from_pod<uint64_t>(s.raw8_shape, std::numeric_limits<uint64_t>::max())},
         {"unit_shape", shape_val(s.unit_shape)},
         {"raw1_shape", shape_val(s.raw1_shape)},
+        {"raw2_shape", shape_val(s.raw2_shape)},
         {"raw4_shape", shape_val(s.raw4_shape)},
         {"raw8_shape", shape_val(s.raw8_shape)},
         {"symbol_shape", shape_val(s.symbol_shape)},
-        {"boolean_shape", shape_val(s.boolean_shape)},
         {"pointer_shape", shape_val(s.pointer_shape)},
         {"field_entry_shape", shape_val(s.field_entry_shape)},
         {"field_map_shape", shape_val(s.field_map_shape)},
@@ -39,7 +39,7 @@ Runtime::Value build_field_map_module(Runtime::RuntimeContext& rt) {
         })},
         {"is_empty", native_proto(rt, "capabilities.field_map.is_empty", [](Evaluator& ev) {
             auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
-            return ev.rt.make_bool(Runtime::FieldMapArena::is_empty(fm));
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, Runtime::FieldMapArena::is_empty(fm) ? 1 : 0);
         })},
         {"count", native_proto(rt, "capabilities.field_map.count", [](Evaluator& ev) {
             auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
@@ -113,19 +113,20 @@ Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
                 ev.rt.shapes.raw8_shape, read_field(ev, "a").as_pod<int64_t>() * read_field(ev, "b").as_pod<int64_t>());
         })},
         {"lt_i64", native_proto(rt, "capabilities.intrinsics.lt_i64", [](Evaluator& ev) {
-            return ev.rt.make_bool(read_field(ev, "a").as_pod<int64_t>() < read_field(ev, "b").as_pod<int64_t>());
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, read_field(ev, "a").as_pod<int64_t>() < read_field(ev, "b").as_pod<int64_t>() ? 1 : 0);
         })},
         {"eq_i64", native_proto(rt, "capabilities.intrinsics.eq_i64", [](Evaluator& ev) {
-            return ev.rt.make_bool(read_field(ev, "a").as_pod<int64_t>() == read_field(ev, "b").as_pod<int64_t>());
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, read_field(ev, "a").as_pod<int64_t>() == read_field(ev, "b").as_pod<int64_t>() ? 1 : 0);
         })},
         {"eq_sym", native_proto(rt, "capabilities.intrinsics.eq_sym", [](Evaluator& ev) {
-            return ev.rt.make_bool(
-                read_field(ev, "a").as_pod<Runtime::SymbolId>() == read_field(ev, "b").as_pod<Runtime::SymbolId>());
+            return Runtime::Value::from_pod<uint8_t>(
+                ev.rt.shapes.raw1_shape,
+                read_field(ev, "a").as_pod<Runtime::SymbolId>() == read_field(ev, "b").as_pod<Runtime::SymbolId>() ? 1 : 0);
         })},
         {"eq_shape", native_proto(rt, "capabilities.intrinsics.eq_shape", [](Evaluator& ev) {
             auto a = read_field(ev, "a").as_pod<Runtime::ShapeLayout>();
             auto b = read_field(ev, "b").as_pod<Runtime::ShapeLayout>();
-            return ev.rt.make_bool(ev.canonical_shape_addr(a) == ev.canonical_shape_addr(b));
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, ev.canonical_shape_addr(a) == ev.canonical_shape_addr(b) ? 1 : 0);
         })},
         {"bytes_at", native_proto(rt, "capabilities.intrinsics.bytes_at", [](Evaluator& ev) {
             auto span = read_bytes_ptr(ev, "bytes");

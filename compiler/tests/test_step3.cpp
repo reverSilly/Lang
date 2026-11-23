@@ -106,7 +106,7 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
                 make_expr<WordExpr>("nested_var"),
                 make_expr<BuiltinExpr>(
                     BuiltinKind::AllocateVal,
-                    std::vector<ExprPtr>{make_expr<WordExpr>("inner_val"), make_expr<ValueExpr>(rt.make_bool(false))}),
+                    std::vector<ExprPtr>{make_expr<WordExpr>("inner_val"), make_expr<ValueExpr>(Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0))}),
             }),
         fe.parse("#resume(#caller, first_reply)"),
     });
@@ -119,7 +119,7 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
                 make_expr<WordExpr>("secret"),
                 make_expr<BuiltinExpr>(
                     BuiltinKind::AllocateVal,
-                    std::vector<ExprPtr>{make_expr<WordExpr>("root_val"), make_expr<ValueExpr>(rt.make_bool(false))}),
+                    std::vector<ExprPtr>{make_expr<WordExpr>("root_val"), make_expr<ValueExpr>(Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0))}),
             }),
         make_expr<BuiltinExpr>(
             BuiltinKind::Block,
