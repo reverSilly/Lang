@@ -16,17 +16,14 @@ Runtime::Value read_field(Evaluator& ev, std::string_view name) {
     return ev.rt.deref(p);
 }
 
-std::span<const uint8_t> read_bytes_ptr(Evaluator& ev, std::string_view name) {
+std::vector<uint8_t> read_raw_bytes(Evaluator& ev, std::string_view name) {
     Runtime::Value v = read_field(ev, name);
-    if (v.shape_addr != ev.rt.shapes.pointer_shape) {
-        throw std::runtime_error("capabilities: field '" + std::string(name) + "' must be a Pointer to raw bytes");
+    const auto* sl = v.shape();
+    if (!sl || !sl->is_leaf() || sl->align != 1) {
+        throw std::runtime_error(
+            "capabilities: field '" + std::string(name) + "' must be a RawBytes leaf value (align = 1)");
     }
-    auto p = v.as_pod<Runtime::PointerLayout>();
-    if (p.shape_ptr == 0) {
-        throw std::runtime_error("capabilities: null shape_ptr on byte pointer '" + std::string(name) + "'");
-    }
-    const auto* sl = reinterpret_cast<const Runtime::ShapeLayout*>(p.shape_ptr);
-    return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(p.addr), sl->size);
+    return std::move(v.bytes);
 }
 
 std::vector<Runtime::Value> read_positional(Evaluator& ev) {
@@ -39,12 +36,6 @@ std::vector<Runtime::Value> read_positional(Evaluator& ev) {
         out.push_back(ev.rt.deref(p));
     }
     return out;
-}
-
-Runtime::Value freeze_string_bytes(Runtime::RuntimeContext& rt, std::string_view data) {
-    uint64_t leaf = rt.shapes.intern_leaf(data.size(), 1);
-    std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data.data()), data.size());
-    return rt.make_pointer(rt.shapes.freeze_bytes(leaf, bytes));
 }
 
 Runtime::Value build_struct(
@@ -109,7 +100,7 @@ void install_all_capabilities(Runtime::RuntimeContext& rt) {
         {"ffi", build_ffi_module(rt)},
         {"ast", build_ast_module(rt)},
         {"syntax", build_syntax_module(rt)},
-        {"compiler", build_compiler_module(rt)},
+        {"backends", build_backends_module(rt)},
         {"io", build_io_module(rt)},
     });
 }

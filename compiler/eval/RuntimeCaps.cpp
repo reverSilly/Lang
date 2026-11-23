@@ -190,11 +190,11 @@ Runtime::Value build_symbols_module(Runtime::RuntimeContext& rt) {
         {"to_bytes", native_proto(rt, "capabilities.symbols.to_bytes", [](Evaluator& ev) {
             auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
             std::string_view sv = ev.rt.symbols.name(sym);
-            return ev.rt.make_bytes_ptr(sv.data(), sv.size());
+            return ev.rt.make_raw_bytes(sv);
         })},
         {"intern_bytes", native_proto(rt, "capabilities.symbols.intern_bytes", [](Evaluator& ev) {
-            auto span = read_bytes_ptr(ev, "bytes");
-            return ev.rt.make_symbol(ev.rt.symbols.intern(span));
+            auto raw = read_raw_bytes(ev, "bytes");
+            return ev.rt.make_symbol(ev.rt.symbols.intern(raw));
         })},
     });
 }
@@ -287,27 +287,25 @@ Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
         {"lt_float", make_float_cmp_factory<CM::FLt>(rt, "lt_float")},
         {"le_float", make_float_cmp_factory<CM::FLe>(rt, "le_float")},
 
-        // Structural Shape equality & raw byte-buffer indexing
+        // Structural Shape equality (IntrinsicProto factory) & RawBytes indexing
         {"eq_shape", native_proto(rt, "capabilities.intrinsics.eq_shape", [](Evaluator& ev) {
-            auto a = read_field(ev, "a").as_pod<Runtime::ShapeLayout>();
-            auto b = read_field(ev, "b").as_pod<Runtime::ShapeLayout>();
-            return Runtime::Value::from_pod<uint8_t>(
-                ev.rt.shapes.raw1_shape, ev.canonical_shape_addr(a) == ev.canonical_shape_addr(b) ? 1 : 0);
+            Runtime::CmpOp op{CM::EqShape, 0, read_sym_field(ev, "lhs"), read_sym_field(ev, "rhs")};
+            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
         })},
         {"bytes_at", native_proto(rt, "capabilities.intrinsics.bytes_at", [](Evaluator& ev) {
-            auto span = read_bytes_ptr(ev, "bytes");
+            auto raw = read_raw_bytes(ev, "bytes");
             auto idx = read_field(ev, "index").as_pod<uint64_t>();
-            if (idx >= span.size()) throw std::out_of_range("capabilities.intrinsics.bytes_at: out of range");
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, span[idx]);
+            if (idx >= raw.size()) throw std::out_of_range("capabilities.intrinsics.bytes_at: out of range");
+            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, raw[idx]);
         })},
         {"bytes_slice", native_proto(rt, "capabilities.intrinsics.bytes_slice", [](Evaluator& ev) {
-            auto span = read_bytes_ptr(ev, "bytes");
+            auto raw = read_raw_bytes(ev, "bytes");
             auto start = read_field(ev, "start").as_pod<uint64_t>();
             auto len = read_field(ev, "len").as_pod<uint64_t>();
-            if (start > span.size() || start + len > span.size()) {
+            if (start > raw.size() || start + len > raw.size()) {
                 throw std::out_of_range("capabilities.intrinsics.bytes_slice: out of range");
             }
-            return ev.rt.make_bytes_ptr(span.data() + start, len);
+            return ev.rt.make_raw_bytes(raw.data() + start, len);
         })},
     });
 }

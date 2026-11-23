@@ -133,7 +133,7 @@ Runtime::Value build_ast_module(Runtime::RuntimeContext& rt) {
         })},
         {"value", native_proto(rt, "capabilities.ast.value", [](Evaluator& ev) {
             AstArena* arena = load_ast_arena(ev);
-            return ev.rt.make_handle(arena->alloc(Ast::make_expr<Ast::ValueExpr>(read_field(ev, "val"))));
+            return ev.rt.make_handle(arena->alloc(Ast::make_expr<Ast::ValueExpr>(reify_ast_value(ev.rt, read_field(ev, "val")))));
         })},
         {"to_proto", native_proto(rt, "capabilities.ast.to_proto", [](Evaluator& ev) {
             Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
@@ -224,6 +224,12 @@ Runtime::Value build_syntax_module(Runtime::RuntimeContext& rt) {
                     vf->bind(ev_ptr->rt.symbols.intern("node"), node_slot->pointer());
                     Runtime::FrameSlot* arena_slot = vf->allocate_val(ev_ptr->rt.make_handle(arena_h), false);
                     vf->bind(ev_ptr->rt.symbols.intern("arena"), arena_slot->pointer());
+                    Runtime::SymbolId caps_sym = ev_ptr->rt.symbols.intern("capabilities");
+                    Runtime::PointerLayout root_caps = ev_ptr->rt.active_coro->root_frame()->field(caps_sym);
+                    if (!root_caps.is_null()) {
+                        Runtime::FrameSlot* caps_slot = vf->allocate_val(ev_ptr->rt.deref(root_caps), false);
+                        vf->bind(caps_sym, caps_slot->pointer());
+                    }
 
                     Runtime::Value res_handle_val;
                     try {
@@ -241,8 +247,8 @@ Runtime::Value build_syntax_module(Runtime::RuntimeContext& rt) {
         {"parse", native_proto(rt, "capabilities.syntax.parse", [](Evaluator& ev) {
             FrontendArena* fe = load_frontend_arena(ev);
             AstArena* arena = load_ast_arena(ev);
-            auto span = read_bytes_ptr(ev, "src");
-            std::string_view source(reinterpret_cast<const char*>(span.data()), span.size());
+            auto raw = read_raw_bytes(ev, "src");
+            std::string_view source(reinterpret_cast<const char*>(raw.data()), raw.size());
 
             AstArena* prev_arena = fe->active_parse_arena;
             fe->active_parse_arena = arena;
@@ -266,7 +272,7 @@ Runtime::Value build_syntax_module(Runtime::RuntimeContext& rt) {
         })},
         {"cst_view_bytes", native_proto(rt, "capabilities.syntax.cst_view_bytes", [](Evaluator& ev) {
             const auto* ctx = load_cst_ctx(ev);
-            return freeze_string_bytes(ev.rt, ctx->view());
+            return ev.rt.make_raw_bytes(ctx->view());
         })},
         {"cst_child_view_sym", native_proto(rt, "capabilities.syntax.cst_child_view_sym", [](Evaluator& ev) {
             const auto* ctx = load_cst_ctx(ev);
@@ -282,35 +288,46 @@ Runtime::Value build_syntax_module(Runtime::RuntimeContext& rt) {
     });
 }
 
-Runtime::Value build_compiler_module(Runtime::RuntimeContext& rt) {
-    // Reserved for Prototype-level backend operations (serialize_proto, deserialize_proto, emit_executable).
-    return build_struct(rt, {});
+Runtime::Value build_backends_module(Runtime::RuntimeContext& rt) {
+    // Target backends consume compile-time Core IR (`Ast` handle), never host `Prototype` objects.
+    Runtime::Value interpreter_mod = build_struct(rt, {
+        {"run", native_proto(rt, "capabilities.backends.interpreter.run", [](Evaluator& ev) {
+            Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
+            Runtime::RuntimeContext target_rt;
+            Evaluator target_ev(target_rt);
+            Runtime::Value target_res = target_ev.run(expr);
+            return intern_ast_value(ev.rt, reify_ast_value(target_rt, target_res));
+        })},
+    });
+    return build_struct(rt, {
+        {"interpreter", std::move(interpreter_mod)},
+    });
 }
 
 Runtime::Value build_io_module(Runtime::RuntimeContext& rt) {
     // Temporary Phase 1 compile-script file IO (to be superseded by capabilities.ffi).
     return build_struct(rt, {
         {"read_file", native_proto(rt, "capabilities.io.read_file", [](Evaluator& ev) {
-            auto path_span = read_bytes_ptr(ev, "path");
-            std::string path(reinterpret_cast<const char*>(path_span.data()), path_span.size());
+            auto path_raw = read_raw_bytes(ev, "path");
+            std::string path(reinterpret_cast<const char*>(path_raw.data()), path_raw.size());
             std::ifstream ifs(path, std::ios::binary);
             if (!ifs) {
                 throw std::runtime_error("capabilities.io.read_file: failed to open '" + path + "'");
             }
             std::ostringstream oss;
             oss << ifs.rdbuf();
-            return freeze_string_bytes(ev.rt, oss.str());
+            return ev.rt.make_raw_bytes(oss.str());
         })},
         {"write_file", native_proto(rt, "capabilities.io.write_file", [](Evaluator& ev) {
-            auto path_span = read_bytes_ptr(ev, "path");
-            auto data_span = read_bytes_ptr(ev, "bytes");
-            std::string path(reinterpret_cast<const char*>(path_span.data()), path_span.size());
+            auto path_raw = read_raw_bytes(ev, "path");
+            auto data_raw = read_raw_bytes(ev, "bytes");
+            std::string path(reinterpret_cast<const char*>(path_raw.data()), path_raw.size());
             std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
             if (!ofs) {
                 throw std::runtime_error("capabilities.io.write_file: failed to open '" + path + "'");
             }
-            if (!data_span.empty()) {
-                ofs.write(reinterpret_cast<const char*>(data_span.data()), static_cast<std::streamsize>(data_span.size()));
+            if (!data_raw.empty()) {
+                ofs.write(reinterpret_cast<const char*>(data_raw.data()), static_cast<std::streamsize>(data_raw.size()));
             }
             if (!ofs) {
                 throw std::runtime_error("capabilities.io.write_file: write failed for '" + path + "'");

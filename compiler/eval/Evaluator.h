@@ -10,6 +10,11 @@
 
 namespace reverSilly::Lang::Eval {
 
+// Standalone AstValue <-> Runtime::Value stage boundary conversion.
+// reify_ast_value strictly rejects Pointer, Handle, NativeProto, and BoundFfiProto.
+Ast::AstValue reify_ast_value(const Runtime::RuntimeContext& rt, const Runtime::Value& val);
+Runtime::Value intern_ast_value(Runtime::RuntimeContext& rt, const Ast::AstValue& av);
+
 struct BreakSignal {
     Runtime::Value value;
 };
@@ -107,7 +112,7 @@ struct CoroEntry {
     }
 };
 
-// Core Evaluator: 4 AST Nodes + 22 Symmetric Core Builtins + C++20 Symmetric Coroutines
+// Core Evaluator: 4 Standalone AST Nodes + 21 Symmetric Core Builtins + C++20 Symmetric Coroutines
 class Evaluator {
 public:
     Runtime::RuntimeContext& rt;
