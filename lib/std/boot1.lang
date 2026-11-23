@@ -128,7 +128,7 @@
 #drop(.name) ; #drop(.expr) ; #drop(.hidden) ; #drop(.handler) ;
 
 ! ---------------------------------------------------------------------------- !
-! Rule 4: BindInfix = Word _ ":=" _ Infix -> #bind(w, #allocate_val(rhs, F))   !
+! Rule 4: BindInfix = Prefix _ ":=" _ Infix -> #bind(lhs, #allocate_val(rhs,F))!
 ! ---------------------------------------------------------------------------- !
 #bind(raw_h, #allocate_val(^(
     #bind(F, #allocate_val($#field(#field(.caps, constants), false), $#field(#field(.caps, constants), false))) ;
@@ -164,7 +164,7 @@
 #bind(h_bind_basic, #allocate_val(#evaluate($.wrap_h), $.F)) ;
 #drop(.raw_h) ; #drop(.res_p) ;
 
-#bind(0, #allocate_val($.ref_word, $.F)) ;
+#bind(0, #allocate_val($.ref_prefix, $.F)) ;
 #bind(1, #allocate_val($.ref_ws, $.F)) ;
 #bind(2, #allocate_val($.lit_def, $.F)) ;
 #bind(3, #allocate_val($.ref_ws, $.F)) ;

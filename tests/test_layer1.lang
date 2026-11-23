@@ -80,10 +80,23 @@ $.worker @ 5 ;
 out2 := $#in ;
 cond := $.out2 == 105 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
-! Symbol as value test !
+! 8. Dynamic Symbol as value: :=, .Atom, p.Atom, Prefix LHS =, and \0 escape !
+sym := another ;
+($.sym) := 1 ;
+cond := $.another == 1 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
-sym:=another;
-($.sym):=1;
-cond:=$.another==1;#evaluate($.assert_true);#drop(.cond);
+sym2 := dyn_var ;
+$.sym2 := 7 ;
+cond := $.dyn_var == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.($.sym2) == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+f_key := py ;
+cond := $.pt.($.f_key) == 32 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+$.p = 30 ;
+cond := $.x == 30 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+\0 := 77 ;
+cond := $.\0 == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 layer1_tests_passed

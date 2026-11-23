@@ -32,41 +32,41 @@ a_false := #block(^( arena := $#parent(#this).arena ; val := false ; #break(#eva
 a_alloc := #block(^(
     arena := $#parent(#this).arena ;
     kind  := allocate_val ;
-    0     := $#parent(#this).a_v42 ;
-    1     := $#parent(#this).a_false ;
+    \0     := $#parent(#this).a_v42 ;
+    \1     := $#parent(#this).a_false ;
     #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_bind := #block(^(
     arena := $#parent(#this).arena ;
     kind  := bind ;
-    0     := $#parent(#this).a_sym_k ;
-    1     := $#parent(#this).a_alloc ;
+    \0     := $#parent(#this).a_sym_k ;
+    \1     := $#parent(#this).a_alloc ;
     #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
 a_fld  := #block(^(
     arena := $#parent(#this).arena ;
     kind  := field ;
-    0     := $#parent(#this).a_this ;
-    1     := $#parent(#this).a_sym_k ;
+    \0     := $#parent(#this).a_this ;
+    \1     := $#parent(#this).a_sym_k ;
     #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_deref := #block(^(
     arena := $#parent(#this).arena ;
     kind  := deref ;
-    0     := $#parent(#this).a_fld ;
+    \0     := $#parent(#this).a_fld ;
     #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_brk := #block(^(
     arena := $#parent(#this).arena ;
     kind  := break ;
-    0     := $#parent(#this).a_deref ;
+    \0     := $#parent(#this).a_deref ;
     #break(#evaluate($#parent(#this).c_ast.builtin))
 )) ;
 a_prog := #block(^(
     arena := $#parent(#this).arena ;
-    0     := $#parent(#this).a_bind ;
-    1     := $#parent(#this).a_brk ;
+    \0     := $#parent(#this).a_bind ;
+    \1     := $#parent(#this).a_brk ;
     #break(#evaluate($#parent(#this).c_ast.seq))
 )) ;
 
@@ -77,11 +77,11 @@ cond := $.staged_res == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 1b. Staged `#block` shares compile-time `#parent(#this)` !
 host_val := 77 ;
-a_parent := #block(^( arena := $#parent(#this).arena ; kind := parent ; 0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_parent := #block(^( arena := $#parent(#this).arena ; kind := parent ; \0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
 a_sym_hv := #block(^( arena := $#parent(#this).arena ; sym := host_val ; #break(#evaluate($#parent(#this).c_ast.word)) )) ;
-a_pfld   := #block(^( arena := $#parent(#this).arena ; kind := field ; 0 := $#parent(#this).a_parent ; 1 := $#parent(#this).a_sym_hv ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
-a_pderef := #block(^( arena := $#parent(#this).arena ; kind := deref ; 0 := $#parent(#this).a_pfld ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
-a_pbrk   := #block(^( arena := $#parent(#this).arena ; kind := break ; 0 := $#parent(#this).a_pderef ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_pfld   := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_parent ; \1 := $#parent(#this).a_sym_hv ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_pderef := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).a_pfld ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_pbrk   := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).a_pderef ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
 p_host   := #block(^( ast := $#parent(#this).a_pbrk ; #break(#evaluate($#parent(#this).c_ast.to_proto)) )) ;
 host_res := #block($.p_host) ;
 cond := $.host_res == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
@@ -96,14 +96,14 @@ app_ast := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ;
 ! Lift compile-time constant `base_val := 32` into target AST via `ast.value` !
 a_sym_bv   := #block(^( arena := $#parent(#this).arena ; sym := base_val ; #break(#evaluate($#parent(#this).c_ast.word)) )) ;
 a_v32      := #block(^( arena := $#parent(#this).arena ; val := 32 ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
-a_alloc_bv := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).a_v32 ; 1 := $#parent(#this).a_false ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
-a_bind_bv  := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).a_sym_bv ; 1 := $#parent(#this).a_alloc_bv ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_alloc_bv := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).a_v32 ; \1 := $#parent(#this).a_false ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+a_bind_bv  := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).a_sym_bv ; \1 := $#parent(#this).a_alloc_bv ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
 
 combined_ast := #block(^(
     arena := $#parent(#this).arena ;
-    0     := $#parent(#this).a_bind_bv ;
-    1     := $#parent(#this).mod_ast ;
-    2     := $#parent(#this).app_ast ;
+    \0     := $#parent(#this).a_bind_bv ;
+    \1     := $#parent(#this).mod_ast ;
+    \2     := $#parent(#this).app_ast ;
     #break(#evaluate($#parent(#this).c_ast.seq))
 )) ;
 

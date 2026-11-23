@@ -37,14 +37,14 @@ f64_s   := #shape({ __raw := 0 ; __f64_tag := {} }) ;
 div_t_s := #shape({ quot := $#parent(#this).i32_0 ; rem := $#parent(#this).i32_0 }) ;
 
 ! Reusable positional argument Shapes (`0`, `1`, `2`, `3`) !
-args_8       := #shape({ 0 := 0 }) ;
-args_4       := #shape({ 0 := $#parent(#this).i32_0 }) ;
-args_8_8     := #shape({ 0 := 0 ; 1 := 0 }) ;
-args_4_4     := #shape({ 0 := $#parent(#this).i32_0 ; 1 := $#parent(#this).i32_0 }) ;
-args_8_8_8   := #shape({ 0 := 0 ; 1 := 0 ; 2 := 0 }) ;
-args_8_4_8   := #shape({ 0 := 0 ; 1 := $#parent(#this).i32_0 ; 2 := 0 }) ;
-args_8_8_4   := #shape({ 0 := 0 ; 1 := 0 ; 2 := $#parent(#this).i32_0 }) ;
-args_8_8_8_8 := #shape({ 0 := 0 ; 1 := 0 ; 2 := 0 ; 3 := 0 }) ;
+args_8       := #shape({ \0 := 0 }) ;
+args_4       := #shape({ \0 := $#parent(#this).i32_0 }) ;
+args_8_8     := #shape({ \0 := 0 ; \1 := 0 }) ;
+args_4_4     := #shape({ \0 := $#parent(#this).i32_0 ; \1 := $#parent(#this).i32_0 }) ;
+args_8_8_8   := #shape({ \0 := 0 ; \1 := 0 ; \2 := 0 }) ;
+args_8_4_8   := #shape({ \0 := 0 ; \1 := $#parent(#this).i32_0 ; \2 := 0 }) ;
+args_8_8_4   := #shape({ \0 := 0 ; \1 := 0 ; \2 := $#parent(#this).i32_0 }) ;
+args_8_8_8_8 := #shape({ \0 := 0 ; \1 := 0 ; \2 := 0 ; \3 := 0 }) ;
 
 ! Helper: declare a single external C symbol with `lib := ""` and `cc := c` !
 decl_c := ^(

@@ -484,7 +484,7 @@
 
 #bind(0, #allocate_val(#deref(#field(#this, lit_dot)), #deref(#field(#this, F)))) ;
 #bind(1, #allocate_val(#deref(#field(#this, ref_ws)), #deref(#field(#this, F)))) ;
-#bind(2, #allocate_val(#deref(#field(#this, ref_word)), #deref(#field(#this, F)))) ;
+#bind(2, #allocate_val(#deref(#field(#this, ref_atom)), #deref(#field(#this, F)))) ;
 #bind(expr, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), seq))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, 2)) ;
 
@@ -585,11 +585,11 @@
 ! cleanly via capabilities.syntax.parse + ast.to_proto — zero hand-assembly    !
 ! ============================================================================ !
 
-! Register Rule 2b: Postfix = Atom (_ "." _ Word)*                             !
+! Register Rule 2b: Postfix = Atom (_ "." _ Atom)*                             !
 #bind(0, #allocate_val(#deref(#field(#this, ref_ws)), #deref(#field(#this, F)))) ;
 #bind(1, #allocate_val(#deref(#field(#this, lit_dot)), #deref(#field(#this, F)))) ;
 #bind(2, #allocate_val(#deref(#field(#this, ref_ws)), #deref(#field(#this, F)))) ;
-#bind(3, #allocate_val(#deref(#field(#this, ref_word)), #deref(#field(#this, F)))) ;
+#bind(3, #allocate_val(#deref(#field(#this, ref_atom)), #deref(#field(#this, F)))) ;
 #bind(body, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), seq))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, 2)) ; #drop(#field(#this, 3)) ;
 
