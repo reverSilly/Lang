@@ -48,7 +48,30 @@ private:
     const Peg::Evaluator<Ast::ExprPtr>::Context* load_cst(uint64_t handle) const;
     Runtime::Value native_proto(Runtime::RuntimeContext& rt, std::string name, Runtime::NativeFn fn);
 
+    // Tier 1: Runtime Core (implemented in RuntimeCaps.cpp)
+    Runtime::Value build_constants_module(Runtime::RuntimeContext& rt);
+    Runtime::Value build_field_map_module(Runtime::RuntimeContext& rt);
+    Runtime::Value build_symbols_module(Runtime::RuntimeContext& rt);
+    Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt);
+
+    // Tier 3: Compiler Frontend (implemented in CompilerCaps.cpp)
+    Runtime::Value build_ast_module(Runtime::RuntimeContext& rt);
+    Runtime::Value build_syntax_module(Runtime::RuntimeContext& rt);
+    Runtime::Value build_compiler_module(Runtime::RuntimeContext& rt);
+    Runtime::Value build_io_module(Runtime::RuntimeContext& rt);
+
+    void mount_capabilities(
+        Runtime::RuntimeContext& rt,
+        const std::vector<std::pair<std::string_view, Runtime::Value>>& modules);
+
 public:
+    // Install Tier 1 only (strict runtime context, no compiler/frontend modules).
+    void install_runtime(Runtime::RuntimeContext& rt);
+
+    // Install all capability tiers (compile-time / bootstrap context).
+    void install_all(Runtime::RuntimeContext& rt);
+
+    // Default entry point (installs all tiers).
     void install(Runtime::RuntimeContext& rt);
 };
 

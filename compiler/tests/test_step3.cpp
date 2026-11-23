@@ -202,7 +202,6 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         #bind(caps, #allocate_val(#deref(#field(#this, capabilities)), #deref(#field(#this, F)))) ;
         #bind(c_ast, #allocate_val(#deref(#field(#field(#this, caps), ast)), #deref(#field(#this, F)))) ;
         #bind(c_syn, #allocate_val(#deref(#field(#field(#this, caps), syntax)), #deref(#field(#this, F)))) ;
-        #bind(c_cmp, #allocate_val(#deref(#field(#field(#this, caps), compiler)), #deref(#field(#this, F)))) ;
 
         #bind(fe, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), new_layer0))), #deref(#field(#this, F)))) ;
 
@@ -354,7 +353,8 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         #drop(#field(#this, name)) ; #drop(#field(#this, expr)) ; #drop(#field(#this, hidden)) ; #drop(#field(#this, handler)) ;
 
         #bind(src, #allocate_val(#deref(#field(#this, target_src)), #deref(#field(#this, F)))) ;
-        #bind(parsed_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_cmp), parse))), #deref(#field(#this, F)))) ;
+        #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), parse))), #deref(#field(#this, F)))) ;
+        #bind(parsed_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), to_proto))), #deref(#field(#this, F)))) ;
         #evaluate(#deref(#field(#this, parsed_proto)))
     )";
 

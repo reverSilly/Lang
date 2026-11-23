@@ -178,7 +178,9 @@
 #bind(src, #allocate_val(#evaluate($#field(.c_io, read_file)), $.F)) ;
 #drop(.path) ;
 
-#bind(layer1_proto, #allocate_val(#evaluate($#field(.c_cmp, parse)), $.F)) ;
+#bind(ast, #allocate_val(#evaluate($#field(.c_syn, parse)), $.F)) ;
 #drop(.src) ;
+#bind(layer1_proto, #allocate_val(#evaluate($#field(.c_ast, to_proto)), $.F)) ;
+#drop(.ast) ;
 
 #evaluate($.layer1_proto)

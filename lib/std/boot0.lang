@@ -20,7 +20,6 @@
 #bind(caps, #allocate_val(#deref(#field(#this, capabilities)), #deref(#field(#this, F)))) ;
 #bind(c_ast, #allocate_val(#deref(#field(#field(#this, caps), ast)), #deref(#field(#this, F)))) ;
 #bind(c_syn, #allocate_val(#deref(#field(#field(#this, caps), syntax)), #deref(#field(#this, F)))) ;
-#bind(c_cmp, #allocate_val(#deref(#field(#field(#this, caps), compiler)), #deref(#field(#this, F)))) ;
 #bind(c_int, #allocate_val(#deref(#field(#field(#this, caps), intrinsics)), #deref(#field(#this, F)))) ;
 #bind(c_sym, #allocate_val(#deref(#field(#field(#this, caps), symbols)), #deref(#field(#this, F)))) ;
 #bind(c_io,  #allocate_val(#deref(#field(#field(#this, caps), io)), #deref(#field(#this, F)))) ;
@@ -432,7 +431,7 @@
 ! ============================================================================ !
 ! Now fe ALREADY has ^Expr, .a, and $p                                         !
 ! Use fe itself to parse the remaining 2 handlers (Postfix p.a & BindInfix :=) !
-! cleanly via capabilities.compiler.parse — zero tedious AST hand-assembly     !
+! cleanly via capabilities.syntax.parse + ast.to_proto — zero hand-assembly    !
 ! ============================================================================ !
 
 ! Register Rule 2b: Postfix = Atom (_ "." _ Word)*                             !
@@ -461,7 +460,9 @@
 #bind(src, #allocate_val(#evaluate(#deref(#field(#field(#this, c_io), read_file))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, path)) ;
 
-#bind(boot1_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_cmp), parse))), #deref(#field(#this, F)))) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#this, c_syn), parse))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, src)) ;
+#bind(boot1_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
 
 #evaluate(#deref(#field(#this, boot1_proto)))

@@ -15,6 +15,8 @@ add_library(lang_core STATIC
     parser/Layer0.cpp
     eval/Evaluator.cpp
     eval/Capabilities.cpp
+    eval/RuntimeCaps.cpp
+    eval/CompilerCaps.cpp
 )
 target_compile_options(lang_core PRIVATE -Wall -Wextra)
 
