@@ -1,0 +1,199 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lang",
+  "scopeName": "source.lang",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#escape" },
+    { "include": "#builtin" },
+    { "include": "#keywords" },
+    { "include": "#literals" },
+    { "include": "#field-access" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.block.lang",
+      "begin": "!",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.comment.begin.lang" }
+      },
+      "end": "!",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.comment.end.lang" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.lang",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.lang",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.lang" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.lang" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.lang",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "escape": {
+      "name": "constant.character.escape.lang",
+      "match": "\\\\."
+    },
+    "builtin": {
+      "patterns": [
+        {
+          "name": "variable.language.builtin.lang",
+          "match": "#(?:this|parent|caller|in)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "keyword.control.builtin.lang",
+          "match": "#(?:block|evaluate|branch|break|new|destroy|resume|coro_root_frame)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "support.function.builtin.lang",
+          "match": "#(?:allocate_val|allocate|touch|bind|drop|deref|write|field|shape)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "support.function.builtin.other.lang",
+          "match": "#[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.lang",
+          "match": "(?<![.#\\\\A-Za-z0-9_])(?:if|else|while)(?![A-Za-z0-9_])"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.lang",
+          "match": "(?<![.#\\\\A-Za-z0-9_])(?:true|false)(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "constant.numeric.hex.lang",
+          "match": "(?<![.#\\\\A-Za-z0-9_])0[xX][0-9A-Fa-f]+(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "constant.numeric.float.lang",
+          "match": "(?<![.#\\\\A-Za-z0-9_])[0-9]+\\.[0-9]+(?![A-Za-z0-9_])"
+        },
+        {
+          "name": "constant.numeric.integer.lang",
+          "match": "(?<![.#\\\\A-Za-z0-9_])[0-9]+(?![A-Za-z0-9_])"
+        }
+      ]
+    },
+    "field-access": {
+      "patterns": [
+        {
+          "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.accessor.lang" },
+            "2": { "name": "variable.other.property.lang" }
+          }
+        },
+        {
+          "name": "punctuation.accessor.lang",
+          "match": "\\."
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "storage.type.prototype.lang",
+          "match": "\\^"
+        },
+        {
+          "name": "keyword.operator.deref.lang",
+          "match": "\\$"
+        },
+        {
+          "name": "keyword.operator.coroutine.lang",
+          "match": "@"
+        },
+        {
+          "name": "keyword.operator.assignment.bind.lang",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.comparison.lang",
+          "match": "<=>|==|~=|~<|~>"
+        },
+        {
+          "name": "keyword.operator.bitwise.shift.lang",
+          "match": "<<|>>"
+        },
+        {
+          "name": "keyword.operator.arrow.lang",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.assignment.lang",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.comparison.lang",
+          "match": "[<>]"
+        },
+        {
+          "name": "keyword.operator.arithmetic.lang",
+          "match": "[+\\-*/%]"
+        },
+        {
+          "name": "keyword.operator.logical.lang",
+          "match": "[~&|]"
+        },
+        {
+          "name": "keyword.operator.match.lang",
+          "match": "[:?]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.lang",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.comma.lang",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.braces.begin.lang",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.braces.end.lang",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.section.parens.begin.lang",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.lang",
+          "match": "\\)"
+        }
+      ]
+    }
+  }
+}

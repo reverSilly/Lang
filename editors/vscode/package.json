@@ -1,0 +1,36 @@
+{
+  "name": "lang-syntax",
+  "displayName": "Lang Language Support",
+  "description": "Syntax highlighting and bracket/comment configuration for the Lang programming language (Layer 0 & Layer 1).",
+  "version": "0.1.0",
+  "publisher": "reverSilly",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lang",
+        "aliases": [
+          "Lang",
+          "lang"
+        ],
+        "extensions": [
+          ".lang"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lang",
+        "scopeName": "source.lang",
+        "path": "./syntaxes/lang.tmLanguage.json"
+      }
+    ]
+  }
+}
