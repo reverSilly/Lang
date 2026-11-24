@@ -1,19 +1,11 @@
 ! ============================================================================ !
 ! tests/test_ast_build.lang — Compile-Time AST Construction & Backend Test     !
 ! Staged via `ast.to_proto` + `#block` (runs in compile-time env with          !
-! `#parent(#this).capabilities` and `#parent(#this).fe`).                                    !
-!                                                                              !
-! Verifies:                                                                    !
-!   1. `capabilities.ast` (`new_arena`, `word`, `value`, `builtin`, `seq`,     !
-!      `to_proto`, `destroy_arena`) + compile-time staging via `#block`        !
-!   2. Multi-module AST composition (`syntax.parse` + `ast.value` + `ast.seq`) !
-!      executed directly via `capabilities.backends.interpreter.run`           !
-!   3. Target isolation: `capabilities` and `#parent(#this)` are null inside          !
-!      `backends.interpreter.run` (brand-new RuntimeContext + Evaluator)       !
+! `#parent(#this).capabilities` and `#parent(#this).fe`).                      !
 ! ============================================================================ !
 
 assert_true := ^(
-    #branch($.cond, ^ok, ^#deref(#field(#this, __assertion_failed__)))
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
 ) ;
 
 caps  := $#parent(#this).capabilities ;
@@ -25,10 +17,10 @@ fe    := $#parent(#this).fe ;
 ! Create an independent AST arena for this compile-time build test !
 arena := #block(^( #break(#evaluate($#parent(#this).c_ast.new_arena)) )) ;
 
-! 1a. Programmatically construct `#bind(k, #allocate_val(42, false)) ; #break(#deref(#field(#this, k)))` !
+! 1a. Programmatically construct `#bind(k, #allocate_val(42, false.__raw)) ; #break(#deref(#field(#this, k)))` !
 a_sym_k := #block(^( arena := $#parent(#this).arena ; sym := k ; #break(#evaluate($#parent(#this).c_ast.word)) )) ;
 a_v42   := #block(^( arena := $#parent(#this).arena ; val := 42 ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
-a_false := #block(^( arena := $#parent(#this).arena ; val := false ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
+a_false := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).caps.constants.\false ; #break(#evaluate($#parent(#this).c_ast.value)) )) ;
 a_alloc := #block(^(
     arena := $#parent(#this).arena ;
     kind  := allocate_val ;
@@ -115,12 +107,12 @@ cond := $.iso_res == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 src_caps := "p := #field(#this, capabilities) ; $.p.addr" ;
 ast_caps := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ; src := $#parent(#this).src_caps ; #break(#evaluate($#parent(#this).c_syn.parse)) )) ;
 caps_addr := #block(^( ast := $#parent(#this).ast_caps ; #break(#evaluate($#parent(#this).c_run)) )) ;
-cond := $.caps_addr == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.caps_addr == $.caps.constants.u64_zero ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 src_par := "p := #parent(#this) ; $.p.addr" ;
 ast_par := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ; src := $#parent(#this).src_par ; #break(#evaluate($#parent(#this).c_syn.parse)) )) ;
 par_addr := #block(^( ast := $#parent(#this).ast_par ; #break(#evaluate($#parent(#this).c_run)) )) ;
-cond := $.par_addr == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.par_addr == $.caps.constants.u64_zero ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 4. AST binary serialization & deserialization into a fresh AstArena !
 blob := #block(^( ast := $#parent(#this).combined_ast ; #break(#evaluate($#parent(#this).c_ast.serialize)) )) ;

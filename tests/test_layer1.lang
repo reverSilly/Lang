@@ -4,18 +4,44 @@
 ! RuntimeContext + Evaluator (no #parent, zero capabilities, zero FFI).        !
 ! ============================================================================ !
 
+_T := true ; T_raw := $._T.__raw ;
+_F := false ; F_raw := $._F.__raw ;
+_0 := 0 ; R0 := $._0.__raw ;
+_5 := 5 ; R5 := $._5.__raw ;
+_12 := 12 ; R12 := $._12.__raw ;
+
 assert_true := ^(
-    #branch($.cond, ^ok, ^#deref(#field(#this, __assertion_failed__)))
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
 ) ;
 
-! 1. Literals: i64, bytes(1, 1) flags, pure RawBytes string !
+! 1. Literals: i64, Boolean (ZST-marker), pure RawBytes string !
 a := 42 ;
 s := "hello_layer1" ;
 cond := $.a == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-s_sh := #shape($.s) ; cond := $.s_sh.size == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+s_sh := #shape($.s) ; cond := $.s_sh.size == $.R12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 1b. ZST-marker Boolean & Unary Prefix Operators (+, -, ~) !
+cond := true == true ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~true == false ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~false == true ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~~true == true ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := +42 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := --42 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := -42 + 42 == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := -(2 + 3) == -5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := -2 * -3 == 6 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~0 == -1 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~(-1) == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~42 == -43 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! u8 bitwise ~ (0x01 -> 0xFE not_= 0x00) vs Boolean logical ~ (true -> false == 0x00) !
+u8_one := { __raw := $#parent(#this).T_raw ; __u8_tag := {} } ;
+u8_not := ~$.u8_one ;
+cond := ~~$.u8_one == $.u8_one ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~($.u8_not.__raw == $.F_raw) ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 2. Smart `:=` dispatcher & location-owned mutability !
-x := #allocate_val(10, true) ;
+x := #allocate_val(10, $.T_raw) ;
 .x = 25 ;
 p := .x ;
 cond := $.x == 25 ; #evaluate($.assert_true) ; #drop(.cond) ;
@@ -42,8 +68,8 @@ cond := $.v_if1 == 100 ; #evaluate($.assert_true) ; #drop(.cond) ;
 cond := $.v_if2 == 200 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 5. English-order suffix `while`: sum 1..10 == 55 !
-sum := #allocate_val(0, true) ;
-idx := #allocate_val(1, true) ;
+sum := #allocate_val(0, $.T_raw) ;
+idx := #allocate_val(1, $.T_raw) ;
 (.sum = $.sum + $.idx ; .idx = $.idx + 1) while ($.idx < 11) ;
 cond := $.sum == 55 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
@@ -102,10 +128,10 @@ cond := $.\0 == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
 ! 9. BytesLit Escaped support (" and \) and empty BytesLit !
 eb := "" ;
 eb_sh := #shape($.eb) ;
-cond := $.eb_sh.size == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.eb_sh.size == $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 esc_b := "a\"b\\c" ;
 esc_sh := #shape($.esc_b) ;
-cond := $.esc_sh.size == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.esc_sh.size == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 layer1_tests_passed

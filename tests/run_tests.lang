@@ -8,12 +8,12 @@
 !      it in a brand-new RuntimeContext + Evaluator (`backends.interpreter`)   !
 ! ============================================================================ !
 
-! 1. Load and run lib/std/boot0.lang in root #this -> binds fe (fe_layer1) & arena !
+! 1. Load and run lib/std/boot/boot0.lang in root #this -> binds fe (fe_layer1) & arena !
 #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
 #bind(fe0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), new_layer0))), #deref(#field(#this, F)))) ;
 #bind(arena0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), new_arena))), #deref(#field(#this, F)))) ;
 
-#bind(sym, #allocate_val(lib/std/boot0.lang, #deref(#field(#this, F)))) ;
+#bind(sym, #allocate_val(lib/std/boot/boot0.lang, #deref(#field(#this, F)))) ;
 #bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;
 
