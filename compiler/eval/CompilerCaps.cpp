@@ -1,6 +1,7 @@
 #include "Capabilities.h"
 
 #include "../ast/Ast.h"
+#include "../ast/AstCodec.h"
 #include "../parser/Layer0.h"
 
 #include <deque>
@@ -138,6 +139,18 @@ Runtime::Value build_ast_module(Runtime::RuntimeContext& rt) {
         {"to_proto", native_proto(rt, "capabilities.ast.to_proto", [](Evaluator& ev) {
             Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
             return ev.rt.make_proto(ev.rt.prototypes.create_ast(std::move(expr)));
+        })},
+        {"serialize", native_proto(rt, "capabilities.ast.serialize", [](Evaluator& ev) {
+            Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
+            std::vector<uint8_t> bytes = Ast::serialize(expr);
+            return ev.rt.make_raw_bytes(
+                std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        })},
+        {"deserialize", native_proto(rt, "capabilities.ast.deserialize", [](Evaluator& ev) {
+            AstArena* arena = load_ast_arena(ev);
+            std::vector<uint8_t> bytes = read_raw_bytes(ev, "bytes");
+            Ast::ExprPtr expr = Ast::deserialize(bytes);
+            return ev.rt.make_handle(arena->alloc(std::move(expr)));
         })},
     });
 }

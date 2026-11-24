@@ -122,6 +122,18 @@ ast_par := #block(^( fe := $#parent(#this).fe ; arena := $#parent(#this).arena ;
 par_addr := #block(^( ast := $#parent(#this).ast_par ; #break(#evaluate($#parent(#this).c_run)) )) ;
 cond := $.par_addr == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
+! 4. AST binary serialization & deserialization into a fresh AstArena !
+blob := #block(^( ast := $#parent(#this).combined_ast ; #break(#evaluate($#parent(#this).c_ast.serialize)) )) ;
+arena2 := #block(^( #break(#evaluate($#parent(#this).c_ast.new_arena)) )) ;
+restored_ast := #block(^(
+    arena := $#parent(#this).arena2 ;
+    bytes := $#parent(#this).blob ;
+    #break(#evaluate($#parent(#this).c_ast.deserialize))
+)) ;
+restored_res := #block(^( ast := $#parent(#this).restored_ast ; #break(#evaluate($#parent(#this).c_run)) )) ;
+cond := $.restored_res == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+#block(^( arena := $#parent(#this).arena2 ; #break(#evaluate($#parent(#this).c_ast.destroy_arena)) )) ;
+
 ! Clean up local AST arena !
 #block(^( arena := $#parent(#this).arena ; #break(#evaluate($#parent(#this).c_ast.destroy_arena)) )) ;
 
