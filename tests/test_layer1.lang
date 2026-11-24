@@ -99,4 +99,13 @@ cond := $.x == 30 ; #evaluate($.assert_true) ; #drop(.cond) ;
 \0 := 77 ;
 cond := $.\0 == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
+! 9. BytesLit Escaped support (" and \) and empty BytesLit !
+eb := "" ;
+eb_sh := #shape($.eb) ;
+cond := $.eb_sh.size == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+esc_b := "a\"b\\c" ;
+esc_sh := #shape($.esc_b) ;
+cond := $.esc_sh.size == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
 layer1_tests_passed

@@ -307,6 +307,12 @@ Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
             }
             return ev.rt.make_raw_bytes(raw.data() + start, len);
         })},
+        {"bytes_concat", native_proto(rt, "capabilities.intrinsics.bytes_concat", [](Evaluator& ev) {
+            auto lhs = read_raw_bytes(ev, "lhs");
+            auto rhs = read_raw_bytes(ev, "rhs");
+            lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+            return ev.rt.make_raw_bytes(lhs.data(), lhs.size());
+        })},
     });
 }
 

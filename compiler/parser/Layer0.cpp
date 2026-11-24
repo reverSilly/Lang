@@ -81,7 +81,7 @@ void Frontend::register_layer0() {
 
     grammar.define("Escaped", seq({ch('\\'), any_byte()}), /*hidden=*/true, /*cacheable=*/false);
     grammar.define("WhiteSpace", char_set(" \t\r\n\f\v"), /*hidden=*/true, /*cacheable=*/false);
-    grammar.define("Delimiter", char_set(" \t\r\n\f\v!#(),;"), /*hidden=*/true, /*cacheable=*/false);
+    grammar.define("Delimiter", char_set(" \t\r\n\f\v!#(),;\\"), /*hidden=*/true, /*cacheable=*/false);
 
     grammar.define(
         "Comment",
@@ -102,12 +102,16 @@ void Frontend::register_layer0() {
         /*hidden=*/true,
         /*cacheable=*/false);
 
-    RuleId word_id = grammar.define(
-        "Word",
-        one_or_more(choice({
+    grammar.define(
+        "WordChar",
+        choice({
             grammar.ref("Escaped"),
             seq({not_pred(grammar.ref("Delimiter")), any_byte()}),
-        })));
+        }),
+        /*hidden=*/true,
+        /*cacheable=*/false);
+
+    RuleId word_id = grammar.define("Word", one_or_more(grammar.ref("WordChar")));
 
     grammar.define(
         "BuiltinArgs",
