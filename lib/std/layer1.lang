@@ -50,6 +50,12 @@ ASCII_ZERO := #block(^(
     b := #evaluate($#parent(#this).caps.symbols.byte_at) ;
     #break(#evaluate($#parent(#this).p_u8_to_i64))
 )) ;
+ASCII_BSLASH := #block(^(
+    sym := \\ ;
+    index := $#parent(#this).Z ;
+    b := #evaluate($#parent(#this).caps.symbols.byte_at) ;
+    #break(#evaluate($#parent(#this).p_u8_to_i64))
+)) ;
 
 ! --- Runtime Shape-dispatched operator prototypes --- !
 std_ops := #block(^(
@@ -142,7 +148,8 @@ ops_env := #block(^(
     iops := $#parent(#this).iops ;
     ten := $#parent(#this).TEN ;
     two := $#parent(#this).TWO ;
-    zero_ch := $#parent(#this).ASCII_ZERO
+    zero_ch := $#parent(#this).ASCII_ZERO ;
+    bslash_ch := $#parent(#this).ASCII_BSLASH
 )) ;
 
 ! Helper: wrap_h_env(raw_h) -> Prototype with both `caps` and `env` injected !
@@ -212,15 +219,8 @@ new_delim2 := #block(^(
     #evaluate($#parent(#this).c_syn.set_rule)
 )) ;
 
-! WordChar = not_Delimiter any (hidden, for keyword/int boundary lookahead) !
-ref_delim := #block(^( fe := $#parent(#this).fe ; name := Delimiter ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
-not_delim := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).ref_delim ; positive := $#parent(#this).F ; #break(#evaluate($#parent(#this).c_syn.lookahead)) )) ;
-word_char_expr := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).not_delim ; 1 := $#parent(#this).c_syn.any ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
-#block(^(
-    fe := $#parent(#this).fe ; name := WordChar ; expr := $#parent(#this).word_char_expr ;
-    hidden := $#parent(#this).T ; handler := $#parent(#this).Z ;
-    #evaluate($#parent(#this).c_syn.set_rule)
-)) ;
+! Reuse Layer 0 WordChar = Escaped / (not_Delimiter any) for keyword/int boundary lookahead !
+ref_escaped := #block(^( fe := $#parent(#this).fe ; name := Escaped ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 ref_wc := #block(^( fe := $#parent(#this).fe ; name := WordChar ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 not_wc := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).ref_wc ; positive := $#parent(#this).F ; #break(#evaluate($#parent(#this).c_syn.lookahead)) )) ;
 
@@ -300,25 +300,77 @@ digits_plus := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).digi
 e_int := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).digits_plus ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
 #block(^( fe := $#parent(#this).fe ; name := IntLit ; expr := $#parent(#this).e_int ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_int ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
-! StrLit = '"' (not_'"' any)* '"' -> bytes_slice(raw, 1, len - 2) -> ast.value(Bytes) !
+! BytesLit = '"' (Escaped / (not_'"' any))* '"' -> unescape \x -> ast.value(RawBytes) !
 raw_h := ^(
+    T := $.caps.constants.true ;
+    Z := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
     bs_sh := #shape($.bs) ;
     inner_len := #block(^( a := $#parent(#this).bs_sh.size ; b := $#parent(#this).env.two ; #break(#evaluate($#parent(#this).env.iops.sub_i64)) )) ;
-    sliced := #block(^(
-        bytes := $#parent(#this).bs ; start := $#parent(#this).caps.constants.u64_one ; len := $#parent(#this).inner_len ;
+    raw := #block(^(
+        bytes := $#parent(#this).bs ; start := $#parent(#this).ONE ; len := $#parent(#this).inner_len ;
         #break(#evaluate($#parent(#this).caps.intrinsics.bytes_slice))
     )) ;
-    val := $.sliced ;
-    #evaluate($.caps.ast.value)
+    empty_b := #block(^(
+        bytes := $#parent(#this).raw ; start := $#parent(#this).Z ; len := $#parent(#this).Z ;
+        #break(#evaluate($#parent(#this).caps.intrinsics.bytes_slice))
+    )) ;
+    #bind(acc, #allocate_val($.empty_b, $.T)) ;
+    #bind(seg, #allocate_val($.Z, $.T)) ;
+    #bind(i, #allocate_val($.Z, $.T)) ;
+    loop_p := ^(
+        cond := #block(^( a := $#parent(#this).i ; b := $#parent(#this).inner_len ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) )) ;
+        #branch($.cond, ^(
+            #drop(.cond) ;
+            ch := #block(^(
+                bytes := $#parent(#this).raw ; index := $#parent(#this).i ;
+                b := #evaluate($#parent(#this).caps.intrinsics.bytes_at) ;
+                #break(#evaluate($#parent(#this).env.iops.u8_to_i64))
+            )) ;
+            is_bs := #block(^( a := $#parent(#this).ch ; b := $#parent(#this).env.bslash_ch ; #break(#evaluate($#parent(#this).env.iops.eq_i64)) )) ;
+            #drop(.ch) ;
+            #branch($.is_bs, ^(
+                #drop(.is_bs) ;
+                ! Flush [seg, i) then append escaped byte at i+1, advance i += 2, seg = i !
+                seg_len := #block(^( a := $#parent(#this).i ; b := $#parent(#this).seg ; #break(#evaluate($#parent(#this).env.iops.sub_i64)) )) ;
+                part := #block(^( bytes := $#parent(#this).raw ; start := $#parent(#this).seg ; len := $#parent(#this).seg_len ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_slice)) )) ;
+                acc1 := #block(^( lhs := $#parent(#this).acc ; rhs := $#parent(#this).part ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+                i1 := #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+                esc_b := #block(^( bytes := $#parent(#this).raw ; start := $#parent(#this).i1 ; len := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_slice)) )) ;
+                acc2 := #block(^( lhs := $#parent(#this).acc1 ; rhs := $#parent(#this).esc_b ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+                i2 := #block(^( a := $#parent(#this).i1 ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+                #drop(.acc) ; #bind(acc, #allocate_val($.acc2, $.T)) ;
+                #write(.i, $.i2) ;
+                #write(.seg, $.i2) ;
+                #drop(.seg_len) ; #drop(.part) ; #drop(.acc1) ; #drop(.i1) ; #drop(.esc_b) ; #drop(.acc2) ; #drop(.i2) ;
+                #evaluate($.loop_p)
+            ), ^(
+                #drop(.is_bs) ;
+                next_i := #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+                #write(.i, $.next_i) ;
+                #drop(.next_i) ;
+                #evaluate($.loop_p)
+            ))
+        ), ^(
+            #drop(.cond) ;
+            tail_len := #block(^( a := $#parent(#this).inner_len ; b := $#parent(#this).seg ; #break(#evaluate($#parent(#this).env.iops.sub_i64)) )) ;
+            tail := #block(^( bytes := $#parent(#this).raw ; start := $#parent(#this).seg ; len := $#parent(#this).tail_len ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_slice)) )) ;
+            final_b := #block(^( lhs := $#parent(#this).acc ; rhs := $#parent(#this).tail ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+            val := $.final_b ;
+            #evaluate($.caps.ast.value)
+        ))
+    ) ;
+    #evaluate($.loop_p)
 ) ;
-h_str := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
+h_bytes := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
 
 not_quote := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).lit_quote ; positive := $#parent(#this).F ; #break(#evaluate($#parent(#this).c_syn.lookahead)) )) ;
-str_char  := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).not_quote ; 1 := $#parent(#this).c_syn.any ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
-str_chars := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).str_char ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
-e_str := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_quote ; 1 := $#parent(#this).str_chars ; 2 := $#parent(#this).lit_quote ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
-#block(^( fe := $#parent(#this).fe ; name := StrLit ; expr := $#parent(#this).e_str ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_str ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+raw_bchar := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).not_quote ; 1 := $#parent(#this).c_syn.any ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+bytes_char := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_escaped ; 1 := $#parent(#this).raw_bchar ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+bytes_chars := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).bytes_char ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_bytes := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_quote ; 1 := $#parent(#this).bytes_chars ; 2 := $#parent(#this).lit_quote ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := BytesLit ; expr := $#parent(#this).e_bytes ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_bytes ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
 ! ============================================================================ !
 ! 3. Blocks: EmptyBlock {} and NonEmptyBlock { Expr }                          !
@@ -345,11 +397,11 @@ h_blk := #evaluate($.wrap_h_env) ; #drop(.raw_h) ;
 e_blk := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_lbrace ; 1 := $#parent(#this).ref_ws ; 2 := $#parent(#this).ref_expr ; 3 := $#parent(#this).ref_ws ; 4 := $#parent(#this).lit_rbrace ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
 #block(^( fe := $#parent(#this).fe ; name := NonEmptyBlock ; expr := $#parent(#this).e_blk ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_blk ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
-! Prepend EmptyBlock, NonEmptyBlock, StrLit, IntLit, BoolTrue, BoolFalse to Atom !
+! Prepend EmptyBlock, NonEmptyBlock, BytesLit, IntLit, BoolTrue, BoolFalse to Atom !
 old_atom2 := #block(^( fe := $#parent(#this).fe ; name := Atom ; #break(#evaluate($#parent(#this).c_syn.get_rule)) )) ;
 ref_empty_blk := #block(^( fe := $#parent(#this).fe ; name := EmptyBlock    ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 ref_blk       := #block(^( fe := $#parent(#this).fe ; name := NonEmptyBlock ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
-ref_str       := #block(^( fe := $#parent(#this).fe ; name := StrLit        ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+ref_str       := #block(^( fe := $#parent(#this).fe ; name := BytesLit      ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 ref_int       := #block(^( fe := $#parent(#this).fe ; name := IntLit        ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 ref_btrue     := #block(^( fe := $#parent(#this).fe ; name := BoolTrue      ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
 ref_bfalse    := #block(^( fe := $#parent(#this).fe ; name := BoolFalse     ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
