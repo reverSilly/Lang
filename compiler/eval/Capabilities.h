@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CliArgs.h"
 #include "Evaluator.h"
 
 #include <string>
@@ -16,10 +17,6 @@ namespace reverSilly::Lang::Eval {
 void install_runtime_capabilities(Runtime::RuntimeContext& rt);
 void install_runtime_with_ffi(Runtime::RuntimeContext& rt);
 void install_all_capabilities(Runtime::RuntimeContext& rt);
-
-// Bind CLI positional arguments as a pure immutable struct `args` in root #this:
-//   args { count: raw8 (u64), 0: RawBytes, 1: RawBytes, ... }
-void install_cli_args(Runtime::RuntimeContext& rt, const std::vector<std::string_view>& args);
 
 namespace CapabilitiesDetail {
 

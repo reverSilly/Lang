@@ -2,9 +2,13 @@
 
 #include "../ast/Ast.h"
 #include "../ast/AstCodec.h"
+#include "../ast/PackFormat.h"
+#include "EmbeddedStub.h"
 #include "../parser/Layer0.h"
 
+#include <array>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -310,6 +314,47 @@ Runtime::Value build_backends_module(Runtime::RuntimeContext& rt) {
             Evaluator target_ev(target_rt);
             Runtime::Value target_res = target_ev.run(expr);
             return intern_ast_value(ev.rt, reify_ast_value(target_rt, target_res));
+        })},
+        {"emit_executable", native_proto(rt, "capabilities.backends.interpreter.emit_executable", [](Evaluator& ev) {
+            Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
+            auto out_path_raw = read_raw_bytes(ev, "out_path");
+            std::string out_path(reinterpret_cast<const char*>(out_path_raw.data()), out_path_raw.size());
+            if (out_path.empty()) {
+                throw std::runtime_error("capabilities.backends.interpreter.emit_executable: empty out_path");
+            }
+
+            std::span<const uint8_t> stub = embedded_lang_stub();
+            if (stub.empty()) {
+                throw std::runtime_error("capabilities.backends.interpreter.emit_executable: embedded lang_stub is empty");
+            }
+
+            std::vector<uint8_t> payload = Ast::serialize(expr);
+            std::array<uint8_t, Ast::kPackTrailerSize> trailer{};
+            Ast::encode_pack_trailer(static_cast<uint64_t>(payload.size()), trailer);
+
+            {
+                std::ofstream ofs(out_path, std::ios::binary | std::ios::trunc);
+                if (!ofs) {
+                    throw std::runtime_error(
+                        "capabilities.backends.interpreter.emit_executable: failed to open '" + out_path + "'");
+                }
+                ofs.write(reinterpret_cast<const char*>(stub.data()), static_cast<std::streamsize>(stub.size()));
+                ofs.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+                ofs.write(reinterpret_cast<const char*>(trailer.data()), static_cast<std::streamsize>(trailer.size()));
+                if (!ofs) {
+                    throw std::runtime_error(
+                        "capabilities.backends.interpreter.emit_executable: write failed for '" + out_path + "'");
+                }
+            }
+
+            std::error_code ec;
+            std::filesystem::permissions(
+                out_path,
+                std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec,
+                std::filesystem::perm_options::add,
+                ec);
+
+            return ev.rt.make_unit();
         })},
     });
     return build_struct(rt, {

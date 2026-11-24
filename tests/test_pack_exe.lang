@@ -1,0 +1,38 @@
+! ============================================================================ !
+! tests/test_pack_exe.lang — Standalone Packed Executable E2E Test             !
+! Built via: lang lib/std/build.lang tests/test_pack_exe.lang <out_exe>        !
+! Run via:   <out_exe> hello                                                   !
+! Verifies:                                                                    !
+!   1. Strict isolation: `capabilities` is absent in root `#this`              !
+!   2. Verbatim CLI `args`: `args.count == 2` (`0` = argv[0], `1` = "hello")   !
+!   3. Default injected `libc` works inside standalone packed executable       !
+!   4. Low 8 bits of top-level raw integer result become process exit code (42)!
+! ============================================================================ !
+
+assert_true := ^(
+    #branch($.cond, ^ok, ^#deref(#field(#this, __assertion_failed__)))
+) ;
+
+! 1. Verify no compile-time `capabilities` leaked into runtime !
+caps_p := #field(#this, capabilities) ;
+cond := $.caps_p.addr == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. Verify verbatim CLI args: argv[0] + argv[1] ("hello") => count == 2, len("hello") == 5 !
+cond := $.args.count == 2 ; #evaluate($.assert_true) ; #drop(.cond) ;
+arg1 := $.args.\1 ;
+arg1_sh := #shape($.arg1) ;
+cond := $.arg1_sh.size == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 3. Verify default injected `libc` (`malloc` + `free`) !
+ptr := #block(^(
+    \0 := 16 ;
+    #break(#evaluate($#parent(#this).libc.malloc))
+)) ;
+cond := 0 < $.ptr ; #evaluate($.assert_true) ; #drop(.cond) ;
+#block(^(
+    \0 := $#parent(#this).ptr ;
+    #break(#evaluate($#parent(#this).libc.free))
+)) ;
+
+! 4. Return 42 -> exit code 42 !
+42
