@@ -733,8 +733,33 @@ EvalTask Evaluator::eval_expr(const Ast::ExprPtr& expr) {
 
 EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
     using K = Ast::BuiltinKind;
-    auto expect_shape = [](const Runtime::Value& v, uint64_t expected, const char* msg) {
-        if (v.shape_addr != expected) throw std::runtime_error(msg);
+    auto describe_shape = [&](uint64_t shape_addr) -> std::string {
+        if (shape_addr == 0) return "null";
+        if (shape_addr == rt.shapes.unit_shape) return "Unit";
+        if (shape_addr == rt.shapes.symbol_shape) return "Symbol";
+        if (shape_addr == rt.shapes.pointer_shape) return "Pointer";
+        if (shape_addr == rt.shapes.shape_meta) return "Shape";
+        if (shape_addr == rt.shapes.prototype_shape) return "Prototype";
+        if (shape_addr == rt.shapes.handle_shape) return "Handle";
+        const auto* sl = reinterpret_cast<const Runtime::ShapeLayout*>(shape_addr);
+        if (sl->is_leaf()) {
+            return "bytes(" + std::to_string(sl->size) + ", " + std::to_string(sl->align) + ")";
+        }
+        std::string out = "struct{";
+        const auto* entries = sl->fields.entries_begin();
+        const uint32_t show = sl->fields.count < 4 ? sl->fields.count : 4;
+        for (uint32_t i = 0; i < show; ++i) {
+            if (i > 0) out += ", ";
+            out += rt.symbols.name(entries[i].sym);
+        }
+        if (sl->fields.count > show) out += ", ...";
+        out += "}";
+        return out;
+    };
+    auto expect_shape = [&](const Runtime::Value& v, uint64_t expected, const char* msg) {
+        if (v.shape_addr != expected) {
+            throw std::runtime_error(std::string(msg) + " (got " + describe_shape(v.shape_addr) + ")");
+        }
     };
 
     std::vector<Runtime::Value> args;
@@ -843,7 +868,16 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
 
         case K::Deref: {
             expect_shape(args[0], rt.shapes.pointer_shape, "#deref: argument must be a Pointer");
-            co_return rt.deref(args[0].as_pod<Runtime::PointerLayout>());
+            const auto ptr = args[0].as_pod<Runtime::PointerLayout>();
+            if (ptr.is_null()) {
+                if (const auto* fb = std::get_if<Ast::BuiltinExpr>(&b.args[0]->node);
+                    fb && fb->kind == K::Field && fb->args.size() == 2) {
+                    if (const auto* w = std::get_if<Ast::WordExpr>(&fb->args[1]->node)) {
+                        throw std::runtime_error("#deref: null pointer (field '" + w->text + "' not found)");
+                    }
+                }
+            }
+            co_return rt.deref(ptr);
         }
         case K::Write: {
             expect_shape(args[0], rt.shapes.pointer_shape, "#write: arg 0 must be a Pointer");

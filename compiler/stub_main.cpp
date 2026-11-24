@@ -87,19 +87,34 @@ reverSilly::Lang::Ast::ExprPtr load_packed_ast(const std::filesystem::path& exe_
 }
 
 int extract_exit_code(
-    const reverSilly::Lang::Runtime::RuntimeContext& rt,
+    reverSilly::Lang::Runtime::RuntimeContext& rt,
     const reverSilly::Lang::Runtime::Value& val) {
-    if (val.shape_addr == rt.shapes.raw1_shape) {
-        return static_cast<int>(val.as_pod<uint8_t>());
-    }
-    if (val.shape_addr == rt.shapes.raw2_shape) {
-        return static_cast<int>(val.as_pod<uint16_t>() & 0xFFu);
-    }
-    if (val.shape_addr == rt.shapes.raw4_shape) {
-        return static_cast<int>(val.as_pod<uint32_t>() & 0xFFu);
-    }
-    if (val.shape_addr == rt.shapes.raw8_shape) {
-        return static_cast<int>(val.as_pod<uint64_t>() & 0xFFu);
+    auto low_byte = [&](uint64_t shape_addr, size_t offset) -> int {
+        if (shape_addr == rt.shapes.raw1_shape && offset + 1 <= val.bytes.size()) {
+            uint8_t v = 0; std::memcpy(&v, val.bytes.data() + offset, 1);
+            return static_cast<int>(v);
+        }
+        if (shape_addr == rt.shapes.raw2_shape && offset + 2 <= val.bytes.size()) {
+            uint16_t v = 0; std::memcpy(&v, val.bytes.data() + offset, 2);
+            return static_cast<int>(v & 0xFFu);
+        }
+        if (shape_addr == rt.shapes.raw4_shape && offset + 4 <= val.bytes.size()) {
+            uint32_t v = 0; std::memcpy(&v, val.bytes.data() + offset, 4);
+            return static_cast<int>(v & 0xFFu);
+        }
+        if (shape_addr == rt.shapes.raw8_shape && offset + 8 <= val.bytes.size()) {
+            uint64_t v = 0; std::memcpy(&v, val.bytes.data() + offset, 8);
+            return static_cast<int>(v & 0xFFu);
+        }
+        return -1;
+    };
+    if (int r = low_byte(val.shape_addr, 0); r >= 0) return r;
+    if (const auto* sl = val.shape()) {
+        const auto raw_sym = rt.symbols.intern("__raw");
+        const auto rel = reverSilly::Lang::Runtime::FieldMapArena::get(sl->fields, raw_sym);
+        if (!rel.is_null()) {
+            if (int r = low_byte(rel.shape_ptr, static_cast<size_t>(rel.addr)); r >= 0) return r;
+        }
     }
     return 0;
 }
