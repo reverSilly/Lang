@@ -1,0 +1,93 @@
+! ============================================================================ !
+! lib/std/literals.lang — Typed Layer 1 Literals (depends on types.lang)       !
+!                                                                              !
+! Registers on fe:                                                             !
+!   - BoolTrue  ("true"  not_WordChar) -> types.true_val  (Boolean)               !
+!   - BoolFalse ("false" not_WordChar) -> types.false_val (Boolean)               !
+!   - IntLit    ([0-9]+  not_WordChar) -> { __raw: raw8, __i64_tag: {} } (i64)    !
+! ============================================================================ !
+
+lit_env := {
+    types   := $#parent(#this).types ;
+    iops    := $#parent(#this).iops ;
+    ten     := $#parent(#this).TEN ;
+    zero_ch := $#parent(#this).ASCII_ZERO
+} ;
+
+#drop(.h_env) ; h_env := $.lit_env ;
+
+! BoolTrue = "true" not_WordChar -> ast.value(types.true_val) !
+raw_h := ^(
+    val := $.env.types.true_val ;
+    #evaluate($.caps.ast.value)
+) ;
+h_true := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+lit_true := #block(^( fe := $#parent(#this).fe ; sym := true ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+e_true := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_true ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := BoolTrue ; expr := $#parent(#this).e_true ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_true ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! BoolFalse = "false" not_WordChar -> ast.value(types.false_val) !
+raw_h := ^(
+    val := $.env.types.false_val ;
+    #evaluate($.caps.ast.value)
+) ;
+h_false := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+lit_false := #block(^( fe := $#parent(#this).fe ; sym := false ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+e_false := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_false ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := BoolFalse ; expr := $#parent(#this).e_false ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_false ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! IntLit = [0-9]+ not_WordChar -> i64 ({ __raw: raw8, __i64_tag: {} }) !
+raw_h := ^(
+    T   := $.caps.constants.true ;
+    Z   := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    bs := #evaluate($.caps.syntax.cst_view_bytes) ;
+    bs_sh := #shape($.bs) ;
+    n := $.bs_sh.size ;
+    acc := #allocate_val($.Z, $.T) ;
+    i   := #allocate_val($.Z, $.T) ;
+    (
+        digit := #block(^(
+            bytes := $#parent(#this).bs ; index := $#parent(#this).i ;
+            b := #evaluate($#parent(#this).caps.intrinsics.bytes_at) ;
+            a := #evaluate($#parent(#this).env.iops.u8_to_i64) ;
+            #drop(.b) ;
+            b := $#parent(#this).env.zero_ch ;
+            #break(#evaluate($#parent(#this).env.iops.sub_i64))
+        )) ;
+        acc10 := #block(^( a := $#parent(#this).acc ; b := $#parent(#this).env.ten ; #break(#evaluate($#parent(#this).env.iops.mul_i64)) )) ;
+        .acc = #block(^( a := $#parent(#this).acc10 ; b := $#parent(#this).digit ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        .i   = #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        #drop(.digit) ; #drop(.acc10)
+    ) while #block(^( a := $#parent(#this).i ; b := $#parent(#this).n ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) )) ;
+    val := { __raw := $#parent(#this).acc ; __i64_tag := {} } ;
+    #evaluate($.caps.ast.value)
+) ;
+h_int := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+digit_range := #block(^(
+    fe := $#parent(#this).fe ;
+    sym := 0 ; index := $#parent(#this).Z ; lo := #evaluate($#parent(#this).c_sym.byte_at) ; #drop(.sym) ;
+    sym := 9 ; hi := #evaluate($#parent(#this).c_sym.byte_at) ; #drop(.sym) ;
+    #break(#evaluate($#parent(#this).c_syn.range))
+)) ;
+digits_plus := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).digit_range ; min := $#parent(#this).ONE ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_int := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).digits_plus ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := IntLit ; expr := $#parent(#this).e_int ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_int ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! Prepend IntLit, BoolTrue, BoolFalse to Atom !
+old_atom_lit := #block(^( fe := $#parent(#this).fe ; name := Atom      ; #break(#evaluate($#parent(#this).c_syn.get_rule)) )) ;
+ref_int      := #block(^( fe := $#parent(#this).fe ; name := IntLit    ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+ref_btrue    := #block(^( fe := $#parent(#this).fe ; name := BoolTrue  ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+ref_bfalse   := #block(^( fe := $#parent(#this).fe ; name := BoolFalse ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+new_atom_lit := #block(^(
+    fe := $#parent(#this).fe ;
+    0 := $#parent(#this).ref_int ;
+    1 := $#parent(#this).ref_btrue ;
+    2 := $#parent(#this).ref_bfalse ;
+    3 := $#parent(#this).old_atom_lit ;
+    #break(#evaluate($#parent(#this).c_syn.choice))
+)) ;
+#block(^( fe := $#parent(#this).fe ; name := Atom ; expr := $#parent(#this).new_atom_lit ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+ok
