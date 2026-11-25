@@ -134,4 +134,81 @@ esc_b := "a\"b\\c" ;
 esc_sh := #shape($.esc_b) ;
 cond := $.esc_sh.size == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
+! 10. Lexical upward `.sym` lookup, `#this.sym` single-frame, & juxtaposition calls !
+up_val := 77 ;
+up_res := {
+    mid := {
+        inner := {
+            #break($.up_val)
+        } ;
+        #break($.inner)
+    } ;
+    #break($.mid)
+} ;
+cond := $.up_res == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Shadowing `up_val := $.up_val + 1` reads outer, binds inner !
+sh_res := {
+    up_val := $.up_val + 1 ;
+    #break($.up_val)
+} ;
+cond := $.sh_res == 78 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.up_val == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Mutating outer mutable slot from nested block via `.sym` !
+outer_mut := #allocate_val(10, $.T_raw) ;
+_ := {
+    .outer_mut = $.outer_mut + 5 ;
+    #break(ok)
+} ;
+cond := $.outer_mut == 15 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Explicit `#this.sym` remains strictly single-frame (does not walk up) !
+single_check := {
+    p_local := #this.up_val ;
+    #break($.p_local.addr == $.R0)
+} ;
+cond := $.single_check ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Juxtaposition single-arg calls: `$.f $.x`, `$.f($.x)`, `$.f {}`, nested, curried !
+inc := {
+    __env  := {} ;
+    __code := ^( $.__arg + 1 )
+} ;
+cond := $.inc 41 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.inc(41) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.inc (20 + 21) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.inc ($.inc 40) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.inc($.inc(40)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+get_zero := {
+    __env  := {} ;
+    __code := ^( 0 )
+} ;
+cond := $.get_zero {} == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Closure with `__env` + curried juxtaposition `$.make_adder 10 32 == 42` !
+make_adder := {
+    __env  := {} ;
+    __code := ^(
+        base := $.__arg ;
+        {
+            __env  := { k := $.base } ;
+            __code := ^( $.k + $.__arg )
+        }
+    )
+} ;
+cond := $.make_adder 10 32 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Lexical scope barrier: callee MUST NOT see caller's local `caller_secret` !
+caller_secret := 999 ;
+check_iso := {
+    __env  := {} ;
+    __code := ^(
+        p_sec := .caller_secret ;
+        $.p_sec.addr == $.__arg
+    )
+} ;
+cond := $.check_iso $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
 layer1_tests_passed
