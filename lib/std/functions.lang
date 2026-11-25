@@ -201,6 +201,56 @@ ref_apply  := #block(^( fe := $#parent(#this).fe ; name := ApplyExpr ; #break(#e
 e_unary2 := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).e_unary_app ; \1 := $#parent(#this).ref_apply ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
 #block(^( fe := $#parent(#this).fe ; name := UnaryExpr ; expr := $#parent(#this).e_unary2 ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_unary ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
 
+! --- 3b. Register LambdaExpr (`param -> body`, strictly single-arg, right-assoc) --- !
+raw_h := ^(
+    F      := $.caps.constants.\false ;
+    Z      := $.caps.constants.u64_zero ;
+    ONE    := $.caps.constants.u64_one ;
+    n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    p_ast  := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).Z   ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+    b_ast  := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+
+    w_arg  := #block(^( arena := $#parent(#this).arena ; sym := __arg ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    p_arg  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_arg ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    d_arg  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_arg ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    al_p   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_arg ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    s_bp   := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).p_ast ; \1 := $#parent(#this).al_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    code_s := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_bp ; \1 := $#parent(#this).b_ast ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    code_p := #block(^( ast := $#parent(#this).code_s ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
+
+    val := { __env := {} ; __code := $#parent(#this).code_p } ;
+    #evaluate($.caps.ast.value)
+) ;
+h_lambda := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+lit_arrow := #block(^( fe := $#parent(#this).fe ; sym := \-\> ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+ref_lam   := #block(^( fe := $#parent(#this).fe ; name := LambdaExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+e_lam_b   := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_lam ; \1 := $#parent(#this).ref_ctrl ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+e_lam     := #block(^(
+    fe := $#parent(#this).fe ;
+    \0 := $#parent(#this).ref_prefix ;
+    \1 := $#parent(#this).ref_ws ;
+    \2 := $#parent(#this).lit_arrow ;
+    \3 := $#parent(#this).ref_ws ;
+    \4 := $#parent(#this).e_lam_b ;
+    #break(#evaluate($#parent(#this).c_syn.seq))
+)) ;
+#block(^( fe := $#parent(#this).fe ; name := LambdaExpr ; expr := $#parent(#this).e_lam ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_lambda ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! Wire Infix = BindInfix / AssignInfix / LambdaExpr / ControlExpr !
+e_infix_lam := #block(^(
+    fe := $#parent(#this).fe ;
+    \0 := $#parent(#this).ref_bind2 ;
+    \1 := $#parent(#this).ref_assign ;
+    \2 := $#parent(#this).ref_lam ;
+    \3 := $#parent(#this).ref_ctrl ;
+    #break(#evaluate($#parent(#this).c_syn.choice))
+)) ;
+#block(^( fe := $#parent(#this).fe ; name := Infix ; expr := $#parent(#this).e_infix_lam ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
 ! --- 4. Upgrade SelfField (`.sym`) to Lexical Upward Lookup (with __fn_env barrier) --- !
 raw_h := ^(
     F      := $.caps.constants.\false ;

@@ -104,30 +104,26 @@ All capability operations are exposed as standard `Native` `Prototype` values (o
 | **`backends`** | `interpreter.run({ast}) -> Value`; future `llvm.emit_ir` / `emit_object` / `emit_executable` | Isolated target backends consuming standalone `Ast` directly |
 | **`io`** | `read_file({path: RawBytes}) -> RawBytes`, `write_file({path: RawBytes, bytes: RawBytes}) -> Unit` | Minimal compile-script file IO for Phase 1 MVP (superseded by `ffi.extern_symbol` + `libc`) |
 
-## 6. Layer 1 Pure-Lang Two-Stage Self-Bootstrap Architecture
-Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C++ `Layer1.h`:
+## 6. Layer 1 Pure-Lang Modular Self-Bootstrap Architecture
+Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C++ `Layer1.h`, split into bootstrap (`lib/std/boot/`) and modular stdlib (`lib/std/`):
 
-### 6.1 Stage 1: `lib/std/boot0.lang` (Pure 5-Symbol Layer 0)
-Registers only the 4 minimal rules needed to unlock readable syntax, producing `fe_boot1`:
-1. `^Expr` (prefix, right-associative → `ValueExpr(AstProtoVal)`)
-2. `.a` (prefix → `#field(#this, a)`) and `p.a` (postfix chain → `#field(p, a)`)
-3. `$p` (prefix → `#deref(p)`)
-4. `x := expr` (basic infix → `#bind(x, #allocate_val(expr, false))`)
+### 6.1 Bootstrap Layer (`lib/std/boot/{boot0,boot1,core_syntax}.lang`)
+1. **`lib/std/boot/boot0.lang` + `boot1.lang`** (Pure 5-Symbol Layer 0 → `fe_boot1`):
+   - Registers 4 minimal rules: `^Expr`, `.a` (**initial single-frame** `#field(#this, a)`) + `p.a` (`#field(p, a)`), `$p` (`#deref(p)`), and basic `x := expr`.
+   - Loads `lib/std/boot/core_syntax.lang`.
+2. **`lib/std/boot/core_syntax.lang`** (Type-Agnostic Structural Layer 1):
+   - Registers `{}` / `{ expr }`, `"..."` (`RawBytes` with `"` / `\` escapes), smart `sym := RHS` (location-owned mutability), `ptr = val`, `coro @ val` (`#resume`), and **zero-`#block` transparent `IfExpr` / `WhileExpr`** operating on raw `bytes(1, 1)` during bootstrap.
+   - Note: `true` and `false` are **not** boolean literals during bootstrap (they remain plain `Word` symbols; raw `bytes(1, 1)` comes from `capabilities.constants.true/false`).
+   - Loads `lib/std/layer1.lang`.
 
-`boot0.lang` then reads `lib/std/layer1.lang` via `capabilities.io.read_file`, parses it with `fe_boot1` via `capabilities.syntax.parse`, stages it via `ast.to_proto`, and `#evaluate`s it.
-
-### 6.2 Stage 2: `lib/std/layer1.lang` (Written in `fe_boot1`)
-Extends `fe_boot1` into the full Layer 1 frontend `fe_layer1`, adhering to **location-owned mutability** and **Shape-driven Stdlib dispatch**:
-- **Smart `sym := RHS` Dispatcher (No `mut x :=` or `::=` Sugar)**:
-  - Mutability belongs strictly to locations created by `#allocate(S, true)` / `#allocate_val(v, true)`.
-  - `sym := RHS` checks if `#shape(RHS) == pointer_shape`: if so, it attempts Core `#bind(sym, RHS)` — returning `true` binds an unbound direct child slot of `#this` (e.g. `x := #allocate_val(42, true)` directly binds a mutable slot); returning `false` (external or already-bound pointer such as `p := .x`) falls back to `#bind(sym, #allocate_val(RHS, false))` storing the pointer value itself. Non-pointer values go straight to `#bind(sym, #allocate_val(RHS, false))`.
-- **Blocks & Assignment**: `{}` → `#block(^#this)`, `{ expr }` → `#block(^expr)`, `ptr = val` → `assign` dispatcher (`#write` for POD; future `__destroy` + `#write` for RAII).
-- **Literals (Zero `Symbol` Abuse)**:
-  - Integer literals (`123`): visitor reads raw ASCII bytes via `cst_view_bytes`, derives `'0'` (`48`) via `symbols.byte_at(0, 0)` and `10` from `u64_one`, computes `acc = acc * 10 + (b - 48)` in Lang, and emits `ast.value(i64)`.
-  - Byte string literals (`"..."`): visitor reads raw bytes via `cst_view_bytes` (stripping quotes) and emits `ast.value(RawBytes)` (`Shape{ size = N, align = 1 }`).
-  - Booleans (`true` / `false`): emit `ast.value(bytes(1, 1))` (`0x01` / `0x00`).
-- **Shape-Dispatched Operators** (vertical precedence ladder, tightest to loosest): `*` → `+` / `-` → `<` / `==` (syntax stays type-agnostic; dispatchers inspect `#shape`).
-- **English-Order Suffix Control Flow & Coroutines**:
-  - `e1 if cond else e2` → `#branch(cond, ^e1, ^e2)`
-  - `body while cond` → recursive `#branch` + `#evaluate` loop prototype
-  - `coro @ val` → `#resume(coro, val)`
+### 6.2 Modular Stdlib Layer (`lib/std/layer1.lang`)
+Orchestrates the full Layer 1 frontend `fe_layer1` in strict dependency order:
+1. **`lib/std/types.lang`**: Defines ZST-marker primitive `Shape`s (`Boolean = { __raw: bytes(1,1), __boolean_tag: {} }`, `i8..i64`, `u8..u64`, `f32`, `f64`).
+2. **`lib/std/literals.lang`**: **First introduces** `BoolTrue` / `BoolFalse` (`true` / `false` → `Boolean`) and `IntLit` (`[0-9]+` → ZST-tagged `i64`).
+3. **`lib/std/ops.lang`**:
+   - Registers Shape-dispatched operators: P7 unary `+`/`-`/`~` (`~` dispatches logical NOT on `Boolean` and `bit_not` on integers), P8 `*`, P9 `+`/`-`, P11/12 `<`/`==`.
+   - **Overrides `IfExpr` & `WhileExpr`** from `core_syntax.lang` to unwrap `Boolean.__raw` directly in `#this` with **zero `#block`** (preserving full transparency).
+4. **`lib/std/functions.lang`**:
+   - Registers **`ApplyExpr`** (juxtaposition of two `Prefix` expressions = strictly single-arg call, excluding `if`/`else`/`while`), expanding via a two-step handoff into a fresh `#block` with `__arg`, `__fn_env`, and `#break(#evaluate($.__code))`.
+   - Registers **`LambdaExpr`** (`param -> body`, right-associative, strictly single-arg; `_ -> body` simply binds `_`), emitting a pure constant `{ __env := {} ; __code := ^( param := $.__arg ; body ) }`.
+   - **Overrides `SelfField` (`.a`)** from `boot0.lang` to perform lexical upward lookup along `#this → #parent(...)`, stopping at any frame containing `__fn_env` (checking `__fn_env` before returning null). Explicit **`#this.a`** (via `Postfix` `p.a`) remains strictly single-frame `#field(#this, a)`.

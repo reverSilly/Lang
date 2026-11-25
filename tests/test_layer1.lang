@@ -211,4 +211,38 @@ check_iso := {
 } ;
 cond := $.check_iso $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
+! 11. Function definition `param -> body` (strictly single-arg) & pure-stdlib closure !
+inc2 := x -> $.x + 1 ;
+cond := $.inc2 41 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.inc2(41) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Ignored single-arg `_ -> ...` (binds `{}` to `_`, symmetric with 1-arg call) !
+get_k := _ -> 99 ;
+cond := $.get_k {} == 99 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Right-assoc body allows `if/else` without outer parens !
+abs_fn := x -> -$.x if $.x < 0 else $.x ;
+cond := $.abs_fn (-7) == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.abs_fn 7 == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Struct argument & early `#break` return !
+add_pt := p -> $.p.a + $.p.b ;
+cond := $.add_pt { a := 10 ; b := 32 } == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+clamp_pos := x -> ( #break(0) if $.x < 0 else ok ; $.x ) ;
+cond := $.clamp_pos (-5) == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.clamp_pos 12 == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Zero-new-syntax explicit closure via ordinary stdlib helper `with_env` !
+with_env := spec -> { __env := $.spec.env ; __code := $.spec.fn.__code } ;
+adder10 := $.with_env { env := { k := 10 } ; fn := (x -> $.k + $.x) } ;
+cond := $.adder10 32 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Curried closure using `param -> body` + `with_env` captured in `__env` !
+make_adder2 := $.with_env {
+    env := { with_env := $.with_env } ;
+    fn  := (base -> $.with_env { env := { k := $.base } ; fn := (x -> $.k + $.x) })
+} ;
+cond := $.make_adder2 10 32 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
 layer1_tests_passed

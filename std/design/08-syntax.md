@@ -10,7 +10,7 @@
    - **`\`**：100% 归还给全文词法转义（`\` + 任意字符构成普通转义字符，失去原语法含义）；
    - **`! ... !`**：语言唯一的注释语法（废除旧版 `!pragma!` 编译器指令通道，元编程统一走 `#compile` + `capabilities`），不给 `/` 与 `*` 增添注释负担；
    - **`#`**：专职 Core Builtin 前缀（如 `#block(p)`、`#this`、`#write(dst, val)`），**废除 `#` 作为中缀连接运算符的含义**；
-   - **`.`**：归属 Layer 1（Stdlib），同时提供中缀 `p.a`（展开为 `#field(p, a)`）与前缀 `.a`（展开为 `#field(#this, a)`），读值即 `$.a`。
+   - **`.`**：归属 Layer 1（Stdlib），中缀 `p.a` 恒展开为单帧/单层 `#field(p, a)`（显式 `#this.a` 即精确查当前帧）；前缀 `.a` 在自举期（`boot0.lang`）为 `#field(#this, a)`，在完整 Layer 1（`functions.lang`）中被覆盖为沿 `#this → #parent` 向上查找（遇到含 `__fn_env` 的函数帧时先查本帧、再查 `__fn_env` 后停止继续上爬），读值即 `$.a`。
 3. **一切字面量与运算符皆归 Layer 1（Stdlib）**：
    - 整数、浮点数（`word.word`）、双引号字节串/字符串（`"..."`）、块 `{ ... }`、算术/比较/赋值/控制流算符，全部在 `#compile` 元层向 Parser 注册，不硬编码进 Core 语义。
 
@@ -34,7 +34,7 @@ SeqExpr     := Primary ( ';' Primary )*
 Primary     := '^' Primary                             ! 唯一延迟特殊形式：生成 Prototype !
              | Builtin '(' ArgList? ')'                ! 17 个带参 Core Builtin 调用 !
              | Builtin                                 ! 5 个零参 Core Builtin：#this #parent #unbound #caller #in !
-             | '(' Expr? ')'                           ! 分组；空括号 () 表示空单元 !
+             | '(' Expr ')'                            ! 纯分组（不可空；空 () 为语法错误，Unit 为 {}，见 09 §1.1）!
              | Word                                    ! Symbol 字面量 !
 ArgList     := Expr ( ',' Expr )*
 ```
@@ -58,12 +58,12 @@ ArgList     := Expr ( ',' Expr )*
 
 | 优先级 | 算符 | 形态 | 目标展开 / 归属 |
 | :--- | :--- | :--- | :--- |
-| **1** | `.a` | prefix | `#field(#this, a)`（当前帧字段指针） |
+| **1** | `.a` | prefix | `boot0`：`#field(#this, a)`；`functions.lang` 覆盖为词法向上查找（遇 `__fn_env` 查完即停）；显式 `#this.a` 保持单帧 |
 | **2** | `p.a` | infix | `#field(p, a)`（或两侧数字 `Word` 走浮点字面量） |
 | **3** | `{ Expr }` | circumfix | 标准库对象构造块（展开见 [06-stdlib-foundations.md](06-stdlib-foundations.md) §3.2） |
 | **4** | `coro @ rhs` | infix | 协程恢复与消息传递分派器（POD Gate + `#resume`） |
 | **5** | `$ptr` | prefix | 标准库 POD Gate 读取算子（`is_pod` + `#deref`） |
-| **6** | `^Expr` | prefix | Layer 0 唯一延迟特殊形式（`Prototype`） |
+| **6** | `^Expr` | prefix | Layer 1 延迟特殊形式（`Prototype`）；紧接其上为 `ApplyExpr`（两 `Prefix` 并列即单参调用，排除 `if`/`else`/`while`） |
 | **7** | `+` `-` `~` | prefix | 一元正、负、按位/逻辑取反 |
 | **8** | `*` `/` `%` | infix | 乘、除、取模（Stdlib `capabilities.intrinsics` 分派） |
 | **9** | `+` `-` | infix | 加、减 |
@@ -71,9 +71,9 @@ ArgList     := Expr ( ',' Expr )*
 | **11** | `<` `>` `~<` `~>` | infix | 大小比较 |
 | **12** | `==` `~=` `<=>` | infix | 相等、不等、三路比较 |
 | **13** | `&` / `|` | infix | 按位/逻辑与、或 |
-| **14** | `->` | infix | Lambda / 映射构造（待函数协议定稿） |
+| **14** | `param -> body` | infix（右结合） | 单参纯函数定义（强制单参，`_ -> body` 绑定 `_`；展开为 `{ __env := {} ; __code := ^( param := $.__arg ; body ) }`） |
 | **15** | `v : pat` / `v ? pat` | infix | 模式匹配可反驳约束 / 纯查询匹配 |
-| **16** | `a if c else b` | mixfix | `#branch(c, ^a, ^b)` |
+| **16** | `a if c else b` | mixfix | `core_syntax`：直接 `#branch(c, ^a, ^b)`（裸 `bytes(1, 1)`，零 `#block`）；`ops.lang` 覆盖为解包 `Boolean.__raw`（零 `#block`） |
 | **17** | `body while cond` | infix | 透明循环展开 |
 | **18** | `dst = val` | infix | 标准库赋值分派器（POD Gate + `destroy` + `#write`） |
 | **19** | `x := rhs` | infix | 标准库单次求值绑定与 Rebind 展开 |
