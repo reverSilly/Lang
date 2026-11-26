@@ -109,7 +109,7 @@ Runtime::Value make_float_cmp_factory(Runtime::RuntimeContext& rt, std::string n
 Runtime::Value build_constants_module(Runtime::RuntimeContext& rt) {
     auto& s = rt.shapes;
     auto shape_val = [&](uint64_t addr) {
-        return Runtime::Value::from_pod(s.shape_meta, *reinterpret_cast<const Runtime::ShapeLayout*>(addr));
+        return rt.make_pointer(Runtime::PointerLayout{addr, s.shape_meta, 0});
     };
 
     return build_struct(rt, {
@@ -168,8 +168,7 @@ Runtime::Value build_field_map_module(Runtime::RuntimeContext& rt) {
             if (p.shape_ptr == 0) {
                 throw std::runtime_error("capabilities.field_map.ptr_shape: null shape_ptr");
             }
-            const auto* sl = reinterpret_cast<const Runtime::ShapeLayout*>(p.shape_ptr);
-            return Runtime::Value::from_pod(ev.rt.shapes.shape_meta, *sl);
+            return ev.rt.make_pointer(Runtime::PointerLayout{p.shape_ptr, ev.rt.shapes.shape_meta, 0});
         })},
     });
 }
@@ -287,11 +286,7 @@ Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
         {"lt_float", make_float_cmp_factory<CM::FLt>(rt, "lt_float")},
         {"le_float", make_float_cmp_factory<CM::FLe>(rt, "le_float")},
 
-        // Structural Shape equality (IntrinsicProto factory) & RawBytes indexing
-        {"eq_shape", native_proto(rt, "capabilities.intrinsics.eq_shape", [](Evaluator& ev) {
-            Runtime::CmpOp op{CM::EqShape, 0, read_sym_field(ev, "lhs"), read_sym_field(ev, "rhs")};
-            return ev.rt.make_proto(ev.rt.prototypes.create_intrinsic(op));
-        })},
+        // RawBytes indexing & slicing
         {"bytes_at", native_proto(rt, "capabilities.intrinsics.bytes_at", [](Evaluator& ev) {
             auto raw = read_raw_bytes(ev, "bytes");
             auto idx = read_field(ev, "index").as_pod<uint64_t>();

@@ -9,6 +9,7 @@
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace reverSilly::Lang::Runtime {
@@ -73,6 +74,7 @@ class ShapeArena {
 private:
     std::vector<std::unique_ptr<ShapeLayout>> shapes_;
     std::unordered_map<ShapeKey, uint64_t, ShapeKeyHash> intern_table_;
+    std::unordered_set<uint64_t> owned_addrs_;
 
     void bootstrap(SymbolPool& syms);
 
@@ -110,6 +112,7 @@ public:
     // Unified single-path #field(ptr, sym): works identically on open frames, closed objects, and addr=0 z_ptr.
     PointerLayout field_of(const PointerLayout& ptr, SymbolId sym) const noexcept;
 
+    bool owns(uint64_t addr) const noexcept { return owned_addrs_.contains(addr); }
     size_t interned_count() const noexcept { return shapes_.size(); }
 };
 

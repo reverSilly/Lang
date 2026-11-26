@@ -10,9 +10,8 @@
 namespace reverSilly::Lang::Ast {
 
 enum class BuiltinKind : uint8_t {
-    // 4 nullary environment & coroutine cursors
+    // 3 nullary environment & coroutine cursors
     This,
-    Parent,
     Caller,
     In,
 
@@ -34,7 +33,8 @@ enum class BuiltinKind : uint8_t {
     Deref,
     Write,
 
-    // 2 navigation & reflection primitives
+    // 3 navigation & reflection primitives
+    Parent,
     Field,
     Shape,
 
@@ -62,7 +62,7 @@ enum class CastKind : uint8_t {
 };
 
 enum class CmpKind : uint8_t {
-    EqBytes, EqShape, SLt, ULt, SLe, ULe, FEq, FLt, FLe,
+    EqBytes, SLt, ULt, SLe, ULe, FEq, FLt, FLe,
 };
 
 struct Expr;

@@ -56,6 +56,7 @@ uint64_t ShapeArena::intern_leaf(uint64_t size, uint64_t align) {
     uint64_t addr = reinterpret_cast<uint64_t>(s.get());
     shapes_.push_back(std::move(s));
     intern_table_.emplace(std::move(key), addr);
+    owned_addrs_.insert(addr);
     return addr;
 }
 
@@ -72,6 +73,7 @@ uint64_t ShapeArena::intern_struct(const std::vector<FieldEntry>& entries, uint6
     uint64_t addr = reinterpret_cast<uint64_t>(s.get());
     shapes_.push_back(std::move(s));
     intern_table_.emplace(std::move(key), addr);
+    owned_addrs_.insert(addr);
     return addr;
 }
 

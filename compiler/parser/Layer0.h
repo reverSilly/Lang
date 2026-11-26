@@ -20,7 +20,7 @@ const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table();
 std::string unescape_word(std::string_view raw);
 
 // Unified extensible Frontend:
-// Layer 0 has 5 hardcoded symbols (\, !...!, #, (,), ;) and 22 symmetric Core builtins.
+// Layer 0 has 5 hardcoded symbols (\, !...!, #, (,), ;) and 21 symmetric Core builtins.
 class Frontend {
 public:
     Peg::Grammar grammar;

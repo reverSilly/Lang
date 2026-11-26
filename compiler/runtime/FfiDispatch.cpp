@@ -95,23 +95,7 @@ ffi_type* map_shape_to_ffi_type(
         return &ffi_type_double;
     }
 
-    std::vector<const FieldEntry*> non_zero;
-    if (!s->is_leaf()) {
-        const FieldEntry* arr = s->fields.entries_begin();
-        for (uint32_t i = 0; i < s->fields.count; ++i) {
-            const auto* sub = reinterpret_cast<const ShapeLayout*>(arr[i].sub_shape_addr());
-            if (sub && sub->size > 0) {
-                non_zero.push_back(&arr[i]);
-            }
-        }
-    }
-
-    bool is_scalar = s->is_leaf() ||
-                     (non_zero.size() == 1 && non_zero[0]->offset() == 0 &&
-                      reinterpret_cast<const ShapeLayout*>(non_zero[0]->sub_shape_addr())->size == s->size &&
-                      reinterpret_cast<const ShapeLayout*>(non_zero[0]->sub_shape_addr())->is_leaf());
-
-    if (is_scalar) {
+    if (s->is_leaf()) {
         switch (s->size) {
             case 1: return &ffi_type_uint8;
             case 2: return &ffi_type_uint16;
@@ -123,6 +107,14 @@ ffi_type* map_shape_to_ffi_type(
         }
     }
 
+    std::vector<const FieldEntry*> non_zero;
+    const FieldEntry* arr = s->fields.entries_begin();
+    for (uint32_t i = 0; i < s->fields.count; ++i) {
+        const auto* sub = reinterpret_cast<const ShapeLayout*>(arr[i].sub_shape_addr());
+        if (sub && sub->size > 0) {
+            non_zero.push_back(&arr[i]);
+        }
+    }
     if (non_zero.empty()) {
         throw std::runtime_error("ffi: composite struct has no non-zero-sized fields");
     }

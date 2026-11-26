@@ -11,7 +11,7 @@
 namespace reverSilly::Lang::Eval {
 
 // Standalone AstValue <-> Runtime::Value stage boundary conversion.
-// reify_ast_value strictly rejects Pointer, Handle, NativeProto, and BoundFfiProto.
+// reify_ast_value rejects stack/frame Pointers (allowing immutable ShapeArena Pointer(Shape)), Handle, NativeProto, and BoundFfiProto.
 Ast::AstValue reify_ast_value(const Runtime::RuntimeContext& rt, const Runtime::Value& val);
 Runtime::Value intern_ast_value(Runtime::RuntimeContext& rt, const Ast::AstValue& av);
 
@@ -121,9 +121,10 @@ public:
 
     Runtime::Value run(const Ast::ExprPtr& expr);
     Runtime::Value eval_proto_sync(uint64_t proto_addr);
-    uint64_t canonical_shape_addr(const Runtime::ShapeLayout& sl);
 
 private:
+    std::exception_ptr child_exception_ = nullptr;
+
     struct ResumeAwaiter {
         Evaluator& ev;
         Runtime::Coroutine* target;

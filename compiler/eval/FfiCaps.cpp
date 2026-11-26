@@ -37,15 +37,21 @@ ParsedAbi read_and_validate_abi(Evaluator& ev, std::string_view ctx_name) {
     Runtime::PointerLayout abi_ptr{
         reinterpret_cast<uint64_t>(abi_val.bytes.data()), abi_val.shape_addr, 0};
 
-    auto args_sl = read_abi_field(ev.rt, abi_ptr, "args", ev.rt.shapes.shape_meta, ctx_name)
-                       .as_pod<Runtime::ShapeLayout>();
-    auto ret_sl = read_abi_field(ev.rt, abi_ptr, "ret", ev.rt.shapes.shape_meta, ctx_name)
-                      .as_pod<Runtime::ShapeLayout>();
+    auto read_shape_ptr = [&](std::string_view field_name) -> uint64_t {
+        auto sp = read_abi_field(ev.rt, abi_ptr, field_name, ev.rt.shapes.pointer_shape, ctx_name)
+                      .as_pod<Runtime::PointerLayout>();
+        if (sp.shape_ptr != ev.rt.shapes.shape_meta || sp.addr == 0 || !ev.rt.shapes.owns(sp.addr)) {
+            throw std::runtime_error(
+                std::string(ctx_name) + ": abi field '" + std::string(field_name) +
+                "' must be a valid Pointer(Shape) in ShapeArena");
+        }
+        return sp.addr;
+    };
+    uint64_t args_addr = read_shape_ptr("args");
+    uint64_t ret_addr = read_shape_ptr("ret");
     auto cc_sym = read_abi_field(ev.rt, abi_ptr, "cc", ev.rt.shapes.symbol_shape, ctx_name)
                       .as_pod<Runtime::SymbolId>();
 
-    uint64_t args_addr = ev.canonical_shape_addr(args_sl);
-    uint64_t ret_addr = ev.canonical_shape_addr(ret_sl);
     ev.rt.ffi_cache.validate_abi(ev.rt, args_addr, ret_addr, cc_sym);
     return ParsedAbi{args_addr, ret_addr, cc_sym};
 }
