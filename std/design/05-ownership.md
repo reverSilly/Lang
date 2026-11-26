@@ -46,9 +46,9 @@
 
 ## 四、`#block` 对象构造、剥离与连续内存闭合
 
-设 `#block(^p)` 在父块 `P` 中求值，其隐式分配的 `self root` 为 `R_B`：
+设 `#block(p, is_mut)` 在父块 `P` 中求值，其隐式分配的 `self root` 为 `R_B`：
 
-1. **归属父块与就地构造**：`R_B` 是父块 `P` 的直接子 `location`，`#block(^p)` 求值完毕（无论是自然到底还是经 `#break(val)` 退出）后返回指向 `R_B` 的未绑定 `live` `Pointer` value（挂入 `P` 的 `#unbound`），父块 `P` 可用 `#bind(x, ...)`（即 `x := { ... }` 或 `b := move(.a)`）将其直接命名到 `P` 的符号表。
+1. **归属父块与就地构造**：`R_B` 是父块 `P` 的直接子 `location`，其 `mutability` 在进入 `#block` 时由 `is_mut` 永久确定（`#bind` 不改变槽可变性）。`#block(p, is_mut)` 求值完毕（无论是自然到底闭合压平，还是经 `#break(val)` 写入结果值）后，均在父块 `P` 中物化 `R_B` 为未绑定 `live` 直接子槽（出现在 `P` 的 `FieldMap` array 末尾，`sym == 0, state == Live, mutability == is_mut`）并返回指向 `R_B` 的胖指针 `Pointer`；父块 `P` 可用 `#bind(x, ...)`（即 `x := { ... }` 或 `b := move(.a)`）将其直接命名到 `P` 的符号表。
 2. **构建期动态性（Constructing）**：在 `p` 执行期间，`R_B` 处于构建状态，块内可通过 `#this` 及 `.field`（即 `#field(#this, field)`）读写字段。
 3. **闭合相变（Constructing → Closed Contiguous Object）**：
    - 当 `{ ... }` 块准备闭合时：

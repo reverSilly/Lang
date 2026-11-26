@@ -26,7 +26,7 @@ This document records the architectural refinements finalized during Compiler St
 - **3 Nullary Environment & Coroutine Cursors**: `#this`, `#caller`, `#in` *(note: `#unbound` removed — replaced by reverse scanning `#this`'s `Shape` via `capabilities.field_map.at`)*
 - **5 Evaluation & Coroutine Lifecycle / Reflection**:
   - `#evaluate(p)` — Execute `Prototype` `p` in current `#this` frame.
-  - `#block(p)` — Push child `ConstructingFrame` (mounted as an active anonymous child slot in parent's `live_shape`), execute `p`, close & flatten on normal completion, pop frame.
+  - `#block(p, is_mut)` — Explicit 2-arg builtin (symmetric with `#allocate(s, is_mut)` / `#allocate_val(v, is_mut)`; `is_mut` is `bytes(1, 1)`). Pushes child `ConstructingFrame` (mounted as an active anonymous child slot in parent's `live_shape`), executes `p`; on normal completion, strips `Uninitialized` slots, closes & flattens all `Live` bound slots into a contiguous `Value`, pops child frame, materializes an **unbound `Live` direct child slot `R_B`** in the parent frame with `mutability = is_mut` (immutable once created; `#bind` does not alter mutability), and returns its fat `Pointer` (`sym == 0, state == Live` in parent's `FieldMap` array).
   - `#new(p)` — Create a `Suspended` coroutine from `Prototype` `p` (with root frame eagerly initialized), returning an 8B generational `Handle`.
   - `#destroy(coro)` — Explicitly reclaim a `Suspended` (abandoned) coroutine's stack & C++20 frame, bump its generation to invalidate stale `Handle`s, returning `bytes(1, 1)` (`0x01`/`0x00`; does not synthesize a body value).
   - `#coro_root_frame(coro)` — Return the fat `Pointer` to a `Suspended` coroutine's root `ConstructingFrame` (enabling Stdlib recursive Mark-Sweep GC and RAII cleanup).
@@ -35,7 +35,7 @@ This document records the architectural refinements finalized during Compiler St
 - **3 Navigation & Reflection**: `#parent(ptr)` (returns the parent OpenFrame pointer for an active `ConstructingFrame`, or null for root/non-open-frame pointers, enabling multi-level `#parent(#parent(#this))` traversal), `#field(ptr, sym)`, `#shape(val)`
 - **3 Control Flow**:
   - `#branch(cond, p1, p2)` — `cond` is `bytes(1, 1)` (non-zero is truthy, `0x00` is falsy).
-  - `#break(val)` — Single-layer exit from the innermost `#block` (pops `#this` and returns `val` directly). At a coroutine's root frame, terminates the coroutine (`Dead`), delivers `val` into `#caller`'s `#in` slot, immediately reclaims its resources, and symmetrically transfers to `#caller`.
+  - `#break(val)` — Single-layer exit from the innermost `#block(p, is_mut)`: pops `#this` (discarding any remaining child slots), materializes `val` into a new **unbound `Live` direct child slot `R_B`** in the parent frame with `mutability = is_mut`, and returns its fat `Pointer` (`sym == 0, state == Live` in parent's `FieldMap` array). At a coroutine's root frame, terminates the coroutine (`Dead`), delivers `val` into `#caller`'s `#in` slot, immediately reclaims its resources, and symmetrically transfers to `#caller`.
   - `#resume(coro, val)` — Symmetric coroutine transfer: suspends current coroutine, writes `val` into `coro`'s `#in` slot, sets `coro->caller = current`, and transfers control to `coro`.
 
 ## 2. Unified `Shape` & Open `ConstructingFrame` Model
@@ -63,7 +63,7 @@ ShapeLayout (40B, align 8):
 
 - **Ordinary Fat Pointer `#this` / `#parent(ptr)` / `#coro_root_frame(coro)`**: Each returns a regular `PointerLayout { addr = frame_addr, shape_ptr = &frame->live_shape, mutability = 1 }`. Every slot's `FieldEntry.ptr.addr` stores the 64-bit unsigned delta `slot_addr - frame_addr` (mod $2^{64}$), so `ptr.addr + fe.ptr.addr == slot_addr`.
 - **Single Path for `#field(ptr, sym)`**: Open frames, closed objects, and `addr == 0` zero-base reflection pointers all execute the exact same lookup (`fields.find(sym)` + `ptr.addr + fe.ptr.addr`), with zero open-frame special cases.
-- **Unified Call Stack & Object Tree**: When `#block(p)` pushes child frame `B`, `B` is mounted as an active `Live` anonymous child slot inside parent frame `A`'s `live_shape` (at most one active child frame slot per frame). Consequently:
+- **Unified Call Stack & Object Tree**: When `#block(p, is_mut)` pushes child frame `B`, `B` is mounted as an active `Live` anonymous child slot inside parent frame `A`'s `live_shape` (at most one active child frame slot per frame). Consequently:
   1. Stdlib computes `top_frame` itself by descending from `#coro_root_frame(coro)` through the unique open-frame child slot.
   2. Stdlib RAII reverse-scans `entries[count - 1 .. 0]` via `capabilities.field_map.at` to invoke `__destroy` on every `Live` slot (both named bindings and anonymous temporaries) uniformly.
   3. Stdlib optional Mark-Sweep Coroutine GC uses a single recursive `Live`-slot scanner starting from `#coro_root_frame(coro)`, automatically traversing the entire nested `#block` stack, marking reachable `Handle`s, running `__destroy` on unreachable orphan cycles, and finally freeing their raw stacks via `#destroy(coro)` — achieving **zero GC in Core** with **full RAII-complete GC in Stdlib**.
@@ -124,7 +124,7 @@ Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C+
    - Registers Shape-dispatched operators: P7 unary `+`/`-`/`~` (`~` dispatches logical NOT on `Boolean` and `bit_not` on integers), P8 `*`, P9 `+`/`-`, P11/12 `<`/`==`.
    - **Overrides `IfExpr` & `WhileExpr`** from `core_syntax.lang` to unwrap `Boolean.__raw` directly in `#this` with **zero `#block`** (preserving full transparency).
 4. **`lib/std/syntax/functions.lang`**:
-   - Registers **`ApplyExpr`** (juxtaposition of two `Prefix` expressions = strictly single-arg call, excluding `if`/`else`/`while`), expanding via a two-step handoff into a fresh `#block` with `__arg`, `__fn_env`, and `#break(#evaluate($.__code))`.
+   - Registers **`ApplyExpr`** (juxtaposition of two `Prefix` expressions = strictly single-arg call, excluding `if`/`else`/`while`), expanding via a two-step handoff into a fresh `#block(..., false)` (default immutable; returns unbound `Pointer` to caller-frame result slot `R_B`; no call-site `mut` syntax and no `box_mut` in Phase 1) with `__arg`, `__fn_env`, and `#break(#evaluate($.__code))`.
    - Registers **`LambdaExpr`** (`param -> body`, right-associative, strictly single-arg; `_ -> body` simply binds `_`), emitting a pure constant `{ __env := {} ; __code := ^( param := $.__arg ; body ) }`.
    - **Overrides `SelfField` (`.a`)** from `boot0.lang` to perform lexical upward lookup along `#this → #parent(...)`, stopping at any frame containing `__fn_env` (checking `__fn_env` before returning null). Explicit **`#this.a`** (via `Postfix` `p.a`) remains strictly single-frame `#field(#this, a)`.
 5. **`lib/std/syntax/tuples.lang`**:

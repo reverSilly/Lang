@@ -9,7 +9,7 @@
 2. **符号纯粹性（一符一职，拒绝歧义复用）**：
    - **`\`**：100% 归还给全文词法转义（`\` + 任意字符构成普通转义字符，失去原语法含义）；
    - **`! ... !`**：语言唯一的注释语法（废除旧版 `!pragma!` 编译器指令通道，元编程统一走 `#compile` + `capabilities`），不给 `/` 与 `*` 增添注释负担；
-   - **`#`**：专职 Core Builtin 前缀（如 `#block(p)`、`#this`、`#write(dst, val)`），**废除 `#` 作为中缀连接运算符的含义**；
+   - **`#`**：专职 Core Builtin 前缀（如 `#block(p, is_mut)`、`#this`、`#write(dst, val)`），**废除 `#` 作为中缀连接运算符的含义**；
    - **`.`**：归属 Layer 1（Stdlib），中缀 `p.a` 恒展开为单帧/单层 `#field(p, a)`（显式 `#this.a` 即精确查当前帧）；前缀 `.a` 在自举期（`boot0.lang`）为 `#field(#this, a)`，在完整 Layer 1（`functions.lang`）中被覆盖为沿 `#this → #parent` 向上查找（遇到含 `__fn_env` 的函数帧时先查本帧、再查 `__fn_env` 后停止继续上爬），读值即 `$.a`。
 3. **一切字面量与运算符皆归 Layer 1（Stdlib）**：
    - 整数、浮点数（`word.word`）、双引号字节串/字符串（`"..."`）、块 `{ ... }`、算术/比较/赋值/控制流算符，全部在 `#compile` 元层向 Parser 注册，不硬编码进 Core 语义。
@@ -40,7 +40,7 @@ ArgList     := Expr ( ',' Expr )*
 ```
 
 - **全 Layer 0 硬编码符号仅 6 个**：`\`（转义）、`!`（注释）、`#`（Builtin 前缀）、`(` `,` `)`（分组与参数列表）、`^`（Prototype）、`;`（序列）。
-- **无 `block sth` / `new sth` / `mutable` 等特殊前缀语法**：`#allocate(s, is_mut)`、`#allocate_val(v, is_mut)`、`#block(p)`、`#evaluate(p)`、`#new(p)`、`#compile(e)` 全部统一在 `Builtin '(' ArgList ')'` 这一条产生式下。
+- **无 `block sth` / `new sth` / `mutable` 等特殊前缀语法**：`#allocate(s, is_mut)`、`#allocate_val(v, is_mut)`、`#block(p, is_mut)`、`#evaluate(p)`、`#new(p)`、`#compile(e)` 全部统一在 `Builtin '(' ArgList ')'` 这一条产生式下。
 
 ## 三、Layer 1：标准库算符与字面量注册层
 

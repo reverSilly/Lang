@@ -16,7 +16,7 @@
 | 层级与函数 | 作用对象 | 核心职责 | 典型场景 |
 | :--- | :--- | :--- | :--- |
 | **Stdlib `destroy(ptr)`** | **任意 `live` `Pointer`**（含已闭合对象内部可变字段、或经标准库 `recast` 重解释出的元素指针） | 1. 若 `ptr.shape_ptr` 含 `__destroy` 字段（`#field(z_ptr, __destroy) ~= null`），按普通标准库调用约定传入 `ptr` 执行它；<br>2. 经 `s.fields`（`capabilities.map`）按定义逆序遍历所有 `live` 字段，递归调用 `destroy(#field(ptr, sym))` | `DynamicArray.pop_back()` 销毁末尾元素；`.p.f = val` 覆写已闭合对象可变字段前就地析构旧值；被 `drop(ptr)` 调用 |
-| **Core `#drop(ptr)`** | **构建期帧（`#this` 或 `#parent`）的直接子槽 `Pointer`** | 要求 `ptr` 下无未清空子槽，仅负责将该槽状态标记为 `empty` 并从 `fields` 游标或 `#unbound` 链中摘除（闭合时由 `#block` 静默剥离） | 释放构建期局部变量槽位、取消字段导出、在 `move` 与 `swap` 中零 RAII 释放源槽/临时槽 |
+| **Core `#drop(ptr)`** | **构建期帧（`#this` 或 `#parent`）的直接子槽 `Pointer`** | 要求 `ptr` 下无未清空子槽，直接删除该构建期直接子槽及其符号绑定（从 `FieldMap` array 与 hashmap 同时移除，无 `empty` 态） | 释放构建期局部变量槽位、取消字段导出、在 `move` 与 `swap` 中零 RAII 释放源槽/临时槽 |
 | **Stdlib `drop(ptr)`** | **构建期帧的 `live` 直接子槽 `Pointer`** | 先调用 `destroy(ptr)` 完成递归析构，再调用 Core `#drop(ptr)` 将槽位置为 `empty` | 局部资源提前销毁、块退出逆序清理、未闭合块同名变量跨类型 Rebind 前的旧槽清理 |
 
 ### 2.2 `move` 与 `swap` 的标准库实现
@@ -35,13 +35,13 @@
    ! 1. 移出构建期槽 .a 并返回当前块未绑定新槽指针：move(.a) -> Pointer !
    #block(^(
        #bind(cur, #allocate_val(#deref(#parent.a), false)); ! 暂存外层源槽位段 !
-       #drop(#parent.a);                                    ! 零 RAII 置空外层源槽 a（免除原槽析构） !
+       #drop(#parent.a);                                    ! 零 RAII 删除外层源槽 a（免除原槽析构） !
        #break(
            v := #deref(.cur);
-           #drop(.cur);                                     ! 置空本子帧临时槽 cur，满足 #break 前本帧全空条件 !
-           v                                                ! #break 将 v 直接填入子 block 的 self root 返回给父块 !
+           #drop(.cur);                                     ! 删除本子帧临时槽 cur，满足 #break 前本帧全空条件 !
+           v                                                ! #break 将 v 直接填入父帧的 self root 返回 Pointer !
        )
-   ))
+   ), false)
 
    ! 2. 移入任意可写目标位置 dst_ptr（含 uninitialized 槽、mutable 槽、或已闭合对象的 mutable 字段 .p.f） !
    (destroy(dst_ptr)) if is_live(dst_ptr);                  ! 若目标已 live（如 .p.f），先就地析构旧值（不调 #drop，零空洞） !
@@ -92,13 +92,13 @@
 ### 3.2 对象构造块 `{ Expr }` vs 过程求值块 `block1`
 
 1. **对象构造块 `{ Expr }`（及空块 `{}`）**：
-   - 空块 `{}` 直接展开为 `#block(^())`；
+   - 空块 `{}` 直接展开为 `#block(p_empty, false)`（返回父帧未绑定 `Unit` 槽 `Pointer`）；
    - 非空块 `{ Expr }` 在内部首部绑定 `__parent := #parent`，求值 `Expr`；
    - **闭合前清理**：
      1. 循环调用 **`(drop(#unbound)) while (#unbound ~= null)`**，按 LIFO 逆序析构并置空块内求值期间产生的所有未命名 `live` 临时槽；
      2. 对所有隐藏守卫 `__defer_k` 按逆序调用 `drop(.__defer_k)`，并调用 `#drop(.__parent)`；
-     3. 内核 `#block` 闭合逻辑自动剥离所有 `uninitialized` 与 `empty` 槽，仅将剩余处于 `live` 状态的具名绑定字段压平为最终连续内存对象。
-2. **过程求值块 `block1`（`#block(^(break (#evaluate(proto))))`）**：
+     3. 内核 `#block` 闭合逻辑自动剥离所有仍处于 `uninitialized` 的槽，仅将剩余处于 `live` 状态的具名绑定字段压平为最终连续内存对象，并物化为父帧未绑定 `live` 匿名槽返回其 `Pointer`。
+2. **过程求值块 `block1`（`#block(^(break (#evaluate(proto))), false)`）**：
    - 当 `#evaluate(proto)` 算出尾表达式结果时，外层的标准库 `break` 立即触发，通过 `#unbound` 与 `Shape.fields` 逆序 `drop` 当前块中所有处于 `live` 的临时槽、具名局部变量与 `__defer_k` 守卫，最后通过内核单层 `#break(val)` 将尾表达式结果直接填入当前块的 `self root` 返回。
 
 ### 3.3 单层 `#break(val)` 与标准库多层 `break target_ptr expr`（及 `return`）接力

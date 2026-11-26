@@ -8,7 +8,7 @@
 语言在内核层面彻底解耦 **“延迟代码（`Prototype`）”** 与 **“环境/栈帧分配（`#block` / `#new`）”**，且**一切表达式求值结果皆为 `value`（对 `location` 的引用统一表示为普通的胖指针 `Pointer` value）**：
 
 1. **`^Expr`（Prototype）是全语言唯一拦截求值的语法特殊形式**：它把未求值的表达式 `Expr` 包装成一个纯代码值（`Prototype` value），不携带任何环境或 AST 包袱。
-2. **求值原语全是接收 `Prototype` 值的普通内置调用**：环境永远由触发求值的原语提供——在当前环境就地展开用 `#evaluate(p)`，开辟子帧求值用 `#block(p)`，开辟独立协程求值用 `#new(p)`。
+2. **求值原语全是接收 `Prototype` 值的普通内置调用**：环境永远由触发求值的原语提供——在当前环境就地展开用 `#evaluate(p)`，开辟子帧求值用 `#block(p, is_mut)`，开辟独立协程求值用 `#new(p)`。
 3. **内核零高层概念**：内核不存在独立的“函数定义”、不认识 `__destroy` 钩子、不处理 RAII、不检查 POD、也不内置高层算术类型；完整 Core 原语签名总表见 [03-symbols-locations-matching.md](03-symbols-locations-matching.md) §3。
 
 ## 二、`#evaluate` 与 `#block` 的正交分工
@@ -23,9 +23,10 @@
       #evaluate($.init_part_b)
   }
   ```
-- **`#block(proto)`（子帧隔离 / 连续内存对象构造与就地构造）**：
-  - 只要定义方希望词法隔离或构造一个独立对象，就使用 `#block`（标准库衍生出保留字段的对象构造块 `{ ... }` 与自动清理局部变量的求值块 `block1`，见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）。
-  - **就地构造（In-place Construct / RVO）**：当 `#block(proto)` 作为初始化表达式（如 `x := { ... }`、`b := move(.a)` 或向空槽构造）时，编译器后端可直接将父块的目标槽位作为该 `block` 的 `self root` 原地构造，消除中间临时槽拷贝与移动开销。
+- **`#block(proto, is_mut)`（子帧隔离 / 连续内存对象构造与就地构造）**：
+  - 显式双参，与 `#allocate(s, is_mut)`、`#allocate_val(v, is_mut)` 完全对称（`is_mut` 为 `bytes(1, 1)`，`0x00` 不可变、非零可变）。无论是正常闭合还是经 `#break(val)` 退出，都在父帧中物化出未绑定 `live` 直接子槽 `self root`（其 `mutability` 永久定格为 `is_mut`，`#bind` 不改变可变性）并返回指向它的胖指针 `Pointer`。
+  - 只要定义方希望词法隔离、函数调用或构造独立对象，都统一使用 `#block`（标准库衍生出保留字段的对象构造块 `{ ... }` 与自动清理局部变量的求值块 `block1` / 函数调用 `ApplyExpr`，见 [06-stdlib-foundations.md](06-stdlib-foundations.md)）。
+  - **就地构造（In-place Construct / RVO）**：当 `#block(proto, is_mut)` 作为初始化表达式（如 `x := { ... }`、`b := move(.a)` 或向空槽构造）时，编译器后端可直接将父块的目标槽位作为该 `block` 的 `self root` 原地构造，消除中间临时槽拷贝与移动开销。
 
 ### 2.2 严禁显式 `with <ptr> #evaluate`
 
@@ -97,7 +98,7 @@ c := $($.gen @ ()); ! 3 !
 
 ## 六、验收用例（自检清单）
 
-1. `{ a := 1; b := 2 }` 展开后通过 `#block` 返回指向包含连续字段 `a`、`b` 的 `self root` location 的 `Pointer`（块内产生的未绑定临时槽由 `#unbound` 逆序 `drop`，隐式绑定的 `__parent` 在闭合前被 `#drop` 置空并由内核剥离，最终对象零额外字节开销）；空块 `{}` 展开为 `#block(^())` 返回空对象指针。
+1. `{ a := 1; b := 2 }` 展开后通过 `#block(p, false)` 返回指向父帧中匿名 `self root` location（含连续字段 `a`、`b`，`mutability = 0`）的未绑定 `Pointer`（块内产生的未绑定临时槽由标准库按 `FieldMap` 逆序 `drop`，隐式绑定的 `__parent` 在闭合前由 `#drop` 删除槽与 bind，最终对象零额外字节开销）；空块 `{}` 展开为 `#block(p_empty, false)` 返回空对象未绑定 `Pointer`。
 2. 同一 `{ ... }` 内连续执行两次 `#evaluate`，通过 `#this` 共同向当前构建中的 `self root` 绑定字段，闭合后一次性压平为完整连续对象。
 3. 在嵌套块内，`#parent(#this)` 指向直接外层构建块，多层嵌套块可通过 `#parent(#parent(#this))` 直接逐级上溯访问任意祖先帧，且透明 `if`（`#branch`）不产生额外帧层。
 4. `c := #new(proto)` 惰性创建协程，首次 `$.c @ 10` 直接经 `#resume($.c, 10)` 将 `10` 装入 `c` 的 `#in` 槽并从 `proto` 入口启动，无任何值丢失。
