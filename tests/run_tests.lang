@@ -30,8 +30,20 @@
 #evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
 #drop(#field(#this, fe)) ; #drop(#field(#this, arena)) ; #drop(#field(#this, F)) ;
 
-! Run full boot0 -> boot1 -> layer1 bootstrap (binds fe & arena for fe_layer1) !
+! Run boot0 -> boot1 -> core_syntax bootstrap (binds fe & arena for core_syntax) !
 #evaluate(#deref(#field(#this, boot_p))) ;
+
+! 1b. Load Layer 1 syntax preset (lib/std/syntax/layer1.lang) onto fe !
+#bind(sym, #allocate_val(lib/std/syntax/layer1.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+#bind(l1_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+#evaluate(#deref(#field(#this, l1_p))) ;
 
 ! 2. Compile-time stage lib/std/libc.lang -> pure stageable `libc` module value !
 #bind(sym, #allocate_val(lib/std/libc.lang, #deref(#field(#this, F)))) ;

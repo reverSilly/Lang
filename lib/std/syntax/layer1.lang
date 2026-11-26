@@ -1,0 +1,41 @@
+! ============================================================================ !
+! lib/std/syntax/layer1.lang — Layer 1 Syntax Preset (written in core_syntax)  !
+!                                                                              !
+! Assembles the full Layer 1 frontend `fe_layer1` from optional syntax modules:!
+!   1. lib/std/syntax/types.lang     — ZST-marker primitive type system        !
+!   2. lib/std/syntax/literals.lang  — Typed literal rules (true/false, i64)   !
+!   3. lib/std/syntax/ops.lang       — Type-dispatched operators (P7 ~ P12)    !
+!   4. lib/std/syntax/functions.lang — Juxtaposition calls, lambdas, `.sym`    !
+! ============================================================================ !
+
+! 1. Load lib/std/syntax/types.lang -> binds `types` in root #this !
+path := "lib/std/syntax/types.lang" ;
+src := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
+p_types := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+#evaluate($.p_types) ;
+
+! 2. Load lib/std/syntax/literals.lang -> registers Boolean & i64 literals on fe !
+path := "lib/std/syntax/literals.lang" ;
+src := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
+p_lits := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+#evaluate($.p_lits) ;
+
+! 3. Load lib/std/syntax/ops.lang -> registers type-dispatched operators on fe !
+path := "lib/std/syntax/ops.lang" ;
+src := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
+p_ops := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+#evaluate($.p_ops) ;
+
+! 4. Load lib/std/syntax/functions.lang -> registers ApplyExpr, LambdaExpr & `.sym` !
+path := "lib/std/syntax/functions.lang" ;
+src := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
+p_fns := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+#evaluate($.p_fns) ;
+
+! Export full Layer 1 frontend as fe_layer1 !
+fe_layer1 := $.fe ;
+$.fe_layer1

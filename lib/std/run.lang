@@ -1,98 +1,32 @@
 ! ============================================================================ !
-! lib/std/run.lang — Layer 1 User Program Runner (with default `libc`)         !
+! lib/std/run.lang — Layer 1 Target Program Runner (with default `libc`)       !
 !                                                                              !
-! Usage: lang lib/std/run.lang <program.lang>                                  !
-!   1. Bootstraps Layer 1 (boot0 -> boot1 -> layer1) -> fe (fe_layer1), arena  !
-!   2. Stages `lib/std/libc.lang` at compile time -> pure stageable `libc`     !
-!   3. Reads & parses <program.lang> from root `#this.args.0`, lifts `libc`    !
-!      into the target standalone Ast via `ast.value` + `ast.seq`              !
-!   4. Executes the resulting Ast in an isolated target RuntimeContext +       !
-!      Evaluator via `capabilities.backends.interpreter.run`                   !
+! Usage: lang lib/std/start.lang lib/std/run.lang <program.lang>               !
+!   1. Stages `lib/std/libc.lang` at compile time -> pure stageable `libc`     !
+!   2. Reads & parses <program.lang> from `args.1`                             !
+!   3. Lifts `libc` into target Ast and runs via `backends.interpreter.run`    !
 ! ============================================================================ !
 
-! 1. Bootstrap Layer 1 (boot0 -> boot1 -> layer1) in root #this !
-#bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
-#bind(fe0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), new_layer0))), #deref(#field(#this, F)))) ;
-#bind(arena0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), new_arena))), #deref(#field(#this, F)))) ;
+! 1. Stage lib/std/libc.lang at compile time -> pure stageable `libc` value !
+path := "lib/std/libc.lang" ;
+src  := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast  := #evaluate($.c_syn.parse) ; #drop(.src) ;
+libc_p := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+libc := #block($.libc_p) ;
 
-#bind(sym, #allocate_val(lib/std/boot/boot0.lang, #deref(#field(#this, F)))) ;
-#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, sym)) ;
+! 2. Read & parse target program from CLI `args.1` !
+path := $.args.\1 ;
+src  := #evaluate($.c_io.read_file) ; #drop(.path) ;
+user_ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
 
-#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, path)) ;
+! 3. Lift `libc` into target Ast: `#bind(libc, #allocate_val(<libc>, false)) ; <user_ast>` !
+a_false := #block(^( arena := $.arena ; val := $.F ; #break(#evaluate($.c_ast.value)) )) ;
+a_w_libc := #block(^( arena := $.arena ; sym := libc ; #break(#evaluate($.c_ast.word)) )) ;
+a_v_libc := #block(^( arena := $.arena ; val := $.libc ; #break(#evaluate($.c_ast.value)) )) ;
+a_alloc_libc := #block(^( arena := $.arena ; kind := allocate_val ; \0 := $.a_v_libc ; \1 := $.a_false ; #break(#evaluate($.c_ast.builtin)) )) ;
+a_bind_libc  := #block(^( arena := $.arena ; kind := bind ; \0 := $.a_w_libc ; \1 := $.a_alloc_libc ; #break(#evaluate($.c_ast.builtin)) )) ;
+ast := #block(^( arena := $.arena ; \0 := $.a_bind_libc ; \1 := $.user_ast ; #break(#evaluate($.c_ast.seq)) )) ;
 
-#bind(fe, #allocate_val(#deref(#field(#this, fe0)), #deref(#field(#this, F)))) ;
-#bind(arena, #allocate_val(#deref(#field(#this, arena0)), #deref(#field(#this, F)))) ;
-#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, src)) ;
-#bind(boot_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, ast)) ;
-#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
-#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
-#drop(#field(#this, fe)) ; #drop(#field(#this, arena)) ; #drop(#field(#this, F)) ;
-
-#evaluate(#deref(#field(#this, boot_p))) ;
-
-! 2. Stage lib/std/libc.lang at compile time -> pure stageable `libc` value !
-#bind(sym, #allocate_val(lib/std/libc.lang, #deref(#field(#this, F)))) ;
-#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, sym)) ;
-
-#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, path)) ;
-
-#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, src)) ;
-
-#bind(libc_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, ast)) ;
-#bind(libc, #allocate_val(#block(#deref(#field(#this, libc_p))), #deref(#field(#this, F)))) ;
-
-! 3. Read & parse user program from CLI `#this.args.0` !
-#bind(path, #allocate_val(#deref(#field(#field(#this, args), 0)), #deref(#field(#this, F)))) ;
-#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, path)) ;
-
-#bind(user_ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, src)) ;
-
-! 4. Lift `libc` into target Ast: `#bind(libc, #allocate_val(<libc>, false)) ; <user_ast>` !
-#bind(val, #allocate_val(#deref(#field(#this, F)), #deref(#field(#this, F)))) ;
-#bind(a_false, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, val)) ;
-
-#bind(sym, #allocate_val(libc, #deref(#field(#this, F)))) ;
-#bind(a_w_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), word))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, sym)) ;
-
-#bind(val, #allocate_val(#deref(#field(#this, libc)), #deref(#field(#this, F)))) ;
-#bind(a_v_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), value))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, val)) ;
-
-#bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, a_v_libc)), #deref(#field(#this, F)))) ;
-#bind(1, #allocate_val(#deref(#field(#this, a_false)), #deref(#field(#this, F)))) ;
-#bind(a_alloc_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
-
-#bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, a_w_libc)), #deref(#field(#this, F)))) ;
-#bind(1, #allocate_val(#deref(#field(#this, a_alloc_libc)), #deref(#field(#this, F)))) ;
-#bind(a_bind_libc, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
-
-#bind(0, #allocate_val(#deref(#field(#this, a_bind_libc)), #deref(#field(#this, F)))) ;
-#bind(1, #allocate_val(#deref(#field(#this, user_ast)), #deref(#field(#this, F)))) ;
-#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), seq))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
-
-! 5. Execute in isolated target RuntimeContext + Evaluator !
-#bind(result, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, ast)) ;
-
-! 6. Clean up compiler arena & frontend and return target result !
-#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
-#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
-
-#deref(#field(#this, result))
+! 4. Execute in isolated target RuntimeContext + Evaluator !
+run_res := #evaluate($.caps.backends.interpreter.run) ; #drop(.ast) ;
+$.run_res

@@ -1,0 +1,63 @@
+! ============================================================================ !
+! lib/std/start.lang — Layer 0 -> Layer 1 Compile-Script Entry Point           !
+!                                                                              !
+! Usage: lang lib/std/start.lang <script.lang> [args...]                       !
+!   1. Bootstraps core_syntax (boot0 -> boot1 -> core_syntax) -> fe, arena     !
+!   2. Loads full Layer 1 syntax preset (lib/std/syntax/layer1.lang) onto fe   !
+!   3. Parses & evaluates <script.lang> (#this.args.0) in compile-time env     !
+!      (inheriting capabilities, fe, arena, args)                              !
+!   4. Cleans up arena & fe and returns the script result                      !
+! ============================================================================ !
+
+! 1. Bootstrap core_syntax (boot0 -> boot1 -> core_syntax) in root #this !
+#bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+#bind(fe0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), new_layer0))), #deref(#field(#this, F)))) ;
+#bind(arena0, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), new_arena))), #deref(#field(#this, F)))) ;
+
+#bind(sym, #allocate_val(lib/std/boot/boot0.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+
+#bind(fe, #allocate_val(#deref(#field(#this, fe0)), #deref(#field(#this, F)))) ;
+#bind(arena, #allocate_val(#deref(#field(#this, arena0)), #deref(#field(#this, F)))) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+#bind(boot_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
+#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
+#drop(#field(#this, fe)) ; #drop(#field(#this, arena)) ; #drop(#field(#this, F)) ;
+
+#evaluate(#deref(#field(#this, boot_p))) ;
+
+! 2. Load full Layer 1 syntax preset onto fe !
+#bind(sym, #allocate_val(lib/std/syntax/layer1.lang, #deref(#field(#this, F)))) ;
+#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, sym)) ;
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+#bind(l1_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+#evaluate(#deref(#field(#this, l1_p))) ;
+
+! 3. Parse & evaluate user compile script from CLI `#this.args.0` !
+#bind(path, #allocate_val(#deref(#field(#field(#this, args), 0)), #deref(#field(#this, F)))) ;
+#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, path)) ;
+#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, src)) ;
+#bind(script_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
+#drop(#field(#this, ast)) ;
+
+#bind(start_result, #allocate_val(#evaluate(#deref(#field(#this, script_p))), #deref(#field(#this, F)))) ;
+
+! 4. Clean up compiler arena & frontend and return result !
+#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
+#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
+
+#deref(#field(#this, start_result))

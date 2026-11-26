@@ -161,6 +161,6 @@ add_test(
 
 add_test(
     NAME test_run_layer1
-    COMMAND lang ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/run.lang ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_layer1.lang
+    COMMAND lang ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/start.lang ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/run.lang ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_layer1.lang
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
 )

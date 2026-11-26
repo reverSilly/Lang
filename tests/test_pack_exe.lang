@@ -1,6 +1,6 @@
 ! ============================================================================ !
 ! tests/test_pack_exe.lang — Standalone Packed Executable E2E Test             !
-! Built via: lang lib/std/build.lang tests/test_pack_exe.lang <out_exe>        !
+! Built via: lang lib/std/start.lang lib/std/build.lang tests/test_pack_exe.lang <out_exe>        !
 ! Run via:   <out_exe> hello                                                   !
 ! Verifies:                                                                    !
 !   1. Strict isolation: `capabilities` is absent in root `#this`              !

@@ -1,0 +1,75 @@
+! ============================================================================ !
+! lib/std/types.lang — Stdlib ZST-Marker Primitive Type System (Pure Layer 1)  !
+!                                                                              !
+! Written in core_syntax Layer 1 ({}, "...", smart :=, =, if/else, while).     !
+! Defines zero-overhead descriptive Shapes via ZST markers (07-types §2.2):    !
+!   - Boolean : { __raw: bytes(1, 1), __boolean_tag: {} }                      !
+!   - i8, i16, i32, i64 : signed integers                                      !
+!   - u8, u16, u32, u64 : unsigned integers                                    !
+!   - f32, f64          : IEEE 754 floating point                              !
+!                                                                              !
+! Exports a pure stageable `types` struct in root #this (zero NativeProto).    !
+! ============================================================================ !
+
+! Construct zero-initialized raw leaf values of width 1, 2, 4, 8 bytes !
+t_raw1 := $.F ;
+t_raw8 := $.Z ;
+t_raw4 := #block(^(
+    from := $#parent(#this).W8 ;
+    to   := $#parent(#this).W4 ;
+    src  := x ;
+    p    := #evaluate($#parent(#this).caps.intrinsics.trunc_int) ;
+    x    := $#parent(#this).Z ;
+    #break(#evaluate($.p))
+)) ;
+t_raw2 := #block(^(
+    from := $#parent(#this).W8 ;
+    to   := $#parent(#this).W2 ;
+    src  := x ;
+    p    := #evaluate($#parent(#this).caps.intrinsics.trunc_int) ;
+    x    := $#parent(#this).Z ;
+    #break(#evaluate($.p))
+)) ;
+
+! Boolean values & Shape !
+t_bool_false := { __raw := $#parent(#this).F ; __boolean_tag := {} } ;
+t_bool_true  := { __raw := $#parent(#this).T ; __boolean_tag := {} } ;
+t_Boolean    := #shape($.t_bool_false) ;
+
+! Signed integer Shapes !
+t_i8  := #shape({ __raw := $#parent(#this).t_raw1 ; __i8_tag  := {} }) ;
+t_i16 := #shape({ __raw := $#parent(#this).t_raw2 ; __i16_tag := {} }) ;
+t_i32 := #shape({ __raw := $#parent(#this).t_raw4 ; __i32_tag := {} }) ;
+t_i64 := #shape({ __raw := $#parent(#this).t_raw8 ; __i64_tag := {} }) ;
+
+! Unsigned integer Shapes !
+t_u8  := #shape({ __raw := $#parent(#this).t_raw1 ; __u8_tag  := {} }) ;
+t_u16 := #shape({ __raw := $#parent(#this).t_raw2 ; __u16_tag := {} }) ;
+t_u32 := #shape({ __raw := $#parent(#this).t_raw4 ; __u32_tag := {} }) ;
+t_u64 := #shape({ __raw := $#parent(#this).t_raw8 ; __u64_tag := {} }) ;
+
+! Floating-point Shapes !
+t_f32 := #shape({ __raw := $#parent(#this).t_raw4 ; __f32_tag := {} }) ;
+t_f64 := #shape({ __raw := $#parent(#this).t_raw8 ; __f64_tag := {} }) ;
+
+types := {
+    Boolean    := $#parent(#this).t_Boolean ;
+    true_val   := $#parent(#this).t_bool_true ;
+    false_val  := $#parent(#this).t_bool_false ;
+    i8         := $#parent(#this).t_i8 ;
+    i16        := $#parent(#this).t_i16 ;
+    i32        := $#parent(#this).t_i32 ;
+    i64        := $#parent(#this).t_i64 ;
+    u8         := $#parent(#this).t_u8 ;
+    u16        := $#parent(#this).t_u16 ;
+    u32        := $#parent(#this).t_u32 ;
+    u64        := $#parent(#this).t_u64 ;
+    f32        := $#parent(#this).t_f32 ;
+    f64        := $#parent(#this).t_f64 ;
+    raw1_shape := $#parent(#this).c_con.raw1_shape ;
+    raw2_shape := $#parent(#this).c_con.raw2_shape ;
+    raw4_shape := $#parent(#this).c_con.raw4_shape ;
+    raw8_shape := $#parent(#this).c_con.raw8_shape
+} ;
+
+$.types
