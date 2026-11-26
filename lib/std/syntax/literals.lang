@@ -22,9 +22,9 @@ raw_h := ^(
     #evaluate($.caps.ast.value)
 ) ;
 h_true := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
-lit_true := #block(^( fe := $#parent(#this).fe ; sym := true ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
-e_true := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_true ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
-#block(^( fe := $#parent(#this).fe ; name := BoolTrue ; expr := $#parent(#this).e_true ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_true ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+lit_true := #block(^( fe := $#parent(#this).fe ; sym := true ; #break(#evaluate($#parent(#this).c_syn.lit)) ), $.F) ;
+e_true := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_true ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) ), $.F) ;
+#block(^( fe := $#parent(#this).fe ; name := BoolTrue ; expr := $#parent(#this).e_true ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_true ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 
 ! BoolFalse = "false" not_WordChar -> ast.value(types.false_val) !
 raw_h := ^(
@@ -32,9 +32,9 @@ raw_h := ^(
     #evaluate($.caps.ast.value)
 ) ;
 h_false := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
-lit_false := #block(^( fe := $#parent(#this).fe ; sym := false ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
-e_false := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_false ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
-#block(^( fe := $#parent(#this).fe ; name := BoolFalse ; expr := $#parent(#this).e_false ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_false ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+lit_false := #block(^( fe := $#parent(#this).fe ; sym := false ; #break(#evaluate($#parent(#this).c_syn.lit)) ), $.F) ;
+e_false := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_false ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) ), $.F) ;
+#block(^( fe := $#parent(#this).fe ; name := BoolFalse ; expr := $#parent(#this).e_false ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_false ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 
 ! IntLit = [0-9]+ not_WordChar -> i64 ({ __raw: raw8, __i64_tag: {} }) !
 raw_h := ^(
@@ -54,12 +54,12 @@ raw_h := ^(
             #drop(.b) ;
             b := $#parent(#this).env.zero_ch ;
             #break(#evaluate($#parent(#this).env.iops.sub_i64))
-        )) ;
-        acc10 := #block(^( a := $#parent(#this).acc ; b := $#parent(#this).env.ten ; #break(#evaluate($#parent(#this).env.iops.mul_i64)) )) ;
-        .acc = #block(^( a := $#parent(#this).acc10 ; b := $#parent(#this).digit ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
-        .i   = #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        ), $.caps.constants.\false) ;
+        acc10 := #block(^( a := $#parent(#this).acc ; b := $#parent(#this).env.ten ; #break(#evaluate($#parent(#this).env.iops.mul_i64)) ), $.caps.constants.\false) ;
+        .acc = $#block(^( a := $#parent(#this).acc10 ; b := $#parent(#this).digit ; #break(#evaluate($#parent(#this).env.iops.add_i64)) ), $.caps.constants.\false) ;
+        .i   = $#block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) ), $.caps.constants.\false) ;
         #drop(.digit) ; #drop(.acc10)
-    ) while #block(^( a := $#parent(#this).i ; b := $#parent(#this).n ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) )) ;
+    ) while $#block(^( a := $#parent(#this).i ; b := $#parent(#this).n ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) ), $.caps.constants.\false) ;
     val := { __raw := $#parent(#this).acc ; __i64_tag := {} } ;
     #evaluate($.caps.ast.value)
 ) ;
@@ -70,16 +70,16 @@ digit_range := #block(^(
     sym := 0 ; index := $#parent(#this).Z ; lo := #evaluate($#parent(#this).c_sym.byte_at) ; #drop(.sym) ;
     sym := 9 ; hi := #evaluate($#parent(#this).c_sym.byte_at) ; #drop(.sym) ;
     #break(#evaluate($#parent(#this).c_syn.range))
-)) ;
-digits_plus := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).digit_range ; min := $#parent(#this).ONE ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
-e_int := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).digits_plus ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
-#block(^( fe := $#parent(#this).fe ; name := IntLit ; expr := $#parent(#this).e_int ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_int ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+), $.F) ;
+digits_plus := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).digit_range ; min := $#parent(#this).ONE ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) ), $.F) ;
+e_int := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).digits_plus ; 1 := $#parent(#this).not_wc ; #break(#evaluate($#parent(#this).c_syn.seq)) ), $.F) ;
+#block(^( fe := $#parent(#this).fe ; name := IntLit ; expr := $#parent(#this).e_int ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_int ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 
 ! Prepend IntLit, BoolTrue, BoolFalse to Atom !
-old_atom_lit := #block(^( fe := $#parent(#this).fe ; name := Atom      ; #break(#evaluate($#parent(#this).c_syn.get_rule)) )) ;
-ref_int      := #block(^( fe := $#parent(#this).fe ; name := IntLit    ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
-ref_btrue    := #block(^( fe := $#parent(#this).fe ; name := BoolTrue  ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
-ref_bfalse   := #block(^( fe := $#parent(#this).fe ; name := BoolFalse ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+old_atom_lit := #block(^( fe := $#parent(#this).fe ; name := Atom      ; #break(#evaluate($#parent(#this).c_syn.get_rule)) ), $.F) ;
+ref_int      := #block(^( fe := $#parent(#this).fe ; name := IntLit    ; #break(#evaluate($#parent(#this).c_syn.ref)) ), $.F) ;
+ref_btrue    := #block(^( fe := $#parent(#this).fe ; name := BoolTrue  ; #break(#evaluate($#parent(#this).c_syn.ref)) ), $.F) ;
+ref_bfalse   := #block(^( fe := $#parent(#this).fe ; name := BoolFalse ; #break(#evaluate($#parent(#this).c_syn.ref)) ), $.F) ;
 new_atom_lit := #block(^(
     fe := $#parent(#this).fe ;
     0 := $#parent(#this).ref_int ;
@@ -87,7 +87,7 @@ new_atom_lit := #block(^(
     2 := $#parent(#this).ref_bfalse ;
     3 := $#parent(#this).old_atom_lit ;
     #break(#evaluate($#parent(#this).c_syn.choice))
-)) ;
-#block(^( fe := $#parent(#this).fe ; name := Atom ; expr := $#parent(#this).new_atom_lit ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+), $.F) ;
+#block(^( fe := $#parent(#this).fe ; name := Atom ; expr := $#parent(#this).new_atom_lit ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 
 ok

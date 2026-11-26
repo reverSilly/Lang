@@ -21,7 +21,7 @@ t_raw4 := #block(^(
     p    := #evaluate($#parent(#this).caps.intrinsics.trunc_int) ;
     x    := $#parent(#this).Z ;
     #break(#evaluate($.p))
-)) ;
+), $.F) ;
 t_raw2 := #block(^(
     from := $#parent(#this).W8 ;
     to   := $#parent(#this).W2 ;
@@ -29,7 +29,7 @@ t_raw2 := #block(^(
     p    := #evaluate($#parent(#this).caps.intrinsics.trunc_int) ;
     x    := $#parent(#this).Z ;
     #break(#evaluate($.p))
-)) ;
+), $.F) ;
 
 ! Boolean values & Shape !
 t_bool_false := { __raw := $#parent(#this).F ; __boolean_tag := {} } ;
@@ -37,20 +37,20 @@ t_bool_true  := { __raw := $#parent(#this).T ; __boolean_tag := {} } ;
 t_Boolean    := #shape($.t_bool_false) ;
 
 ! Signed integer Shapes !
-t_i8  := #shape({ __raw := $#parent(#this).t_raw1 ; __i8_tag  := {} }) ;
-t_i16 := #shape({ __raw := $#parent(#this).t_raw2 ; __i16_tag := {} }) ;
-t_i32 := #shape({ __raw := $#parent(#this).t_raw4 ; __i32_tag := {} }) ;
-t_i64 := #shape({ __raw := $#parent(#this).t_raw8 ; __i64_tag := {} }) ;
+t_i8  := #shape($({ __raw := $#parent(#this).t_raw1 ; __i8_tag  := {} })) ;
+t_i16 := #shape($({ __raw := $#parent(#this).t_raw2 ; __i16_tag := {} })) ;
+t_i32 := #shape($({ __raw := $#parent(#this).t_raw4 ; __i32_tag := {} })) ;
+t_i64 := #shape($({ __raw := $#parent(#this).t_raw8 ; __i64_tag := {} })) ;
 
 ! Unsigned integer Shapes !
-t_u8  := #shape({ __raw := $#parent(#this).t_raw1 ; __u8_tag  := {} }) ;
-t_u16 := #shape({ __raw := $#parent(#this).t_raw2 ; __u16_tag := {} }) ;
-t_u32 := #shape({ __raw := $#parent(#this).t_raw4 ; __u32_tag := {} }) ;
-t_u64 := #shape({ __raw := $#parent(#this).t_raw8 ; __u64_tag := {} }) ;
+t_u8  := #shape($({ __raw := $#parent(#this).t_raw1 ; __u8_tag  := {} })) ;
+t_u16 := #shape($({ __raw := $#parent(#this).t_raw2 ; __u16_tag := {} })) ;
+t_u32 := #shape($({ __raw := $#parent(#this).t_raw4 ; __u32_tag := {} })) ;
+t_u64 := #shape($({ __raw := $#parent(#this).t_raw8 ; __u64_tag := {} })) ;
 
 ! Floating-point Shapes !
-t_f32 := #shape({ __raw := $#parent(#this).t_raw4 ; __f32_tag := {} }) ;
-t_f64 := #shape({ __raw := $#parent(#this).t_raw8 ; __f64_tag := {} }) ;
+t_f32 := #shape($({ __raw := $#parent(#this).t_raw4 ; __f32_tag := {} })) ;
+t_f64 := #shape($({ __raw := $#parent(#this).t_raw8 ; __f64_tag := {} })) ;
 
 types := {
     Boolean    := $#parent(#this).t_Boolean ;
