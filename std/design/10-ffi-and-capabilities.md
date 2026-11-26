@@ -32,7 +32,7 @@ Every heap-allocated compiler resource uses an explicit symmetric `new_*`/`destr
 1. **Standalone AST & Staging (`capabilities.ast`)**:
    - `new_arena() -> Handle`: Allocates an `AstArena` (a simple pointer-stable `std::deque<Ast::ExprPtr>`, owning no `StringTable` or `ShapeTable` — every `ExprPtr` is 100% self-contained even after `destroy_arena`).
    - `destroy_arena({ arena: Handle }) -> Unit`: Frees the `AstArena` immediately.
-   - `word({ arena, sym })`, `builtin({ arena, kind, 0, 1, ... })`, `seq({ arena, 0, 1, ... })`, `value({ arena, val })`: Construct standalone Core IR nodes inside `#this.arena` and return `Handle` (`Ast::ExprPtr*`).
+   - `word({ arena, sym })`, `builtin({ arena, kind, 0, 1, ... })`, `seq({ arena, 0, 1, ... })`, `value({ arena, val })`, `proto({ arena, ast })`: Construct standalone Core IR nodes inside `#this.arena` and return `Handle` (`Ast::ExprPtr*`). In particular, `proto({ arena, ast })` is a pure `Ast -> Ast` constructor emitting `ValueExpr{ AstProtoVal{ ast } }` with zero `RuntimeContext` dependency (used by `^expr`, `{}`, control-flow, and operator syntax handlers).
    - `to_proto({ ast: Handle }) -> Prototype`: **Stages/embeds** a standalone `Ast` into the **current compile-time `RuntimeContext`** as a live `AstProto`, so the compile script can execute it via `#evaluate` / `#block` (e.g., bootstrapping `boot1`/`layer1`, or evaluating `lib/std/libc.lang` at compile time).
    - `serialize({ ast: Handle }) -> Bytes` / `deserialize({ arena: Handle, bytes }) -> Handle (Ast)` *(replaces retired `serialize_proto`/`deserialize_proto`)*: Lossless binary encoding/decoding of standalone `Ast` for incremental build caches and cross-process IR transfer.
 2. **Frontend / PEG Arena (`capabilities.syntax`)**:

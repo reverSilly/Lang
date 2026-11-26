@@ -140,6 +140,12 @@ Runtime::Value build_ast_module(Runtime::RuntimeContext& rt) {
             AstArena* arena = load_ast_arena(ev);
             return ev.rt.make_handle(arena->alloc(Ast::make_expr<Ast::ValueExpr>(reify_ast_value(ev.rt, read_field(ev, "val")))));
         })},
+        {"proto", native_proto(rt, "capabilities.ast.proto", [](Evaluator& ev) {
+            AstArena* arena = load_ast_arena(ev);
+            Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
+            return ev.rt.make_handle(
+                arena->alloc(Ast::make_expr<Ast::ValueExpr>(Ast::AstValue(Ast::AstProtoVal{std::move(expr)}))));
+        })},
         {"to_proto", native_proto(rt, "capabilities.ast.to_proto", [](Evaluator& ev) {
             Ast::ExprPtr expr = load_ast_node(read_field(ev, "ast").as_pod<uint64_t>());
             return ev.rt.make_proto(ev.rt.prototypes.create_ast(std::move(expr)));

@@ -62,6 +62,12 @@ a_prog := #block(^(
     #break(#evaluate($#parent(#this).c_ast.seq))
 )) ;
 
+! Pure Ast->Ast `ast.proto` constructor (zero RuntimeContext / zero `to_proto`) !
+a_proto_prog := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).a_prog ; #break(#evaluate($#parent(#this).c_ast.proto)) )) ;
+a_blk_prog   := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).a_proto_prog ; #break(#evaluate($#parent(#this).c_ast.builtin)) )) ;
+pure_proto_res := #block(^( ast := $#parent(#this).a_blk_prog ; #break(#evaluate($#parent(#this).c_run)) )) ;
+cond := $.pure_proto_res == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
 ! Stage into current compile-time env via `ast.to_proto` + `#block` !
 p_staged := #block(^( ast := $#parent(#this).a_prog ; #break(#evaluate($#parent(#this).c_ast.to_proto)) )) ;
 staged_res := #block($.p_staged) ;

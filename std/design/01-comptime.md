@@ -16,7 +16,8 @@
 | :--- | :--- | :---: |
 | **`Ast`（Core IR）** | 唯一的环境无关程序表示（`WordExpr`、`BuiltinExpr`、`SequenceExpr`、`ValueExpr{ AstValue }`） | **否** |
 | **`Prototype`** | 某个活运行环境内的可执行实体（`AstProto`、`IntrinsicProto`、`FfiProto`、`FfiBindPtrProto`、`BoundFfiProto`、`NativeProto`） | **是** |
-| **`ast.to_proto({ ast })`** | 将 `Ast` **嵌入（stage 到）当前编译脚本的 `RuntimeContext`**，生成活 `AstProto` 供脚本自身 `#evaluate` / `#block` 执行 | **是** |
+| **`ast.proto({ arena, ast })`** | 纯 `Ast -> Ast` 构造器：生成环境无关的 `ValueExpr{ AstProtoVal{ ast } }`（供 `^expr`、`{}`、控制流等语法构造嵌套原型） | **否** |
+| **`ast.to_proto({ ast })`** | 唯一的编译期跨阶段桥：将 `Ast` **注册进当前编译脚本的 `RuntimeContext`**，生成活 `AstProto` 供脚本自身 `#evaluate` / `#block` 执行 | **是** |
 | **`ast.serialize` / `ast.deserialize`** | `Ast` ↔ `Bytes` 的无损二进制编解码，用于增量缓存、预编译模块与跨进程传递 IR（取代旧 `serialize_proto`） | **否** |
 | **`backends.interpreter.run({ ast })`** | **Phase 1 解释器后端**：构造全新独立的 `RuntimeContext` + `Evaluator`，将 `Ast` 实例化并孤立执行 | 目标独立 |
 | **`backends.llvm.emit_executable({ ast, ... })`** | **Phase 2 AOT 后端**：直接将同一棵 `Ast` 降级为 LLVM IR 与独立原生二进制 | 无 `RuntimeContext` |
