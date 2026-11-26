@@ -55,7 +55,7 @@
 #drop(#field(#this, src)) ;
 #bind(libc_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, ast)) ;
-#bind(libc, #allocate_val(#block(#deref(#field(#this, libc_p))), #deref(#field(#this, F)))) ;
+#bind(libc, #block(#deref(#field(#this, libc_p)), #deref(#field(#this, F)))) ;
 
 ! 3. Compile-time script test: tests/test_ast_build.lang (staged via `to_proto` + `#block`) !
 #bind(sym, #allocate_val(tests/test_ast_build.lang, #deref(#field(#this, F)))) ;
@@ -67,7 +67,7 @@
 #drop(#field(#this, src)) ;
 #bind(ast_build_p, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), ast), to_proto))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, ast)) ;
-#bind(res_ast_build, #allocate_val(#block(#deref(#field(#this, ast_build_p))), #deref(#field(#this, F)))) ;
+#bind(res_ast_build, #block(#deref(#field(#this, ast_build_p)), #deref(#field(#this, F)))) ;
 
 ! 4. Isolated target test: tests/test_layer1.lang (direct `backends.interpreter.run`, zero `to_proto`) !
 #bind(sym, #allocate_val(tests/test_layer1.lang, #deref(#field(#this, F)))) ;

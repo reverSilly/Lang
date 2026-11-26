@@ -28,27 +28,27 @@ p_cs := .cs_hello ;
 c_len := #block(^(
     \0 := $#parent(#this).p_cs.addr ;
     #break(#evaluate($#parent(#this).libc.strlen))
-)) ;
+), $.F_raw) ;
 cond := $.c_len == $.R12 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 2. malloc + memset + memcpy + memcmp + free !
-buf1 := #block(^( \0 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.malloc)) )) ;
-buf2 := #block(^( \0 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.malloc)) )) ;
-fill_ch := #block(^( x := $#parent(#this).R65 ; #break(#evaluate($#parent(#this).trunc_8_4)) )) ;
-#block(^( \0 := $#parent(#this).buf1 ; \1 := $#parent(#this).fill_ch ; \2 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.memset)) )) ;
-#block(^( \0 := $#parent(#this).buf2 ; \1 := $#parent(#this).buf1 ; \2 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.memcpy)) )) ;
-cmp_i32 := #block(^( \0 := $#parent(#this).buf1 ; \1 := $#parent(#this).buf2 ; \2 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.memcmp)) )) ;
-cmp_i64 := #block(^( x := $#parent(#this).cmp_i32 ; #break(#evaluate($#parent(#this).sext_4_8)) )) ;
+buf1 := #block(^( \0 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.malloc)) ), $.F_raw) ;
+buf2 := #block(^( \0 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.malloc)) ), $.F_raw) ;
+fill_ch := #block(^( x := $#parent(#this).R65 ; #break(#evaluate($#parent(#this).trunc_8_4)) ), $.F_raw) ;
+#block(^( \0 := $#parent(#this).buf1 ; \1 := $#parent(#this).fill_ch ; \2 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.memset)) ), $.F_raw) ;
+#block(^( \0 := $#parent(#this).buf2 ; \1 := $#parent(#this).buf1 ; \2 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.memcpy)) ), $.F_raw) ;
+cmp_i32 := #block(^( \0 := $#parent(#this).buf1 ; \1 := $#parent(#this).buf2 ; \2 := $#parent(#this).R16 ; #break(#evaluate($#parent(#this).libc.memcmp)) ), $.F_raw) ;
+cmp_i64 := #block(^( x := $#parent(#this).cmp_i32 ; #break(#evaluate($#parent(#this).sext_4_8)) ), $.F_raw) ;
 cond := $.cmp_i64 == $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
-#block(^( \0 := $#parent(#this).buf1 ; #break(#evaluate($#parent(#this).libc.free)) )) ;
-#block(^( \0 := $#parent(#this).buf2 ; #break(#evaluate($#parent(#this).libc.free)) )) ;
+#block(^( \0 := $#parent(#this).buf1 ; #break(#evaluate($#parent(#this).libc.free)) ), $.F_raw) ;
+#block(^( \0 := $#parent(#this).buf2 ; #break(#evaluate($#parent(#this).libc.free)) ), $.F_raw) ;
 
 ! 3. Composite struct by value: div(17, 5) -> { quot = 3, rem = 2 } !
-i32_17 := #block(^( x := $#parent(#this).R17 ; #break(#evaluate($#parent(#this).trunc_8_4)) )) ;
-i32_5  := #block(^( x := $#parent(#this).R5  ; #break(#evaluate($#parent(#this).trunc_8_4)) )) ;
-d_res  := #block(^( \0 := $#parent(#this).i32_17 ; \1 := $#parent(#this).i32_5 ; #break(#evaluate($#parent(#this).libc.div)) )) ;
-d_quot := #block(^( x := $#parent(#this).d_res.quot ; #break(#evaluate($#parent(#this).sext_4_8)) )) ;
-d_rem  := #block(^( x := $#parent(#this).d_res.rem  ; #break(#evaluate($#parent(#this).sext_4_8)) )) ;
+i32_17 := #block(^( x := $#parent(#this).R17 ; #break(#evaluate($#parent(#this).trunc_8_4)) ), $.F_raw) ;
+i32_5  := #block(^( x := $#parent(#this).R5  ; #break(#evaluate($#parent(#this).trunc_8_4)) ), $.F_raw) ;
+d_res  := #block(^( \0 := $#parent(#this).i32_17 ; \1 := $#parent(#this).i32_5 ; #break(#evaluate($#parent(#this).libc.div)) ), $.F_raw) ;
+d_quot := #block(^( x := $#parent(#this).d_res.quot ; #break(#evaluate($#parent(#this).sext_4_8)) ), $.F_raw) ;
+d_rem  := #block(^( x := $#parent(#this).d_res.rem  ; #break(#evaluate($#parent(#this).sext_4_8)) ), $.F_raw) ;
 cond := $.d_quot == $.R3 ; #evaluate($.assert_true) ; #drop(.cond) ;
 cond := $.d_rem == $.R2  ; #evaluate($.assert_true) ; #drop(.cond) ;
 
@@ -56,13 +56,13 @@ cond := $.d_rem == $.R2  ; #evaluate($.assert_true) ; #drop(.cond) ;
 s_num := "12345" ;
 cs_num := { body := $#parent(#this).s_num ; nul := $#parent(#this).F_raw } ;
 p_num := .cs_num ;
-i32_10 := #block(^( x := $#parent(#this).R10 ; #break(#evaluate($#parent(#this).trunc_8_4)) )) ;
+i32_10 := #block(^( x := $#parent(#this).R10 ; #break(#evaluate($#parent(#this).trunc_8_4)) ), $.F_raw) ;
 parsed_num := #block(^(
     \0 := $#parent(#this).p_num.addr ;
     \1 := $#parent(#this).R0 ;
     \2 := $#parent(#this).i32_10 ;
     #break(#evaluate($#parent(#this).libc.strtoll))
-)) ;
+), $.F_raw) ;
 cond := $.parsed_num == $.R12345 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ffi_tests_passed

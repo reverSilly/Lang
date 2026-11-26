@@ -9,6 +9,7 @@
 !   4. Low 8 bits of top-level i64 result become process exit code (42)        !
 ! ============================================================================ !
 
+_F := false ; F_raw := $._F.__raw ;
 _0 := 0 ; R0 := $._0.__raw ;
 _2 := 2 ; R2 := $._2.__raw ;
 _5 := 5 ; R5 := $._5.__raw ;
@@ -32,12 +33,12 @@ cond := $.arg1_sh.size == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
 ptr := #block(^(
     \0 := $#parent(#this).R16 ;
     #break(#evaluate($#parent(#this).libc.malloc))
-)) ;
+), $.F_raw) ;
 cond := $.R0 < $.ptr ; #evaluate($.assert_true) ; #drop(.cond) ;
 #block(^(
     \0 := $#parent(#this).ptr ;
     #break(#evaluate($#parent(#this).libc.free))
-)) ;
+), $.F_raw) ;
 
 ! 4. Return i64(42) -> exit code 42 !
 42

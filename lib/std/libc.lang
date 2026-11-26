@@ -11,6 +11,7 @@
 
 caps  := $#parent(#this).capabilities ;
 c_con := $.caps.constants ;
+F     := $.c_con.\false ;
 c_ffi := $.caps.ffi ;
 c_int := $.caps.intrinsics ;
 
@@ -27,35 +28,35 @@ trunc_8_4 := #block(^(
     to   := $#parent(#this).c_con.raw4_shape.size ;
     src  := x ;
     #break(#evaluate($#parent(#this).c_int.trunc_int))
-)) ;
+), $.F) ;
 i32_0 := #block(^(
     x := $#parent(#this).c_con.u64_zero ;
     #break(#evaluate($#parent(#this).trunc_8_4))
-)) ;
+), $.F) ;
 
-f64_s   := #shape({ __raw := $#parent(#this).c_con.u64_zero ; __f64_tag := {} }) ;
-div_t_s := #shape({ quot := $#parent(#this).i32_0 ; rem := $#parent(#this).i32_0 }) ;
+f64_s   := #shape($({ __raw := $#parent(#this).c_con.u64_zero ; __f64_tag := {} })) ;
+div_t_s := #shape($({ quot := $#parent(#this).i32_0 ; rem := $#parent(#this).i32_0 })) ;
 
 ! Reusable positional argument Shapes (`0`, `1`, `2`, `3`) !
-args_8       := #shape({ \0 := $#parent(#this).c_con.u64_zero }) ;
-args_4       := #shape({ \0 := $#parent(#this).i32_0 }) ;
-args_8_8     := #shape({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero }) ;
-args_4_4     := #shape({ \0 := $#parent(#this).i32_0 ; \1 := $#parent(#this).i32_0 }) ;
-args_8_8_8   := #shape({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero ; \2 := $#parent(#this).c_con.u64_zero }) ;
-args_8_4_8   := #shape({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).i32_0 ; \2 := $#parent(#this).c_con.u64_zero }) ;
-args_8_8_4   := #shape({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero ; \2 := $#parent(#this).i32_0 }) ;
-args_8_8_8_8 := #shape({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero ; \2 := $#parent(#this).c_con.u64_zero ; \3 := $#parent(#this).c_con.u64_zero }) ;
+args_8       := #shape($({ \0 := $#parent(#this).c_con.u64_zero })) ;
+args_4       := #shape($({ \0 := $#parent(#this).i32_0 })) ;
+args_8_8     := #shape($({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero })) ;
+args_4_4     := #shape($({ \0 := $#parent(#this).i32_0 ; \1 := $#parent(#this).i32_0 })) ;
+args_8_8_8   := #shape($({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero ; \2 := $#parent(#this).c_con.u64_zero })) ;
+args_8_4_8   := #shape($({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).i32_0 ; \2 := $#parent(#this).c_con.u64_zero })) ;
+args_8_8_4   := #shape($({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero ; \2 := $#parent(#this).i32_0 })) ;
+args_8_8_8_8 := #shape($({ \0 := $#parent(#this).c_con.u64_zero ; \1 := $#parent(#this).c_con.u64_zero ; \2 := $#parent(#this).c_con.u64_zero ; \3 := $#parent(#this).c_con.u64_zero })) ;
 
 ! Helper: declare a single external C symbol with `lib := ""` and `cc := c` !
 decl_c := ^(
-    #block(^(
+    $#block(^(
         lib    := "" ;
         name   := $#parent(#this).sym_name ;
         a_args := $#parent(#this).sym_args ;
         a_ret  := $#parent(#this).sym_ret ;
         abi    := { args := $#parent(#this).a_args ; ret := $#parent(#this).a_ret ; cc := c } ;
         #break(#evaluate($#parent(#this).c_ffi.extern_symbol))
-    ))
+    ), $.F)
 ) ;
 
 ! --- Memory allocation (<stdlib.h>) --- !
@@ -103,7 +104,7 @@ shapes_obj := {
 } ;
 
 ! Export 100% pure stageable libc module (zero OS Handle, directly liftable via `ast.value`) !
-#break({
+#break($({
     shapes  := $#parent(#this).shapes_obj ;
     malloc  := $#parent(#this).f_malloc ;
     calloc  := $#parent(#this).f_calloc ;
@@ -129,4 +130,4 @@ shapes_obj := {
     strtod  := $#parent(#this).f_strtod ;
     strtoll := $#parent(#this).f_strtoll ;
     exit    := $#parent(#this).f_exit
-})
+}))

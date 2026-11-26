@@ -175,17 +175,17 @@ inc := {
     __env  := {} ;
     __code := ^( $.__arg + 1 )
 } ;
-cond := $.inc 41 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.inc(41) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.inc (20 + 21) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.inc ($.inc 40) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.inc($.inc(40)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc 41) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc(41)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc (20 + 21)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc $($.inc 40)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc($($.inc(40)))) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 get_zero := {
     __env  := {} ;
     __code := ^( 0 )
 } ;
-cond := $.get_zero {} == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.get_zero {}) == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Closure with `__env` + curried juxtaposition `$.make_adder 10 32 == 42` !
 make_adder := {
@@ -198,7 +198,7 @@ make_adder := {
         }
     )
 } ;
-cond := $.make_adder 10 32 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.make_adder 10 32) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Lexical scope barrier: callee MUST NOT see caller's local `caller_secret` !
 caller_secret := 999 ;
@@ -209,41 +209,41 @@ check_iso := {
         $.p_sec.addr == $.__arg
     )
 } ;
-cond := $.check_iso $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.check_iso $.R0) ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 11. Function definition `param -> body` (strictly single-arg) & pure-stdlib closure !
 inc2 := x -> $.x + 1 ;
-cond := $.inc2 41 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.inc2(41) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc2 41) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.inc2(41)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Ignored single-arg `_ -> ...` (binds `{}` to `_`, symmetric with 1-arg call) !
 get_k := _ -> 99 ;
-cond := $.get_k {} == 99 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.get_k {}) == 99 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Right-assoc body allows `if/else` without outer parens !
 abs_fn := x -> -$.x if $.x < 0 else $.x ;
-cond := $.abs_fn (-7) == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.abs_fn 7 == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.abs_fn (-7)) == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.abs_fn 7) == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Struct argument & early `#break` return !
 add_pt := p -> $.p.a + $.p.b ;
-cond := $.add_pt { a := 10 ; b := 32 } == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.add_pt { a := 10 ; b := 32 }) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 clamp_pos := x -> ( #break(0) if $.x < 0 else ok ; $.x ) ;
-cond := $.clamp_pos (-5) == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.clamp_pos 12 == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.clamp_pos (-5)) == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.clamp_pos 12) == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Zero-new-syntax explicit closure via ordinary stdlib helper `with_env` !
 with_env := spec -> { __env := $.spec.env ; __code := $.spec.fn.__code } ;
 adder10 := $.with_env { env := { k := 10 } ; fn := (x -> $.k + $.x) } ;
-cond := $.adder10 32 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.adder10 32) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Curried closure using `param -> body` + `with_env` captured in `__env` !
 make_adder2 := $.with_env {
     env := { with_env := $.with_env } ;
     fn  := (base -> $.with_env { env := { k := $.base } ; fn := (x -> $.k + $.x) })
 } ;
-cond := $.make_adder2 10 32 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.make_adder2 10 32) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! --- 12. Pure Transparent Tuples (`a, b, c`, no trailing comma, zero matcher) --- !
 t3 := 10, 20, 12 ;
@@ -253,8 +253,8 @@ cond := $.t3.\2 == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
 cond := $.t3.\0 + $.t3.\1 + $.t3.\2 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Exact Shape isomorphism with positional struct `{ \0 := ... ; \1 := ... }` !
-s_tup := #shape((1, 2)) ;
-s_pos := #shape({ \0 := 1 ; \1 := 2 }) ;
+s_tup := #shape($((1, 2))) ;
+s_pos := #shape($({ \0 := 1 ; \1 := 2 })) ;
 cond := $.s_tup == $.s_pos ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Nested tuples & arithmetic elements !
@@ -266,8 +266,8 @@ cond := $.tn.\1.\1 == 13 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Multi-arg call via single-arg juxtaposition + tuple `(a, b)` !
 add_pair := p -> $.p.\0 + $.p.\1 ;
-cond := $.add_pair(15, 27) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-cond := $.add_pair (15, 27) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.add_pair(15, 27)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.add_pair (15, 27)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Lambda returning a bare tuple without extra parens !
 dup_pair := x -> $.x, $.x * 2 ;
@@ -276,7 +276,21 @@ cond := $.dp.\0 == 14 ; #evaluate($.assert_true) ; #drop(.cond) ;
 cond := $.dp.\1 == 28 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! Tuple inside Core builtin via grouping `(a, b)` !
-bf := false ; t_box := #allocate_val((7, 8), $.bf.__raw) ;
+bf := false ; t_box := #allocate_val($((7, 8)), $.bf.__raw) ;
 cond := $.t_box.\0 + $.t_box.\1 == 15 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+
+! --- 13. `#block(p, is_mut)` -> parent-frame unbound Pointer, direct field access & `box(val)` --- !
+cond := $({ px := 10 ; py := 32 }.px) == 10 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $((10, 20, 12).\2) == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Ordinary stdlib `box(val)` function: returns unbound Pointer to val in caller frame !
+box := v -> $.v ;
+cond := $(($.box (15, 27)).\0) + $(($.box (15, 27)).\1) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Explicit mutable `#block(p, true)` slot can be mutated directly !
+m_slot := #block(^( #break(10) ), $.T_raw) ;
+.m_slot = 42 ;
+cond := $.m_slot == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 layer1_tests_passed

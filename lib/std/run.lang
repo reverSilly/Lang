@@ -12,7 +12,7 @@ path := "lib/std/libc.lang" ;
 src  := #evaluate($.c_io.read_file) ; #drop(.path) ;
 ast  := #evaluate($.c_syn.parse) ; #drop(.src) ;
 libc_p := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
-libc := #block($.libc_p) ;
+libc := #block($.libc_p, $.F) ;
 
 ! 2. Read & parse target program from CLI `args.1` !
 path := $.args.\1 ;
@@ -20,12 +20,12 @@ src  := #evaluate($.c_io.read_file) ; #drop(.path) ;
 user_ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
 
 ! 3. Lift `libc` into target Ast: `#bind(libc, #allocate_val(<libc>, false)) ; <user_ast>` !
-a_false := #block(^( arena := $.arena ; val := $.F ; #break(#evaluate($.c_ast.value)) )) ;
-a_w_libc := #block(^( arena := $.arena ; sym := libc ; #break(#evaluate($.c_ast.word)) )) ;
-a_v_libc := #block(^( arena := $.arena ; val := $.libc ; #break(#evaluate($.c_ast.value)) )) ;
-a_alloc_libc := #block(^( arena := $.arena ; kind := allocate_val ; \0 := $.a_v_libc ; \1 := $.a_false ; #break(#evaluate($.c_ast.builtin)) )) ;
-a_bind_libc  := #block(^( arena := $.arena ; kind := bind ; \0 := $.a_w_libc ; \1 := $.a_alloc_libc ; #break(#evaluate($.c_ast.builtin)) )) ;
-ast := #block(^( arena := $.arena ; \0 := $.a_bind_libc ; \1 := $.user_ast ; #break(#evaluate($.c_ast.seq)) )) ;
+a_false := #block(^( arena := $.arena ; val := $.F ; #break(#evaluate($.c_ast.value)) ), $.F) ;
+a_w_libc := #block(^( arena := $.arena ; sym := libc ; #break(#evaluate($.c_ast.word)) ), $.F) ;
+a_v_libc := #block(^( arena := $.arena ; val := $.libc ; #break(#evaluate($.c_ast.value)) ), $.F) ;
+a_alloc_libc := #block(^( arena := $.arena ; kind := allocate_val ; \0 := $.a_v_libc ; \1 := $.a_false ; #break(#evaluate($.c_ast.builtin)) ), $.F) ;
+a_bind_libc  := #block(^( arena := $.arena ; kind := bind ; \0 := $.a_w_libc ; \1 := $.a_alloc_libc ; #break(#evaluate($.c_ast.builtin)) ), $.F) ;
+ast := #block(^( arena := $.arena ; \0 := $.a_bind_libc ; \1 := $.user_ast ; #break(#evaluate($.c_ast.seq)) ), $.F) ;
 
 ! 4. Execute in isolated target RuntimeContext + Evaluator !
 run_res := #evaluate($.caps.backends.interpreter.run) ; #drop(.ast) ;
