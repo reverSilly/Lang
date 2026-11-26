@@ -6,6 +6,7 @@
 !   2. lib/std/syntax/literals.lang  — Typed literal rules (true/false, i64)   !
 !   3. lib/std/syntax/ops.lang       — Type-dispatched operators (P7 ~ P12)    !
 !   4. lib/std/syntax/functions.lang — Juxtaposition calls, lambdas, `.sym`    !
+!   5. lib/std/syntax/tuples.lang    — Pure transparent tuples (`a, b, c`)     !
 ! ============================================================================ !
 
 ! 1. Load lib/std/syntax/types.lang -> binds `types` in root #this !
@@ -35,6 +36,13 @@ src := #evaluate($.c_io.read_file) ; #drop(.path) ;
 ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
 p_fns := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
 #evaluate($.p_fns) ;
+
+! 5. Load lib/std/syntax/tuples.lang -> registers TupleExpr (`a, b, c`) on fe !
+path := "lib/std/syntax/tuples.lang" ;
+src := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
+p_tups := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+#evaluate($.p_tups) ;
 
 ! Export full Layer 1 frontend as fe_layer1 !
 fe_layer1 := $.fe ;

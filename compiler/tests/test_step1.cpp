@@ -101,12 +101,17 @@ static void test_unified_open_frame_shape_and_flatten() {
     assert(ok_x);
     (void)ok_x;
 
-    // Unified #field on open frame pointer (uses live_shape directly, zero special case!):
-    // Uninitialized slot is NOT yet Live, so rt.field returns null until written!
-    assert(rt.field(frame->frame_pointer(), sym_x).is_null());
+    // Unified #field on open frame pointer (hashmap indexes all bound slots, including Uninitialized):
+    // Uninitialized bound slot IS addressable via #field for deferred #write(.x, val),
+    // while #deref still rejects reading it until initialized.
+    PointerLayout px_uninit = rt.field(frame->frame_pointer(), sym_x);
+    assert(!px_uninit.is_null() && px_uninit.addr == slot_x->data_addr());
+    bool deref_uninit_threw = false;
+    try { (void)rt.deref(px_uninit); } catch (...) { deref_uninit_threw = true; }
+    assert(deref_uninit_threw);
 
     uint32_t v42 = 42;
-    rt.write(slot_x->pointer(), Value::from_pod(rt.shapes.raw4_shape, v42));
+    rt.write(px_uninit, Value::from_pod(rt.shapes.raw4_shape, v42));
     PointerLayout px = rt.field(frame->frame_pointer(), sym_x);
     assert(!px.is_null() && rt.deref(px).as_pod<uint32_t>() == 42);
 

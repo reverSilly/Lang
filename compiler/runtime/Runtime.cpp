@@ -73,7 +73,7 @@ Value RuntimeContext::deref(const PointerLayout& ptr) const {
     while (cur) {
         if (FrameSlot* slot = cur->find_direct_slot(ptr.addr)) {
             if (slot->state != SlotState::Live) {
-                throw std::runtime_error("#deref: cannot read Uninitialized or Empty slot");
+                throw std::runtime_error("#deref: cannot read Uninitialized slot");
             }
             break;
         }
@@ -110,7 +110,7 @@ void RuntimeContext::write(const PointerLayout& dst_ptr, const Value& val) {
         bool allowed = (direct_slot->state == SlotState::Uninitialized) ||
                        (dst_ptr.mutability == 1 && direct_slot->mutability == 1);
         if (!allowed) {
-            throw std::runtime_error("#write: cannot overwrite immutable live/empty slot");
+            throw std::runtime_error("#write: cannot overwrite immutable Live slot");
         }
         if (!val.bytes.empty()) {
             std::memcpy(direct_slot->storage.data(), val.bytes.data(), val.bytes.size());

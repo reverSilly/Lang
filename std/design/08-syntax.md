@@ -77,7 +77,7 @@ ArgList     := Expr ( ',' Expr )*
 | **17** | `body while cond` | infix | 透明循环展开 |
 | **18** | `dst = val` | infix | 标准库赋值分派器（POD Gate + `destroy` + `#write`） |
 | **19** | `x := rhs` | infix | 标准库单次求值绑定与 Rebind 展开 |
-| **20** | `,` | infix | 序列/元组分隔 |
+| **20** | `a, b, c` | infix（严格双侧非空，禁尾随逗号） | 纯透明位置结构体 `{ \0 := a ; \1 := b ; ... }`（在 `tuples.lang` 中位于 `ControlExpr` 与 `->`/`=`/`:=` 之间，使 `t := 1, 2`、`x -> $.x, 1`、`$.f(1, 2)` 自然成立） |
 | **21** | `;` | infix | Layer 0 顺序求值原语 |
 
 ## 四、待办议题（Open Items — 留待 MVP Phase 2 精细设计）

@@ -1,0 +1,185 @@
+! ============================================================================ !
+! lib/std/syntax/tuples.lang — Pure Transparent Tuple Syntax (`a, b, c`)       !
+!                                                                              !
+! Loaded by lib/std/syntax/layer1.lang after functions.lang (full Layer 1).    !
+! Registers on fe:                                                             !
+!   1. TupleExpr = ControlExpr (_ "," _ ControlExpr)*                          !
+!      - Strictly non-nullable on both sides (trailing comma `a,` is illegal). !
+!      - 1 element: zero-overhead passthrough.                                 !
+!      - N >= 2 elements: evaluates each element left-to-right in caller #this !
+!        and closes a pure transparent positional struct { \0 := e0 ; ... }    !
+!        (zero extra fields, zero matcher, 100% isomorphic to FFI args).       !
+!   2. Wires TupleExpr into Infix & LambdaExpr body:                           !
+!      - `t := 1, 2, 3`  -> `t := (1, 2, 3)`                                   !
+!      - `x -> $.x, 1`   -> `x -> ($.x, 1)`                                    !
+!      - `$.f(1, 2)`     -> `$.f (1, 2)`                                       !
+!   3. Narrows `BuiltinArgs` on fe (zero C++ Layer0.cpp changes) so Core       !
+!      builtins `#field(a, b)` do not greedily consume `,` as a TupleExpr.     !
+! ============================================================================ !
+
+! --- 1. Compile-time helper: u64 -> ASCII decimal RawBytes ("0", "1", ...) --- !
+u64_to_dec := ^(
+    #block(^(
+        caps := $#parent(#this).caps ;
+        env  := $#parent(#this).env ;
+        iops := $.env.iops ;
+        ten  := $#parent(#this).env.ten ;
+        zch  := $#parent(#this).env.zero_ch ;
+        n_in := $#parent(#this).dec_n ;
+        T    := $.caps.constants.\true ;
+        Z    := $.caps.constants.u64_zero ;
+
+        #break("0") if ($.n_in == $.Z) else (
+            n := #allocate_val($.n_in, $.T) ;
+            out := #allocate_val("", $.T) ;
+            (
+                q := #block(^( a := $#parent(#this).n ; b := $#parent(#this).ten ; #break(#evaluate($#parent(#this).env.div_u64)) )) ;
+                r := #block(^( a := $#parent(#this).n ; b := $#parent(#this).ten ; #break(#evaluate($#parent(#this).env.rem_u64)) )) ;
+                ch8 := #block(^( a := $#parent(#this).zch ; b := $#parent(#this).r ; #break(#evaluate($#parent(#this).iops.add_i64)) )) ;
+                ch1 := #block(^( x := $#parent(#this).ch8 ; #break(#evaluate($#parent(#this).env.trunc_8_1)) )) ;
+                next_out := #block(^( lhs := $#parent(#this).ch1 ; rhs := $#parent(#this).out ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+                #drop(.out) ;
+                #bind(out, #allocate_val($.next_out, $.T)) ;
+                .n = $.q ;
+                #drop(.q) ; #drop(.r) ; #drop(.ch8) ; #drop(.ch1) ; #drop(.next_out)
+            ) while ($.Z < $.n) ;
+            #break($.out)
+        )
+    ))
+) ;
+
+p_div_u64   := #block(^( signed := $#parent(#this).F ; width := $#parent(#this).W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).caps.intrinsics.div_int)) )) ;
+p_rem_u64   := #block(^( signed := $#parent(#this).F ; width := $#parent(#this).W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).caps.intrinsics.rem_int)) )) ;
+p_trunc_8_1 := #block(^( from := $#parent(#this).W8 ; to := $#parent(#this).W1 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.trunc_int)) )) ;
+
+tuple_env := {
+    iops      := $#parent(#this).iops ;
+    ten       := $#parent(#this).TEN ;
+    zero_ch   := $#parent(#this).ASCII_ZERO ;
+    div_u64   := $#parent(#this).p_div_u64 ;
+    rem_u64   := $#parent(#this).p_rem_u64 ;
+    trunc_8_1 := $#parent(#this).p_trunc_8_1 ;
+    to_dec    := $#parent(#this).u64_to_dec
+} ;
+#drop(.h_env) ; h_env := $.tuple_env ;
+
+! --- 2. TupleExpr CST handler --- !
+raw_h := ^(
+    T   := $.caps.constants.\true ;
+    F   := $.caps.constants.\false ;
+    Z   := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    (
+        #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).Z ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ))
+    ) if ($.cnt == $.ONE) else (
+        n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        a_par  := #block(^( arena := $#parent(#this).arena ; kind := parent ; \0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        bs     := #evaluate($.caps.syntax.cst_view_bytes) ;
+
+        ! Build outer sequence (evaluate each elem into hygienic caller slot) and inner block sequence (bind 0..N-1 & drop caller temps) !
+        outer_acc := #allocate($.caps.constants.handle_shape, $.T) ;
+        inner_acc := #allocate($.caps.constants.handle_shape, $.T) ;
+        has_acc   := #allocate_val(false, $.T) ;
+        i         := #allocate_val($.Z, $.T) ;
+        (
+            dec_n := $.i ;
+            idx_b := #evaluate($.env.to_dec) ;
+            #drop(.dec_n) ;
+
+            fld_sym := #block(^( bytes := $#parent(#this).idx_b ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+            tmp_p1  := #block(^( lhs := "__tp_" ; rhs := $#parent(#this).idx_b ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+            tmp_p2  := #block(^( lhs := $#parent(#this).tmp_p1 ; rhs := "_" ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+            tmp_bs  := #block(^( lhs := $#parent(#this).tmp_p2 ; rhs := $#parent(#this).bs ; #break(#evaluate($#parent(#this).caps.intrinsics.bytes_concat)) )) ;
+            tmp_sym := #block(^( bytes := $#parent(#this).tmp_bs ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+
+            e_i   := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).i ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+            w_fld := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).fld_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+            w_tmp := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).tmp_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+
+            ! Outer stmt: #bind(__tp_<i>_<bs>, #allocate_val(e_i, false)) !
+            al_e  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).e_i ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+            s_out := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_tmp ; \1 := $#parent(#this).al_e ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+            ! Inner stmt: #bind(<i>, #allocate_val(#deref(#field(#parent(#this), __tp_<i>_<bs>)), false)) ; #drop(#field(#parent(#this), __tp_<i>_<bs>)) !
+            p_pt  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+            d_pt  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pt ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+            al_f  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pt ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+            b_f   := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_fld ; \1 := $#parent(#this).al_f ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+            dr_pt := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pt ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+            s_in  := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_f ; \1 := $#parent(#this).dr_pt ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+
+            (
+                .outer_acc = #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).outer_acc ; \1 := $#parent(#this).s_out ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+                .inner_acc = #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).inner_acc ; \1 := $#parent(#this).s_in ; #break(#evaluate($#parent(#this).caps.ast.seq)) ))
+            ) if $.has_acc else (
+                .outer_acc = $.s_out ;
+                .inner_acc = $.s_in ;
+                .has_acc   = true
+            ) ;
+
+            .i = #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+            #drop(.idx_b) ; #drop(.fld_sym) ; #drop(.tmp_p1) ; #drop(.tmp_p2) ; #drop(.tmp_bs) ; #drop(.tmp_sym) ;
+            #drop(.e_i) ; #drop(.w_fld) ; #drop(.w_tmp) ; #drop(.al_e) ; #drop(.s_out) ;
+            #drop(.p_pt) ; #drop(.d_pt) ; #drop(.al_f) ; #drop(.b_f) ; #drop(.dr_pt) ; #drop(.s_in)
+        ) while ($.i < $.cnt) ;
+
+        v_in  := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_acc ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+        blk_t := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_in ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        \0 := $.outer_acc ; \1 := $.blk_t ;
+        #evaluate($.caps.ast.seq)
+    )
+) ;
+h_tuple := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+! --- 3. Register TupleExpr = ControlExpr (_ "," _ ControlExpr)* --- !
+lit_comma  := #block(^( fe := $#parent(#this).fe ; sym := \, ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+tup_body   := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_ws ; \1 := $#parent(#this).lit_comma ; \2 := $#parent(#this).ref_ws ; \3 := $#parent(#this).ref_ctrl ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+tup_tail   := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).tup_body ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_tuple    := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_ctrl ; \1 := $#parent(#this).tup_tail ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := TupleExpr ; expr := $#parent(#this).e_tuple ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_tuple ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_tuple  := #block(^( fe := $#parent(#this).fe ; name := TupleExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+! --- 4. Wire TupleExpr into LambdaExpr body & Infix --- !
+e_lam_b2 := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_lam ; \1 := $#parent(#this).ref_tuple ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+e_lam2   := #block(^(
+    fe := $#parent(#this).fe ;
+    \0 := $#parent(#this).ref_prefix ;
+    \1 := $#parent(#this).ref_ws ;
+    \2 := $#parent(#this).lit_arrow ;
+    \3 := $#parent(#this).ref_ws ;
+    \4 := $#parent(#this).e_lam_b2 ;
+    #break(#evaluate($#parent(#this).c_syn.seq))
+)) ;
+#block(^( fe := $#parent(#this).fe ; name := LambdaExpr ; expr := $#parent(#this).e_lam2 ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_lambda ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+e_infix_tup := #block(^(
+    fe := $#parent(#this).fe ;
+    \0 := $#parent(#this).ref_bind2 ;
+    \1 := $#parent(#this).ref_assign ;
+    \2 := $#parent(#this).ref_lam ;
+    \3 := $#parent(#this).ref_tuple ;
+    #break(#evaluate($#parent(#this).c_syn.choice))
+)) ;
+#block(^( fe := $#parent(#this).fe ; name := Infix ; expr := $#parent(#this).e_infix_tup ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! --- 5. Narrow BuiltinArgs on fe so `#builtin(a, b)` never consumes `,` as a TupleExpr --- !
+lit_lparen := #block(^( fe := $#parent(#this).fe ; sym := \( ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+lit_rparen := #block(^( fe := $#parent(#this).fe ; sym := \) ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+
+ba_more := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_ws ; \1 := $#parent(#this).lit_comma ; \2 := $#parent(#this).ref_ws ; \3 := $#parent(#this).ref_ctrl ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+ba_tail := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).ba_more ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_bargs := #block(^(
+    fe := $#parent(#this).fe ;
+    \0 := $#parent(#this).lit_lparen ;
+    \1 := $#parent(#this).ref_ws ;
+    \2 := $#parent(#this).ref_ctrl ;
+    \3 := $#parent(#this).ba_tail ;
+    \4 := $#parent(#this).ref_ws ;
+    \5 := $#parent(#this).lit_rparen ;
+    #break(#evaluate($#parent(#this).c_syn.seq))
+)) ;
+#block(^( fe := $#parent(#this).fe ; name := BuiltinArgs ; expr := $#parent(#this).e_bargs ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+ok

@@ -30,7 +30,7 @@ This document records the architectural refinements finalized during Compiler St
   - `#new(p)` — Create a `Suspended` coroutine from `Prototype` `p` (with root frame eagerly initialized), returning an 8B generational `Handle`.
   - `#destroy(coro)` — Explicitly reclaim a `Suspended` (abandoned) coroutine's stack & C++20 frame, bump its generation to invalidate stale `Handle`s, returning `bytes(1, 1)` (`0x01`/`0x00`; does not synthesize a body value).
   - `#coro_root_frame(coro)` — Return the fat `Pointer` to a `Suspended` coroutine's root `ConstructingFrame` (enabling Stdlib recursive Mark-Sweep GC and RAII cleanup).
-- **5 Allocation & Three-State Slot Machine**: `#allocate(s, is_mut)`, `#allocate_val(v, is_mut)`, `#touch(ptr)`, `#bind(sym, ptr)`, `#drop(ptr)`
+- **5 Allocation & Two-State Slot Machine**: `#allocate(s, is_mut)`, `#allocate_val(v, is_mut)`, `#touch(ptr)`, `#bind(sym, ptr)`, `#drop(ptr)` (`#drop` removes both slot and bind)
 - **2 Raw Bit Read/Write (POD/RAII-agnostic)**: `#deref(ptr)`, `#write(dst_ptr, val)`
 - **3 Navigation & Reflection**: `#parent(ptr)` (returns the parent OpenFrame pointer for an active `ConstructingFrame`, or null for root/non-open-frame pointers, enabling multi-level `#parent(#parent(#this))` traversal), `#field(ptr, sym)`, `#shape(val)`
 - **3 Control Flow**:
@@ -44,15 +44,15 @@ Open constructing frames and closed objects share the **exact same 40-byte `Shap
 ```text
 FieldEntry (32B, align 8):
   @0   sym:   Symbol  (4B)  — 0 = unbound anonymous slot (open frames only); != 0 for closed fields
-  @4   state: u8      (1B)  — 0 = Uninitialized, 1 = Live, 2 = Empty (closed fields are always 1 = Live)
+  @4   state: u8      (1B)  — 0 = Uninitialized, 1 = Live (closed fields are always 1 = Live; `#drop` removes slot & bind)
   @5   pad:   3B
   @8   ptr:   Pointer (24B) — relative fat-pointer { offset, sub_shape_ptr, mutability }
 
 FieldMapInline (24B, align 8):
-  @0   entries_ptr: u64 (8B) — ordered FieldEntry[count] (open frames keep all bind/unbind/3-state slots; closed shapes keep only Live bound fields)
+  @0   entries_ptr: u64 (8B) — ordered FieldEntry[count] (open frames keep all existing Uninitialized/Live slots; closed shapes keep only Live bound fields)
   @8   count:       u32 (4B)
   @12  bucket_mask: u32 (4B)
-  @16  buckets_ptr: u64 (8B) — open-addressing hash index (indexes ONLY sym != 0 && state == Live entries)
+  @16  buckets_ptr: u64 (8B) — open-addressing hash index (indexes ALL bound entries: sym != 0, both Uninitialized and Live)
 
 ShapeLayout (40B, align 8):
   @0   size:   u64 (8B)      — closed byte size (0 for open frames)
@@ -96,7 +96,7 @@ All capability operations are exposed as standard `Native` `Prototype` values (o
 | Module | Primitives / Constants | Role |
 | :--- | :--- | :--- |
 | **`constants`** | `true` (`0x01`), `false` (`0x00`) as `bytes(1, 1)`, `u64_zero`, `u64_one`, `u64_max`; bootstrapped base `Shape`s (`unit_shape`, `raw1/2/4/8_shape`, `symbol_shape`, `pointer_shape`, `field_entry_shape`, `field_map_shape`, `shape_meta`, `prototype_shape`, `handle_shape`) | Bootstrap values needed before Layer 1 literals exist (no Core `boolean_shape`) |
-| **`field_map`** | `empty`, `is_empty`, `count`, `get`, `at`, `insert`, `ptr_shape` | Works uniformly on both closed `ShapeLayout`s and open frames' `live_shape` (`at` reads ordered `FieldEntry` with `sym`/`state`/`ptr`; `get` queries `Live` bound hash index; `ptr_shape` reads the `Shape` pointed to by any fat pointer) |
+| **`field_map`** | `empty`, `is_empty`, `count`, `get`, `at`, `insert`, `ptr_shape` | Works uniformly on both closed `ShapeLayout`s and open frames' `live_shape` (`at` reads ordered `FieldEntry` with `sym`/`state`/`ptr`; `get` queries the bound hash index for all `sym != 0` entries; `ptr_shape` reads the `Shape` pointed to by any fat pointer) |
 | **`symbols`** | `byte_len`, `byte_at`, `to_bytes`, `intern_bytes` | Dynamic `RawBytes` ↔ `Symbol` conversion (`intern_bytes` is strictly for constructing dynamic identifier `Symbol`s, never numeric values) |
 | **`intrinsics`** | Prototype-Factory generators parameterized by width `N ∈ {1,2,4,8}`, `signed: bytes(1,1)`, and slot `Symbol`s (`add/sub/mul/div/rem_int`, `bit_and/or/xor/not`, `shl`, `shr`, `ext_int`, `trunc_int`, `add/sub/mul/div_float`, `ext/trunc_float`, `int_to_float`, `float_to_int`, `eq_bytes`, `eq_shape`, `lt/le_int`, `eq/lt/le_float`) + `bytes_at`, `bytes_slice` | Pure-data `IntrinsicProto` factories for hardware / LLVM IR instructions + `RawBytes` indexing |
 | **`ast`** | `new_arena`, `destroy_arena`, `word({arena, sym})`, `builtin({arena, kind, 0, ...})`, `seq({arena, 0, ...})`, `value({arena, val})`, `proto({arena, ast}) -> Ast`, `to_proto({ast}) -> Prototype`, `serialize`/`deserialize` | Standalone Core IR constructors (`proto` builds pure `ValueExpr{ AstProtoVal }` with zero `RuntimeContext`) + staging into current compile-time env (`to_proto`) |
@@ -127,3 +127,6 @@ Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C+
    - Registers **`ApplyExpr`** (juxtaposition of two `Prefix` expressions = strictly single-arg call, excluding `if`/`else`/`while`), expanding via a two-step handoff into a fresh `#block` with `__arg`, `__fn_env`, and `#break(#evaluate($.__code))`.
    - Registers **`LambdaExpr`** (`param -> body`, right-associative, strictly single-arg; `_ -> body` simply binds `_`), emitting a pure constant `{ __env := {} ; __code := ^( param := $.__arg ; body ) }`.
    - **Overrides `SelfField` (`.a`)** from `boot0.lang` to perform lexical upward lookup along `#this → #parent(...)`, stopping at any frame containing `__fn_env` (checking `__fn_env` before returning null). Explicit **`#this.a`** (via `Postfix` `p.a`) remains strictly single-frame `#field(#this, a)`.
+5. **`lib/std/syntax/tuples.lang`**:
+   - Registers **`TupleExpr`** (`ControlExpr (_ "," _ ControlExpr)*`, strictly non-nullable on both sides — trailing comma `a,` is a syntax error), evaluating elements left-to-right in caller `#this` and closing a pure transparent positional struct `{ \0 := e0 ; \1 := e1 ; ... }` (zero extra fields, zero matcher).
+   - Wires `TupleExpr` into `Infix` and `LambdaExpr` body, and narrows `BuiltinArgs` on `fe` (zero `Layer0.cpp` changes) so Core builtins `#field(a, b)` never consume `,` as a tuple.

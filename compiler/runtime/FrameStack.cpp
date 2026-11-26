@@ -1,5 +1,6 @@
 #include "FrameStack.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 
@@ -86,19 +87,14 @@ bool ConstructingFrame::bind(SymbolId sym, const PointerLayout& ptr) {
         return false;
     }
     FrameSlot* slot = it->second;
-    if (slot->is_bound || slot->state == SlotState::Empty) {
+    if (slot->is_bound) {
         return false;
     }
-    auto existing = sym_to_slot.find(sym);
-    if (existing != sym_to_slot.end()) {
-        if (existing->second->state != SlotState::Empty) {
-            return false;
-        }
-        existing->second = slot;
-    } else {
-        sym_to_slot.emplace(sym, slot);
-        bind_order.push_back(sym);
+    if (sym_to_slot.find(sym) != sym_to_slot.end()) {
+        return false;
     }
+    sym_to_slot.emplace(sym, slot);
+    bind_order.push_back(sym);
     slot->is_bound = true;
     slot->bound_sym = sym;
     sync_live_shape();
@@ -110,11 +106,7 @@ PointerLayout ConstructingFrame::field(SymbolId sym) const noexcept {
     if (it == sym_to_slot.end()) {
         return PointerLayout{};
     }
-    const FrameSlot* slot = it->second;
-    if (slot->state == SlotState::Empty) {
-        return PointerLayout{};
-    }
-    return slot->pointer();
+    return it->second->pointer();
 }
 
 FrameSlot* ConstructingFrame::find_direct_slot(uint64_t addr) const noexcept {
@@ -127,13 +119,12 @@ void ConstructingFrame::touch(const PointerLayout& ptr) {
     if (!slot) {
         throw std::runtime_error("#touch: target is not a direct child slot of #this");
     }
-    if (slot->state == SlotState::Uninitialized ||
-        (slot->state == SlotState::Empty && slot->mutability == 1)) {
+    if (slot->state == SlotState::Uninitialized) {
         slot->state = SlotState::Live;
         sync_live_shape();
         return;
     }
-    throw std::runtime_error("#touch: invalid slot state transition");
+    throw std::runtime_error("#touch: target slot is already Live");
 }
 
 void ConstructingFrame::drop_in_chain(const PointerLayout& ptr) {
@@ -141,10 +132,14 @@ void ConstructingFrame::drop_in_chain(const PointerLayout& ptr) {
     while (cur) {
         FrameSlot* slot = cur->find_direct_slot(ptr.addr);
         if (slot) {
-            if (slot->state == SlotState::Empty) {
-                throw std::runtime_error("#drop: double drop on already Empty slot");
+            cur->addr_to_slot.erase(ptr.addr);
+            if (slot->is_bound) {
+                cur->sym_to_slot.erase(slot->bound_sym);
+                std::erase(cur->bind_order, slot->bound_sym);
             }
-            slot->state = SlotState::Empty;
+            std::erase_if(cur->slots, [slot](const std::unique_ptr<FrameSlot>& up) {
+                return up.get() == slot;
+            });
             cur->sync_live_shape();
             return;
         }

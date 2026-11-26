@@ -12,7 +12,6 @@ namespace reverSilly::Lang::Runtime {
 enum class SlotState : uint8_t {
     Uninitialized = 0,
     Live = 1,
-    Empty = 2,
 };
 
 // Transparent 24-byte Pointer layout.
@@ -31,7 +30,7 @@ static_assert(alignof(PointerLayout) == 8, "PointerLayout must be 8-byte aligned
 
 // Unified transparent 32-byte FieldEntry layout serving BOTH closed Shapes and open ConstructingFrames:
 //   @0   sym:   Symbol  (4B)  — 0 = unbound anonymous slot (open frames only)
-//   @4   state: u8      (1B)  — 0 = Uninitialized, 1 = Live, 2 = Empty (closed fields always 1 = Live)
+//   @4   state: u8      (1B)  — 0 = Uninitialized, 1 = Live (closed fields always 1 = Live)
 //   @5   pad:   3B
 //   @8   ptr:   Pointer (24B) — relative fat-pointer { offset, sub_shape_ptr, mutability }
 struct alignas(8) FieldEntry {
@@ -44,7 +43,7 @@ struct alignas(8) FieldEntry {
     uint64_t sub_shape_addr() const noexcept { return rel_ptr.shape_ptr; }
     uint8_t mutability() const noexcept { return rel_ptr.mutability; }
     SlotState slot_state() const noexcept { return static_cast<SlotState>(state); }
-    bool is_live_bound() const noexcept { return sym != 0 && state == static_cast<uint8_t>(SlotState::Live); }
+    bool is_bound() const noexcept { return sym != 0; }
 };
 
 static_assert(sizeof(FieldEntry) == 32, "FieldEntry must be 32 bytes");

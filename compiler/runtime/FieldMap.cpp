@@ -29,7 +29,7 @@ const FieldEntry* FieldMapInline::find(SymbolId sym) const noexcept {
     const FieldEntry* arr = entries_begin();
     if (buckets_ptr == 0) {
         for (uint32_t i = 0; i < count; ++i) {
-            if (arr[i].sym == sym && arr[i].state == static_cast<uint8_t>(SlotState::Live)) {
+            if (arr[i].sym == sym) {
                 return &arr[i];
             }
         }
@@ -40,7 +40,7 @@ const FieldEntry* FieldMapInline::find(SymbolId sym) const noexcept {
     while (true) {
         uint32_t idx = buckets[slot];
         if (idx == kEmptyBucket) return nullptr;
-        if (arr[idx].sym == sym && arr[idx].state == static_cast<uint8_t>(SlotState::Live)) {
+        if (arr[idx].sym == sym) {
             return &arr[idx];
         }
         slot = (slot + 1) & bucket_mask;
@@ -68,7 +68,7 @@ FieldMapInline FieldMapInline::build_view(const std::vector<FieldEntry>& entries
         uint32_t mask = cap - 1;
         buckets_buf.assign(cap, kEmptyBucket);
         for (uint32_t i = 0; i < n; ++i) {
-            if (!entries[i].is_live_bound()) continue;
+            if (!entries[i].is_bound()) continue;
             uint32_t slot = hash_symbol_id(entries[i].sym) & mask;
             while (buckets_buf[slot] != kEmptyBucket) {
                 slot = (slot + 1) & mask;
@@ -110,7 +110,7 @@ FieldMapInline FieldMapArena::build(const std::vector<FieldEntry>& entries) {
         std::fill_n(st.buckets.get(), cap, FieldMapInline::kEmptyBucket);
 
         for (uint32_t i = 0; i < n; ++i) {
-            if (!entries[i].is_live_bound()) continue;
+            if (!entries[i].is_bound()) continue;
             uint32_t slot = hash_symbol_id(entries[i].sym) & mask;
             while (st.buckets[slot] != FieldMapInline::kEmptyBucket) {
                 slot = (slot + 1) & mask;
