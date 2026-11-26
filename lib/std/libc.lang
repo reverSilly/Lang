@@ -24,8 +24,8 @@ c_ptr   := $.c_con.raw8_shape ;
 
 ! Construct a deterministic 4-byte 0 via Prototype-Factory trunc_int(8 -> 4) !
 trunc_8_4 := #block(^(
-    from := $#parent(#this).c_con.raw8_shape.size ;
-    to   := $#parent(#this).c_con.raw4_shape.size ;
+    from := $(($#parent(#this).c_con.raw8_shape).size) ;
+    to   := $(($#parent(#this).c_con.raw4_shape).size) ;
     src  := x ;
     #break(#evaluate($#parent(#this).c_int.trunc_int))
 ), $.F) ;

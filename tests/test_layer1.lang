@@ -18,7 +18,7 @@ assert_true := ^(
 a := 42 ;
 s := "hello_layer1" ;
 cond := $.a == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
-s_sh := #shape($.s) ; cond := $.s_sh.size == $.R12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+s_sh := #shape($.s) ; cond := $(($.s_sh).size) == $.R12 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 1b. ZST-marker Boolean & Unary Prefix Operators (+, -, ~) !
 cond := true == true ; #evaluate($.assert_true) ; #drop(.cond) ;
@@ -128,11 +128,11 @@ cond := $.\0 == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
 ! 9. BytesLit Escaped support (" and \) and empty BytesLit !
 eb := "" ;
 eb_sh := #shape($.eb) ;
-cond := $.eb_sh.size == $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $(($.eb_sh).size) == $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 esc_b := "a\"b\\c" ;
 esc_sh := #shape($.esc_b) ;
-cond := $.esc_sh.size == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $(($.esc_sh).size) == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 10. Lexical upward `.sym` lookup, `#this.sym` single-frame, & juxtaposition calls !
 up_val := 77 ;

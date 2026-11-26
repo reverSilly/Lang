@@ -43,7 +43,7 @@ raw_h := ^(
     ONE := $.caps.constants.u64_one ;
     bs := #evaluate($.caps.syntax.cst_view_bytes) ;
     bs_sh := #shape($.bs) ;
-    n := $.bs_sh.size ;
+    n := $(($.bs_sh).size) ;
     acc := #allocate_val($.Z, $.T) ;
     i   := #allocate_val($.Z, $.T) ;
     (

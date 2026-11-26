@@ -27,7 +27,7 @@ cond := $.caps_p.addr == $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
 cond := $.args.count == $.R2 ; #evaluate($.assert_true) ; #drop(.cond) ;
 arg1 := $.args.\1 ;
 arg1_sh := #shape($.arg1) ;
-cond := $.arg1_sh.size == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $(($.arg1_sh).size) == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
 ! 3. Verify default injected `libc` (`malloc` + `free`) !
 ptr := #block(^(

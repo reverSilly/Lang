@@ -40,7 +40,7 @@ op_iops := {
     zero_raw1    := $#parent(#this).F ;
     zero_raw8    := $#parent(#this).Z ;
     symbol_shape := $#parent(#this).c_con.symbol_shape ;
-    shape_meta   := $#parent(#this).c_con.shape_meta ;
+    pointer_shape := $#parent(#this).c_con.pointer_shape ;
     types        := $#parent(#this).types
 } ;
 
@@ -211,11 +211,11 @@ op_raw := ^(
                     r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_sym)) ), $.iops.zero_raw1) ;
                     $({ __raw := $#parent(#this).r ; __boolean_tag := {} })
                 ) if $.is_sym else (
-                    is_sh := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.shape_meta ; #break(#evaluate($#parent(#this).iops.eq_shape)) ), $.iops.zero_raw1) ;
+                    is_ptr := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.pointer_shape ; #break(#evaluate($#parent(#this).iops.eq_shape)) ), $.iops.zero_raw1) ;
                     (
-                        r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_shape)) ), $.iops.zero_raw1) ;
+                        r := #block(^( a := $#parent(#this).a.addr ; b := $#parent(#this).b.addr ; #break(#evaluate($#parent(#this).iops.eq_i64)) ), $.iops.zero_raw1) ;
                         $({ __raw := $#parent(#this).r ; __boolean_tag := {} })
-                    ) if $.is_sh else (
+                    ) if $.is_ptr else (
                         is_r8 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.raw8_shape ; #break(#evaluate($#parent(#this).iops.eq_shape)) ), $.iops.zero_raw1) ;
                         (
                             r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_i64)) ), $.iops.zero_raw1) ;

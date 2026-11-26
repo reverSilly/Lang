@@ -70,7 +70,7 @@
     #bind(c_syn, #allocate_val($#field(.caps, syntax), $.F)) ;
     #bind(c_ast, #allocate_val($#field(.caps, ast), $.F)) ;
     #bind(c_int, #allocate_val($#field(.caps, intrinsics), $.F)) ;
-    #bind(W8, #allocate_val($#field(#field(#field(.caps, constants), raw8_shape), size), $.F)) ;
+    #bind(W8, #allocate_val($#field($#field(#field(.caps, constants), raw8_shape), size), $.F)) ;
     #bind(lt_u64, #block(^(
         #bind(signed, #allocate_val($#field(#parent(#this), F), $#field(#parent(#this), F))) ;
         #bind(width, #allocate_val($#field(#parent(#this), W8), $#field(#parent(#this), F))) ;

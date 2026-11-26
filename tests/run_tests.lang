@@ -90,15 +90,15 @@
 #drop(#field(#this, src)) ;
 
 ! Materialize compile-time cast intrinsics (`trunc_8_4`, `sext_4_8`) !
-#bind(from, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
-#bind(to, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw4_shape), size)), #deref(#field(#this, F)))) ;
+#bind(from, #allocate_val(#deref(#field(#deref(#field(#field(#field(#this, capabilities), constants), raw8_shape)), size)), #deref(#field(#this, F)))) ;
+#bind(to, #allocate_val(#deref(#field(#deref(#field(#field(#field(#this, capabilities), constants), raw4_shape)), size)), #deref(#field(#this, F)))) ;
 #bind(src, #allocate_val(x, #deref(#field(#this, F)))) ;
 #bind(trunc_8_4, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), trunc_int))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, from)) ; #drop(#field(#this, to)) ; #drop(#field(#this, src)) ;
 
 #bind(signed, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), true)), #deref(#field(#this, F)))) ;
-#bind(from, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw4_shape), size)), #deref(#field(#this, F)))) ;
-#bind(to, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+#bind(from, #allocate_val(#deref(#field(#deref(#field(#field(#field(#this, capabilities), constants), raw4_shape)), size)), #deref(#field(#this, F)))) ;
+#bind(to, #allocate_val(#deref(#field(#deref(#field(#field(#field(#this, capabilities), constants), raw8_shape)), size)), #deref(#field(#this, F)))) ;
 #bind(src, #allocate_val(x, #deref(#field(#this, F)))) ;
 #bind(sext_4_8, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), ext_int))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, signed)) ; #drop(#field(#this, from)) ; #drop(#field(#this, to)) ; #drop(#field(#this, src)) ;
