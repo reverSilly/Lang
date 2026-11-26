@@ -103,7 +103,7 @@
 #bind(n_child_count, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, p_tmp)) ;
 
-#bind(sym, #allocate_val(to_proto, #deref(#field(#this, F)))) ;
+#bind(sym, #allocate_val(proto, #deref(#field(#this, F)))) ;
 #bind(w_tmp, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), word))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;
 #bind(kind, #allocate_val(field, #deref(#field(#this, F)))) ;
@@ -113,7 +113,7 @@
 #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, w_tmp)) ;
 #bind(kind, #allocate_val(deref, #deref(#field(#this, F)))) ;
 #bind(0, #allocate_val(#deref(#field(#this, p_tmp)), #deref(#field(#this, F)))) ;
-#bind(n_to_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+#bind(n_ast_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, p_tmp)) ;
 
 #bind(sym, #allocate_val(value, #deref(#field(#this, F)))) ;
@@ -289,7 +289,7 @@
 
 ! ============================================================================ !
 ! Rule 1: ^Expr (Proto in Prefix)                                              !
-! Handler: index:=0 ; ast:=eval_child ; val:=to_proto ; ast.value              !
+! Handler: index:=0 ; ast:=eval_child ; ast.proto                              !
 ! ============================================================================ !
 #bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
 #bind(0, #allocate_val(#deref(#field(#this, expr_eval_child)), #deref(#field(#this, F)))) ;
@@ -304,33 +304,15 @@
 #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, t1)) ;
 
 #bind(kind, #allocate_val(evaluate, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, n_to_proto)), #deref(#field(#this, F)))) ;
-#bind(t1, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ;
-
-#bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, t1)), #deref(#field(#this, F)))) ;
-#bind(1, #allocate_val(#deref(#field(#this, n_F)), #deref(#field(#this, F)))) ;
-#bind(t2, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, t1)) ;
-
-#bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, w_val)), #deref(#field(#this, F)))) ;
-#bind(1, #allocate_val(#deref(#field(#this, t2)), #deref(#field(#this, F)))) ;
+#bind(0, #allocate_val(#deref(#field(#this, n_ast_proto)), #deref(#field(#this, F)))) ;
 #bind(p_s3, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, t2)) ;
-
-#bind(kind, #allocate_val(evaluate, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, n_ast_val)), #deref(#field(#this, F)))) ;
-#bind(p_s4, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ;
 
 #bind(0, #allocate_val(#deref(#field(#this, stmt_bind_idx0)), #deref(#field(#this, F)))) ;
 #bind(1, #allocate_val(#deref(#field(#this, p_s2)), #deref(#field(#this, F)))) ;
 #bind(2, #allocate_val(#deref(#field(#this, p_s3)), #deref(#field(#this, F)))) ;
-#bind(3, #allocate_val(#deref(#field(#this, p_s4)), #deref(#field(#this, F)))) ;
 #bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), seq))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, 2)) ; #drop(#field(#this, 3)) ;
+#drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, 2)) ;
 #bind(h_proto, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), to_proto))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, ast)) ;
 

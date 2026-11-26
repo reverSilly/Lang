@@ -234,8 +234,7 @@ e_bytes := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_quote ;
 ! ============================================================================ !
 raw_h := ^(
     a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-    p_this := #block(^( ast := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_p    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_this ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_p    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
     kind := block ; 0 := $.v_p ;
     #evaluate($.caps.ast.builtin)
 ) ;
@@ -245,8 +244,7 @@ e_empty_blk := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).lit_lbr
 
 raw_h := ^(
     body_ast := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
-    p_body   := #block(^( ast := $#parent(#this).body_ast ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_p      := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_body ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_p      := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).body_ast ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
     kind := block ; 0 := $.v_p ;
     #evaluate($.caps.ast.builtin)
 ) ;
@@ -327,10 +325,8 @@ raw_h := ^(
     e_then := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
     e_cond := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_one  ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
     e_else := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).env.two                 ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
-    p_then := #block(^( ast := $#parent(#this).e_then ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    p_else := #block(^( ast := $#parent(#this).e_else ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_then := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_then ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
-    v_else := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_else ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_then := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).e_then ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+    v_else := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).e_else ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
     kind := branch ; 0 := $.e_cond ; 1 := $.v_then ; 2 := $.v_else ;
     #evaluate($.caps.ast.builtin)
 ) ;
@@ -350,15 +346,11 @@ raw_h := ^(
     ev_rec := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; 0 := $#parent(#this).d_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
     tb_seq := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).e_body ; 1 := $#parent(#this).ev_rec ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    tb_pr  := #block(^( ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_tb   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).tb_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
-
-    fb_pr  := #block(^( ast := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_fb   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).fb_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_tb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+    v_fb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     br_ast := #block(^( arena := $#parent(#this).arena ; kind := branch ; 0 := $#parent(#this).e_cond ; 1 := $#parent(#this).v_tb ; 2 := $#parent(#this).v_fb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-    st_pr  := #block(^( ast := $#parent(#this).br_ast ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_st   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).st_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_st   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).br_ast ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     al_st  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).v_st ; 1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     s1     := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).w_loop ; 1 := $#parent(#this).al_st ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
@@ -436,24 +428,20 @@ raw_h := ^(
     ev_eqs  := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; 0 := $#parent(#this).v_eqs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     brk_eq  := #block(^( arena := $#parent(#this).arena ; kind := break ; 0 := $#parent(#this).ev_eqs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     cond_seq := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).b_a ; 1 := $#parent(#this).b_b ; 2 := $#parent(#this).brk_eq ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    cond_pr  := #block(^( ast := $#parent(#this).cond_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_cond_p := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).cond_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_cond_p := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).cond_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
     cond_blk := #block(^( arena := $#parent(#this).arena ; kind := block ; 0 := $#parent(#this).v_cond_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
     al_v    := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; 0 := $#parent(#this).v_tmp ; 1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     bind_fb := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).v_key ; 1 := $#parent(#this).al_v ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     fb_seq  := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).bind_fb ; 1 := $#parent(#this).drop_tmp ; 2 := $#parent(#this).drop_key ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    fb_pr   := #block(^( ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_fb_p  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).fb_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_fb_p  := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     dr_seq  := #block(^( arena := $#parent(#this).arena ; 0 := $#parent(#this).drop_tmp ; 1 := $#parent(#this).drop_key ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    dr_pr   := #block(^( ast := $#parent(#this).dr_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_dr_p  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).dr_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_dr_p  := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).dr_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     try_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; 0 := $#parent(#this).v_key ; 1 := $#parent(#this).v_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     inner_br := #block(^( arena := $#parent(#this).arena ; kind := branch ; 0 := $#parent(#this).try_bind ; 1 := $#parent(#this).v_dr_p ; 2 := $#parent(#this).v_fb_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
-    ptr_pr   := #block(^( ast := $#parent(#this).inner_br ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_ptr_p  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).ptr_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_ptr_p  := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_br ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     outer_br := #block(^( arena := $#parent(#this).arena ; kind := branch ; 0 := $#parent(#this).cond_blk ; 1 := $#parent(#this).v_ptr_p ; 2 := $#parent(#this).v_fb_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     0 := $.stmt0 ; 1 := $.stmt1 ; 2 := $.outer_br ;
