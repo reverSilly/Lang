@@ -133,8 +133,7 @@ build_apply_ast := ^(
             \7 := $#parent(#this).brk_lc ;
             #break(#evaluate($#parent(#this).caps.ast.seq))
         )) ;
-        inner_p := #block(^( ast := $#parent(#this).inner_s ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-        v_ip    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).inner_p ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        v_ip    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_s ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
         blk_ap  := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_ip ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
         #break(#block(^(
@@ -284,8 +283,7 @@ raw_h := ^(
     brk_op := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).ev_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
     in_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_s ; \1 := $#parent(#this).dr_plk ; \2 := $#parent(#this).brk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    in_pr  := #block(^( ast := $#parent(#this).in_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_pr   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).in_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_pr   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).in_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
     blk_lk := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_pr ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
     \0 := $.s_bind ; \1 := $.blk_lk ;

@@ -275,8 +275,7 @@ build_unop_ast := ^(
         ev_op  := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
         brk_op := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).ev_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
         b_seq  := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_x ; \1 := $#parent(#this).dr_pua ; \2 := $#parent(#this).brk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-        b_pr   := #block(^( ast := $#parent(#this).b_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-        v_pr   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).b_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        v_pr   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).b_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
         blk_op := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_pr ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
         #break(#block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_bind ; \1 := $#parent(#this).blk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) )))
     ))
@@ -329,8 +328,7 @@ build_binop_ast := ^(
             \4 := $#parent(#this).brk_op ;
             #break(#evaluate($#parent(#this).caps.ast.seq))
         )) ;
-        inner_p := #block(^( ast := $#parent(#this).inner_s ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-        v_ip    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).inner_p ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        v_ip    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_s ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
         blk_op  := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_ip ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
         #break(#block(^(
@@ -517,10 +515,8 @@ raw_h := ^(
 
     tb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_then ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
     eb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_else ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    p_then := #block(^( ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    p_else := #block(^( ast := $#parent(#this).eb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_then := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_then ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
-    v_else := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_else ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_then := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+    v_else := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).eb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
     br_n   := #block(^( arena := $#parent(#this).arena ; kind := branch ; \0 := $#parent(#this).d_raw ; \1 := $#parent(#this).v_then ; \2 := $#parent(#this).v_else ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     \0 := $.s_bind ; \1 := $.br_n ;
     #evaluate($.caps.ast.seq)
@@ -554,17 +550,14 @@ raw_h := ^(
     dr_c   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
 
     tb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_body ; \2 := $#parent(#this).ev_rec ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    tb_pr  := #block(^( ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_tb   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).tb_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_tb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     fb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    fb_pr  := #block(^( ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_fb   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).fb_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_fb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     br_ast := #block(^( arena := $#parent(#this).arena ; kind := branch ; \0 := $#parent(#this).d_raw ; \1 := $#parent(#this).v_tb ; \2 := $#parent(#this).v_fb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     st_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_c ; \1 := $#parent(#this).br_ast ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
-    st_pr  := #block(^( ast := $#parent(#this).st_seq ; #break(#evaluate($#parent(#this).caps.ast.to_proto)) )) ;
-    v_st   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).st_pr ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    v_st   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).st_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
 
     al_st  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).v_st ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
     s1     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_loop ; \1 := $#parent(#this).al_st ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
