@@ -789,21 +789,24 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
             co_return co_await eval_proto(args[0].as_pod<uint64_t>());
         }
         case K::Block: {
-            expect_shape(args[0], rt.shapes.prototype_shape, "#block: argument must be a Prototype");
+            expect_shape(args[0], rt.shapes.prototype_shape, "#block: first argument must be a Prototype");
+            expect_shape(args[1], rt.shapes.raw1_shape, "#block: second argument (is_mut) must be raw1 (bytes(1, 1))");
             uint64_t proto_addr = args[0].as_pod<uint64_t>();
+            bool is_mut = args[1].as_pod<uint8_t>() != 0;
             rt.active_coro->push_frame();
+            Runtime::Value result_val;
             try {
                 (void)co_await eval_proto(proto_addr);
+                result_val = rt.active_coro->current_frame()->close_and_flatten(rt.shapes);
             } catch (BreakSignal& sig) {
-                rt.active_coro->pop_frame();
-                co_return std::move(sig.value);
+                result_val = std::move(sig.value);
             } catch (...) {
                 rt.active_coro->pop_frame();
                 throw;
             }
-            Runtime::Value flattened = rt.active_coro->current_frame()->close_and_flatten(rt.shapes);
             rt.active_coro->pop_frame();
-            co_return flattened;
+            Runtime::FrameSlot* slot = rt.active_coro->current_frame()->allocate_val(result_val, is_mut);
+            co_return rt.make_pointer(slot->pointer());
         }
         case K::New: {
             expect_shape(args[0], rt.shapes.prototype_shape, "#new: argument must be a Prototype");

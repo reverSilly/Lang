@@ -71,19 +71,19 @@
     #bind(c_ast, #allocate_val($#field(.caps, ast), $.F)) ;
     #bind(c_int, #allocate_val($#field(.caps, intrinsics), $.F)) ;
     #bind(W8, #allocate_val($#field(#field(#field(.caps, constants), raw8_shape), size), $.F)) ;
-    #bind(lt_u64, #allocate_val(#block(^(
+    #bind(lt_u64, #block(^(
         #bind(signed, #allocate_val($#field(#parent(#this), F), $#field(#parent(#this), F))) ;
         #bind(width, #allocate_val($#field(#parent(#this), W8), $#field(#parent(#this), F))) ;
         #bind(lhs, #allocate_val(a, $#field(#parent(#this), F))) ;
         #bind(rhs, #allocate_val(b, $#field(#parent(#this), F))) ;
         #break(#evaluate($#field(#field(#parent(#this), c_int), lt_int)))
-    )), $.F)) ;
-    #bind(add_u64, #allocate_val(#block(^(
+    ), $.F)) ;
+    #bind(add_u64, #block(^(
         #bind(width, #allocate_val($#field(#parent(#this), W8), $#field(#parent(#this), F))) ;
         #bind(lhs, #allocate_val(a, $#field(#parent(#this), F))) ;
         #bind(rhs, #allocate_val(b, $#field(#parent(#this), F))) ;
         #break(#evaluate($#field(#field(#parent(#this), c_int), add_int)))
-    )), $.F)) ;
+    ), $.F)) ;
 
     #bind(cnt, #allocate_val(#evaluate($#field(.c_syn, cst_child_count)), $.F)) ;
     #bind(index, #allocate_val($.Z, $.T)) ;

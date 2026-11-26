@@ -427,20 +427,15 @@
 #drop(#field(#this, val)) ;
 #bind(kind, #allocate_val(block, #deref(#field(#this, F)))) ;
 #bind(0, #allocate_val(#deref(#field(#this, v_mk_t_p)), #deref(#field(#this, F)))) ;
-#bind(n_this_handle_ast, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ;
-
-#bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
-#bind(0, #allocate_val(#deref(#field(#this, n_this_handle_ast)), #deref(#field(#this, F)))) ;
 #bind(1, #allocate_val(#deref(#field(#this, n_F)), #deref(#field(#this, F)))) ;
-#bind(t1, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
+#bind(n_this_handle_ast, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
 
 #bind(kind, #allocate_val(bind, #deref(#field(#this, F)))) ;
 #bind(0, #allocate_val(#deref(#field(#this, w_0)), #deref(#field(#this, F)))) ;
-#bind(1, #allocate_val(#deref(#field(#this, t1)), #deref(#field(#this, F)))) ;
+#bind(1, #allocate_val(#deref(#field(#this, n_this_handle_ast)), #deref(#field(#this, F)))) ;
 #bind(sf_s3, #allocate_val(#evaluate(#deref(#field(#field(#this, c_ast), builtin))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ; #drop(#field(#this, t1)) ;
+#drop(#field(#this, kind)) ; #drop(#field(#this, 0)) ; #drop(#field(#this, 1)) ;
 
 #bind(kind, #allocate_val(allocate_val, #deref(#field(#this, F)))) ;
 #bind(0, #allocate_val(#deref(#field(#this, w_field)), #deref(#field(#this, F)))) ;

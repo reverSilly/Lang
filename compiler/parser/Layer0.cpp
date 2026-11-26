@@ -14,7 +14,7 @@ const std::unordered_map<std::string_view, BuiltinSpec>& builtin_table() {
 
         // 5 evaluation & coroutine lifecycle / reflection primitives
         {"evaluate", {K::Evaluate, 1}},
-        {"block", {K::Block, 1}},
+        {"block", {K::Block, 2}},
         {"new", {K::New, 1}},
         {"destroy", {K::Destroy, 1}},
         {"coro_root_frame", {K::CoroRootFrame, 1}},

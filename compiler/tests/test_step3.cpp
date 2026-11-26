@@ -57,13 +57,19 @@ static void test_block_flatten_break_and_branch() {
     auto* p_slot = rt.current_frame()->allocate_val(rt.make_proto(blk_proto), false);
     rt.current_frame()->bind(rt.symbols.intern("blk_p"), p_slot->pointer());
 
-    Value closed = ev.run(fe.parse("#block(#deref(#field(#this, blk_p)))"));
-    const ShapeLayout* cs = closed.shape();
+    Value closed_ptr_val = ev.run(fe.parse(
+        "#block(#deref(#field(#this, blk_p)), #deref(#field(#field(#field(#this, capabilities), constants), false)))"));
+    assert(closed_ptr_val.shape_addr == rt.shapes.pointer_shape);
+    PointerLayout closed_ptr = closed_ptr_val.as_pod<PointerLayout>();
+    assert(!closed_ptr.is_null() && closed_ptr.mutability == 0);
+    const ShapeLayout* cs = reinterpret_cast<const ShapeLayout*>(closed_ptr.shape_ptr);
     assert(cs->fields.count == 1);
     assert(cs->fields.entries_begin()[0].sym == rt.symbols.intern("x"));
 
-    auto* c_slot = rt.current_frame()->allocate_val(closed, false);
-    rt.current_frame()->bind(rt.symbols.intern("closed_obj"), c_slot->pointer());
+    // Direct zero-copy #bind of unbound slot R_B returned by #block
+    bool bound_ok = rt.current_frame()->bind(rt.symbols.intern("closed_obj"), closed_ptr);
+    assert(bound_ok);
+    (void)bound_ok;
 
     Value count_val = ev.run(fe.parse(R"(
         #bind(s, #allocate_val(#shape(#deref(#field(#this, closed_obj))), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
@@ -77,9 +83,16 @@ static void test_block_flatten_break_and_branch() {
     auto* bp_slot = rt.current_frame()->allocate_val(rt.make_proto(brk_proto), false);
     rt.current_frame()->bind(rt.symbols.intern("brk_p"), bp_slot->pointer());
 
-    Value brk_res = ev.run(fe.parse("#block(#deref(#field(#this, brk_p)))"));
-    assert(brk_res.shape_addr == rt.shapes.symbol_shape);
+    Value brk_ptr_val = ev.run(fe.parse(
+        "#block(#deref(#field(#this, brk_p)), #deref(#field(#field(#field(#this, capabilities), constants), true)))"));
+    assert(brk_ptr_val.shape_addr == rt.shapes.pointer_shape);
+    PointerLayout brk_ptr = brk_ptr_val.as_pod<PointerLayout>();
+    assert(!brk_ptr.is_null() && brk_ptr.mutability == 1 && brk_ptr.shape_ptr == rt.shapes.symbol_shape);
+    Value brk_res = rt.deref(brk_ptr);
     assert(rt.symbols.name(brk_res.as_pod<SymbolId>()) == "early_exit");
+    // Mutable R_B returned by #block(p, true) can be overwritten directly
+    rt.write(brk_ptr, rt.make_symbol(rt.symbols.intern("mutated_exit")));
+    assert(rt.symbols.name(rt.deref(brk_ptr).as_pod<SymbolId>()) == "mutated_exit");
 
     uint64_t p_yes = rt.prototypes.create_ast(fe.parse("yes_branch"));
     uint64_t p_no = rt.prototypes.create_ast(fe.parse("no_branch"));
@@ -97,8 +110,13 @@ static void test_block_flatten_break_and_branch() {
     uint64_t mid_p = rt.prototypes.create_ast(make_expr<BuiltinExpr>(
         BuiltinKind::Break,
         std::vector<ExprPtr>{make_expr<BuiltinExpr>(
-            BuiltinKind::Block,
-            std::vector<ExprPtr>{make_expr<ValueExpr>(reify_ast_value(rt, rt.make_proto(inner2_p)))})}));
+            BuiltinKind::Deref,
+            std::vector<ExprPtr>{make_expr<BuiltinExpr>(
+                BuiltinKind::Block,
+                std::vector<ExprPtr>{
+                    make_expr<ValueExpr>(reify_ast_value(rt, rt.make_proto(inner2_p))),
+                    make_expr<ValueExpr>(reify_ast_value(rt, Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0))),
+                })})}));
     rt.current_frame()->bind(
         rt.symbols.intern("outer_tag"),
         rt.current_frame()->allocate_val(rt.make_symbol(rt.symbols.intern("grandparent_ok")), false)->pointer());
@@ -106,7 +124,10 @@ static void test_block_flatten_break_and_branch() {
         rt.symbols.intern("mid_p"),
         rt.current_frame()->allocate_val(rt.make_proto(mid_p), false)->pointer());
 
-    Value gp_res = ev.run(fe.parse("#block(#deref(#field(#this, mid_p)))"));
+    Value gp_ptr_val = ev.run(fe.parse(
+        "#block(#deref(#field(#this, mid_p)), #deref(#field(#field(#field(#this, capabilities), constants), false)))"));
+    assert(gp_ptr_val.shape_addr == rt.shapes.pointer_shape);
+    Value gp_res = rt.deref(gp_ptr_val.as_pod<PointerLayout>());
     assert(gp_res.shape_addr == rt.shapes.symbol_shape);
     assert(rt.symbols.name(gp_res.as_pod<SymbolId>()) == "grandparent_ok");
 
@@ -157,7 +178,10 @@ static void test_coroutines_unified_frame_reflection_and_destroy() {
             }),
         make_expr<BuiltinExpr>(
             BuiltinKind::Block,
-            std::vector<ExprPtr>{make_expr<ValueExpr>(reify_ast_value(rt, rt.make_proto(inner_proto)))}),
+            std::vector<ExprPtr>{
+                make_expr<ValueExpr>(reify_ast_value(rt, rt.make_proto(inner_proto))),
+                make_expr<ValueExpr>(reify_ast_value(rt, Value::from_pod<uint8_t>(rt.shapes.raw1_shape, 0))),
+            }),
         fe.parse("#break(#deref(#in))"),
     });
 
@@ -220,7 +244,8 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
     Frontend fe;
 
     const std::string target_src =
-        "#block(^#bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))))";
+        "#block(^#bind(x, #allocate_val(hello, #deref(#field(#field(#field(#parent(#this), capabilities), constants), false)))), "
+        "#deref(#field(#field(#field(#this, capabilities), constants), false)))";
     rt.current_frame()->bind(
         rt.symbols.intern("target_src"),
         rt.current_frame()->allocate_val(rt.make_raw_bytes(target_src.data(), target_src.size()), false)->pointer());
@@ -448,13 +473,14 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
         #evaluate(#deref(#field(#this, parsed_proto)))
     )";
 
-    Value result = ev.run(fe.parse(bootstrap_src));
-    const ShapeLayout* s = result.shape();
+    Value result_ptr_val = ev.run(fe.parse(bootstrap_src));
+    assert(result_ptr_val.shape_addr == rt.shapes.pointer_shape);
+    PointerLayout r_ptr = result_ptr_val.as_pod<PointerLayout>();
+    const ShapeLayout* s = reinterpret_cast<const ShapeLayout*>(r_ptr.shape_ptr);
     assert(s->fields.count == 1);
     assert(s->fields.entries_begin()[0].sym == rt.symbols.intern("x"));
 
-    auto* r_slot = rt.current_frame()->allocate_val(result, false);
-    PointerLayout px = rt.field(r_slot->pointer(), rt.symbols.intern("x"));
+    PointerLayout px = rt.field(r_ptr, rt.symbols.intern("x"));
     Value x_val = rt.deref(px);
     assert(rt.symbols.name(x_val.as_pod<SymbolId>()) == "hello");
 }
