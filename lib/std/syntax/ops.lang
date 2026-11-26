@@ -1,0 +1,571 @@
+! ============================================================================ !
+! lib/std/ops.lang — Type-Dispatched Layer 1 Operators (depends on types.lang) !
+!                                                                              !
+! Written in Layer 1 (with types + literals active).                           !
+! Installs operator precedence ladder into `OpExpr`:                           !
+!   P7: UnaryExpr = ("+" / "-" / "~") _ UnaryExpr / Prefix                     !
+!   P8: MulExpr   = UnaryExpr (_ "*" _ UnaryExpr)*                             !
+!   P9: AddExpr   = MulExpr (_ ("+" / "-") _ MulExpr)*                         !
+!   P11/12: CmpExpr = AddExpr (_ ("==" / "<") _ AddExpr)*                      !
+!   OpExpr = CmpExpr                                                           !
+!                                                                              !
+! All runtime dispatch uses ZST-tagged Shapes from `types.lang`:               !
+!   - `~` on Boolean -> logical NOT (Boolean); on i8..i64 / u8..u64 -> bit_not !
+!   - `+` / `-` unary on i64 -> identity / 0 - x (i64)                         !
+!   - `*` / `+` / `-` binary on i64 -> i64                                     !
+!   - `<` on i64 (or raw8) -> Boolean                                          !
+!   - `==` on matching Shapes (i64, u64, u8, i8, Boolean, Symbol, Shape,       !
+!     raw8, raw1) -> Boolean                                                   !
+! ============================================================================ !
+
+! --- Build pure stageable op_iops table (zero caps / zero NativeProto) --- !
+p_not_1 := #block(^( width := $#parent(#this).W1 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.bit_not)) )) ;
+p_not_2 := #block(^( width := $#parent(#this).W2 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.bit_not)) )) ;
+p_not_4 := #block(^( width := $#parent(#this).W4 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.bit_not)) )) ;
+p_not_8 := #block(^( width := $#parent(#this).W8 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.bit_not)) )) ;
+
+op_iops := {
+    add_i64      := $#parent(#this).p_add_i64 ;
+    sub_i64      := $#parent(#this).p_sub_i64 ;
+    mul_i64      := $#parent(#this).p_mul_i64 ;
+    lt_i64       := $#parent(#this).p_lt_i64 ;
+    eq_i64       := $#parent(#this).p_eq_i64 ;
+    eq_sym       := $#parent(#this).p_eq_sym ;
+    eq_raw1      := $#parent(#this).p_eq_raw1 ;
+    eq_shape     := $#parent(#this).p_eq_shape ;
+    not_1        := $#parent(#this).p_not_1 ;
+    not_2        := $#parent(#this).p_not_2 ;
+    not_4        := $#parent(#this).p_not_4 ;
+    not_8        := $#parent(#this).p_not_8 ;
+    zero_raw1    := $#parent(#this).F ;
+    zero_raw8    := $#parent(#this).Z ;
+    symbol_shape := $#parent(#this).c_con.symbol_shape ;
+    shape_meta   := $#parent(#this).c_con.shape_meta ;
+    types        := $#parent(#this).types
+} ;
+
+! Helper: wrap runtime op prototype with `op_iops` bound as `iops` !
+wrap_std_op := ^(
+    #block(^(
+        p_iops := $#parent(#this).op_iops ;
+        arena  := $#parent(#this).arena ;
+        p_raw  := $#parent(#this).op_raw ;
+        val := $#parent(#this).F ; n_f := #evaluate($#parent(#this).c_ast.value) ; #drop(.val) ;
+        sym := iops ; w_i := #evaluate($#parent(#this).c_ast.word) ; #drop(.sym) ;
+        val := $.p_iops ; n_i := #evaluate($#parent(#this).c_ast.value) ; #drop(.val) ;
+        kind := allocate_val ; \0 := $.n_i ; \1 := $.n_f ; t_ai := #evaluate($#parent(#this).c_ast.builtin) ; #drop(.kind) ; #drop(.\0) ; #drop(.\1) ;
+        kind := bind ; \0 := $.w_i ; \1 := $.t_ai ; s2 := #evaluate($#parent(#this).c_ast.builtin) ; #drop(.kind) ; #drop(.\0) ; #drop(.\1) ;
+        val := $.p_raw ; n_r := #evaluate($#parent(#this).c_ast.value) ; #drop(.val) ;
+        kind := evaluate ; \0 := $.n_r ; s3 := #evaluate($#parent(#this).c_ast.builtin) ; #drop(.kind) ; #drop(.\0) ;
+        \0 := $.s2 ; \1 := $.s3 ; ast := #evaluate($#parent(#this).c_ast.seq) ; #drop(.\0) ; #drop(.\1) ;
+        #break(#evaluate($#parent(#this).c_ast.to_proto))
+    ))
+) ;
+
+! --- Runtime Shape-dispatched Unary Operators (P7: +, -, ~) --- !
+op_raw := ^(
+    is_i64 := #block(^( a := #shape($#parent(#this).x) ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    $.x if $.is_i64 else #break(type_error_pos)
+) ;
+op_pos := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+op_raw := ^(
+    is_i64 := #block(^( a := #shape($#parent(#this).x) ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        r := #block(^( a := $#parent(#this).iops.zero_raw8 ; b := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.sub_i64)) )) ;
+        { __raw := $#parent(#this).r ; __i64_tag := {} }
+    ) if $.is_i64 else #break(type_error_neg)
+) ;
+op_neg := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+op_raw := ^(
+    sx := #shape($.x) ;
+    is_bool := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.Boolean ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        r := #block(^( a := $#parent(#this).x.__raw ; b := $#parent(#this).iops.zero_raw1 ; #break(#evaluate($#parent(#this).iops.eq_raw1)) )) ;
+        { __raw := $#parent(#this).r ; __boolean_tag := {} }
+    ) if $.is_bool else (
+        is_i64 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+        (
+            r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_8)) )) ;
+            { __raw := $#parent(#this).r ; __i64_tag := {} }
+        ) if $.is_i64 else (
+            is_u64 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.u64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+            (
+                r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_8)) )) ;
+                { __raw := $#parent(#this).r ; __u64_tag := {} }
+            ) if $.is_u64 else (
+                is_i32 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.i32 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                (
+                    r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_4)) )) ;
+                    { __raw := $#parent(#this).r ; __i32_tag := {} }
+                ) if $.is_i32 else (
+                    is_u32 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.u32 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                    (
+                        r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_4)) )) ;
+                        { __raw := $#parent(#this).r ; __u32_tag := {} }
+                    ) if $.is_u32 else (
+                        is_i16 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.i16 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                        (
+                            r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_2)) )) ;
+                            { __raw := $#parent(#this).r ; __i16_tag := {} }
+                        ) if $.is_i16 else (
+                            is_u16 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.u16 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                            (
+                                r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_2)) )) ;
+                                { __raw := $#parent(#this).r ; __u16_tag := {} }
+                            ) if $.is_u16 else (
+                                is_i8 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.i8 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                                (
+                                    r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_1)) )) ;
+                                    { __raw := $#parent(#this).r ; __i8_tag := {} }
+                                ) if $.is_i8 else (
+                                    is_u8 := #block(^( a := $#parent(#this).sx ; b := $#parent(#this).iops.types.u8 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                                    (
+                                        r := #block(^( x := $#parent(#this).x.__raw ; #break(#evaluate($#parent(#this).iops.not_1)) )) ;
+                                        { __raw := $#parent(#this).r ; __u8_tag := {} }
+                                    ) if $.is_u8 else #break(type_error_not)
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    )
+) ;
+op_not := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+! --- Runtime Shape-dispatched Binary Operators (*, +, -, <, ==) --- !
+op_raw := ^(
+    same := #block(^( a := #shape($#parent(#this).a) ; b := #shape($#parent(#this).b) ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        is_i64 := #block(^( a := #shape($#parent(#this).a) ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+        (
+            r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.add_i64)) )) ;
+            { __raw := $#parent(#this).r ; __i64_tag := {} }
+        ) if $.is_i64 else #break(type_error_add)
+    ) if $.same else #break(type_error_add)
+) ;
+op_add := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+op_raw := ^(
+    same := #block(^( a := #shape($#parent(#this).a) ; b := #shape($#parent(#this).b) ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        is_i64 := #block(^( a := #shape($#parent(#this).a) ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+        (
+            r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.sub_i64)) )) ;
+            { __raw := $#parent(#this).r ; __i64_tag := {} }
+        ) if $.is_i64 else #break(type_error_sub)
+    ) if $.same else #break(type_error_sub)
+) ;
+op_sub := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+op_raw := ^(
+    same := #block(^( a := #shape($#parent(#this).a) ; b := #shape($#parent(#this).b) ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        is_i64 := #block(^( a := #shape($#parent(#this).a) ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+        (
+            r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.mul_i64)) )) ;
+            { __raw := $#parent(#this).r ; __i64_tag := {} }
+        ) if $.is_i64 else #break(type_error_mul)
+    ) if $.same else #break(type_error_mul)
+) ;
+op_mul := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+op_raw := ^(
+    same := #block(^( a := #shape($#parent(#this).a) ; b := #shape($#parent(#this).b) ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        sa := #shape($.a) ;
+        is_i64 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+        (
+            r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.lt_i64)) )) ;
+            { __raw := $#parent(#this).r ; __boolean_tag := {} }
+        ) if $.is_i64 else (
+            is_r8 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.raw8_shape ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+            (
+                r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.lt_i64)) )) ;
+                { __raw := $#parent(#this).r ; __boolean_tag := {} }
+            ) if $.is_r8 else #break(type_error_lt)
+        )
+    ) if $.same else #break(type_error_lt)
+) ;
+op_lt := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+op_raw := ^(
+    same := #block(^( a := #shape($#parent(#this).a) ; b := #shape($#parent(#this).b) ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+    (
+        sa := #shape($.a) ;
+        is_i64 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.i64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+        (
+            r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.eq_i64)) )) ;
+            { __raw := $#parent(#this).r ; __boolean_tag := {} }
+        ) if $.is_i64 else (
+            is_bool := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.Boolean ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+            (
+                r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.eq_raw1)) )) ;
+                { __raw := $#parent(#this).r ; __boolean_tag := {} }
+            ) if $.is_bool else (
+                is_sym := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.symbol_shape ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                (
+                    r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_sym)) )) ;
+                    { __raw := $#parent(#this).r ; __boolean_tag := {} }
+                ) if $.is_sym else (
+                    is_sh := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.shape_meta ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                    (
+                        r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                        { __raw := $#parent(#this).r ; __boolean_tag := {} }
+                    ) if $.is_sh else (
+                        is_r8 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.raw8_shape ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                        (
+                            r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_i64)) )) ;
+                            { __raw := $#parent(#this).r ; __boolean_tag := {} }
+                        ) if $.is_r8 else (
+                            is_r1 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.raw1_shape ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                            (
+                                r := #block(^( a := $#parent(#this).a ; b := $#parent(#this).b ; #break(#evaluate($#parent(#this).iops.eq_raw1)) )) ;
+                                { __raw := $#parent(#this).r ; __boolean_tag := {} }
+                            ) if $.is_r1 else (
+                                is_u8 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.u8 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                                (
+                                    r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.eq_raw1)) )) ;
+                                    { __raw := $#parent(#this).r ; __boolean_tag := {} }
+                                ) if $.is_u8 else (
+                                    is_u64 := #block(^( a := $#parent(#this).sa ; b := $#parent(#this).iops.types.u64 ; #break(#evaluate($#parent(#this).iops.eq_shape)) )) ;
+                                    (
+                                        r := #block(^( a := $#parent(#this).a.__raw ; b := $#parent(#this).b.__raw ; #break(#evaluate($#parent(#this).iops.eq_i64)) )) ;
+                                        { __raw := $#parent(#this).r ; __boolean_tag := {} }
+                                    ) if $.is_u64 else #break(type_error_eq)
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    ) if $.same else #break(type_error_eq)
+) ;
+op_eq := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
+
+! --- AST Builders for Unary & Binary Operators --- !
+build_unop_ast := ^(
+    #block(^(
+        caps   := $#parent(#this).caps ;
+        arena  := $#parent(#this).arena ;
+        u_sym  := $#parent(#this).u_sym ;
+        u_arg  := $#parent(#this).u_arg ;
+        u_op   := $#parent(#this).u_op ;
+        F      := $.caps.constants.\false ;
+        n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        a_par  := #block(^( arena := $#parent(#this).arena ; kind := parent ; \0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        w_ua   := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).u_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+        w_x    := #block(^( arena := $#parent(#this).arena ; sym := x ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+
+        al_arg := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).u_arg ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        s_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_ua ; \1 := $#parent(#this).al_arg ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        p_pua  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_ua ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        d_pua  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pua ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        dr_pua := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pua ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        al_x   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pua ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        b_x    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_x ; \1 := $#parent(#this).al_x ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        v_op   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).u_op ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        ev_op  := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        brk_op := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).ev_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        b_seq  := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_x ; \1 := $#parent(#this).dr_pua ; \2 := $#parent(#this).brk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+        v_pr   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).b_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+        blk_op := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_pr ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        #break(#block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_bind ; \1 := $#parent(#this).blk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) )))
+    ))
+) ;
+
+build_binop_ast := ^(
+    #block(^(
+        caps    := $#parent(#this).caps ;
+        arena   := $#parent(#this).arena ;
+        b_sym_a := $#parent(#this).b_sym_a ;
+        b_lhs   := $#parent(#this).b_lhs ;
+        b_rhs   := $#parent(#this).b_rhs ;
+        b_op    := $#parent(#this).b_op ;
+        F       := $.caps.constants.\false ;
+        n_F     := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        a_this  := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        a_par   := #block(^( arena := $#parent(#this).arena ; kind := parent ; \0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        w_oa    := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).b_sym_a ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+        w_ob    := #block(^( arena := $#parent(#this).arena ; sym := __op_b ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+        w_a     := #block(^( arena := $#parent(#this).arena ; sym := a ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+        w_b     := #block(^( arena := $#parent(#this).arena ; sym := b ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+
+        al_lhs  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).b_lhs ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        s_bind1 := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_oa ; \1 := $#parent(#this).al_lhs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        al_rhs  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).b_rhs ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        s_bind2 := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_ob ; \1 := $#parent(#this).al_rhs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        p_pa    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_oa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        d_pa    := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        al_a    := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pa ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        b_a     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_a ; \1 := $#parent(#this).al_a ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        dr_pa   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        p_pb    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_ob ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        d_pb    := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        al_b    := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pb ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        b_b     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_b ; \1 := $#parent(#this).al_b ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        dr_pb   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        v_op    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).b_op ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+        ev_op   := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+        brk_op  := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).ev_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        inner_s := #block(^(
+            arena := $#parent(#this).arena ;
+            \0 := $#parent(#this).b_a ;
+            \1 := $#parent(#this).b_b ;
+            \2 := $#parent(#this).dr_pa ;
+            \3 := $#parent(#this).dr_pb ;
+            \4 := $#parent(#this).brk_op ;
+            #break(#evaluate($#parent(#this).caps.ast.seq))
+        )) ;
+        v_ip    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_s ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+        blk_op  := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_ip ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+        #break(#block(^(
+            arena := $#parent(#this).arena ;
+            \0 := $#parent(#this).s_bind1 ;
+            \1 := $#parent(#this).s_bind2 ;
+            \2 := $#parent(#this).blk_op ;
+            #break(#evaluate($#parent(#this).caps.ast.seq))
+        )))
+    ))
+) ;
+
+ops_env2 := {
+    pos    := $#parent(#this).op_pos ;
+    neg    := $#parent(#this).op_neg ;
+    not    := $#parent(#this).op_not ;
+    add    := $#parent(#this).op_add ;
+    sub    := $#parent(#this).op_sub ;
+    mul    := $#parent(#this).op_mul ;
+    lt     := $#parent(#this).op_lt ;
+    eq     := $#parent(#this).op_eq ;
+    iops   := $#parent(#this).iops ;
+    build_unop  := $#parent(#this).build_unop_ast ;
+    build_binop := $#parent(#this).build_binop_ast
+} ;
+#drop(.h_env) ; h_env := $.ops_env2 ;
+
+! ============================================================================ !
+! P7: UnaryExpr = (UnaryOp _ UnaryExpr) / Prefix                               !
+!     UnaryOp   = "+" / "-" / "~"                                              !
+! ============================================================================ !
+e_unop := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).lit_plus ; \1 := $#parent(#this).lit_minus ; \2 := $#parent(#this).lit_tilde ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := UnaryOp ; expr := $#parent(#this).e_unop ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_unop := #block(^( fe := $#parent(#this).fe ; name := UnaryOp ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+raw_h := ^(
+    Z   := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    is_pass := #block(^( a := $#parent(#this).cnt ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.eq_i64)) )) ;
+    (
+        #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).Z ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ))
+    ) if $.is_pass else (
+        u_sym  := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+        op_sym := #block(^( node := $#parent(#this).node ; index := $#parent(#this).Z ; #break(#evaluate($#parent(#this).caps.syntax.cst_child_view_sym)) )) ;
+        u_arg  := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+        is_plus := #block(^( a := $#parent(#this).op_sym ; b := \+ ; #break(#evaluate($#parent(#this).env.iops.eq_sym)) )) ;
+        is_minus := #block(^( a := $#parent(#this).op_sym ; b := \- ; #break(#evaluate($#parent(#this).env.iops.eq_sym)) )) ;
+        u_op := $.env.pos if $.is_plus else ($.env.neg if $.is_minus else $.env.not) ;
+        #evaluate($.env.build_unop)
+    )
+) ;
+h_unary := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+ref_unary := #block(^( fe := $#parent(#this).fe ; name := UnaryExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+e_unary_app := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_unop ; \1 := $#parent(#this).ref_ws ; \2 := $#parent(#this).ref_unary ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+e_unary := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).e_unary_app ; \1 := $#parent(#this).ref_prefix ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := UnaryExpr ; expr := $#parent(#this).e_unary ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_unary ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! ============================================================================ !
+! P8: MulExpr = UnaryExpr (_ "*" _ UnaryExpr)*                                 !
+! ============================================================================ !
+raw_h := ^(
+    T   := $.caps.constants.\true ;
+    Z   := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    b_sym_a := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+    acc := #allocate_val(#block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).Z ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )), $.T) ;
+    i   := #allocate_val($.ONE, $.T) ;
+    (
+        b_lhs := $.acc ;
+        b_rhs := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).i ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+        b_op  := $.env.mul ;
+        .acc  = #evaluate($.env.build_binop) ;
+        #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.b_op) ;
+        .i    = #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) ))
+    ) while #block(^( a := $#parent(#this).i ; b := $#parent(#this).cnt ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) )) ;
+    $.acc
+) ;
+h_mul := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+mul_body := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_ws ; \1 := $#parent(#this).lit_star ; \2 := $#parent(#this).ref_ws ; \3 := $#parent(#this).ref_unary ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+mul_tail := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).mul_body ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_mul := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_unary ; \1 := $#parent(#this).mul_tail ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := MulExpr ; expr := $#parent(#this).e_mul ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_mul ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_mul := #block(^( fe := $#parent(#this).fe ; name := MulExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+! ============================================================================ !
+! P9: AddExpr = MulExpr (_ ("+" / "-") _ MulExpr)*                             !
+! ============================================================================ !
+e_addop := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).lit_plus ; \1 := $#parent(#this).lit_minus ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := AddOp ; expr := $#parent(#this).e_addop ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_addop := #block(^( fe := $#parent(#this).fe ; name := AddOp ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+raw_h := ^(
+    T   := $.caps.constants.\true ;
+    Z   := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    b_sym_a := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+    acc := #allocate_val(#block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).Z ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )), $.T) ;
+    i   := #allocate_val($.ONE, $.T) ;
+    (
+        op_sym := #block(^( node := $#parent(#this).node ; index := $#parent(#this).i ; #break(#evaluate($#parent(#this).caps.syntax.cst_child_view_sym)) )) ;
+        j := #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        b_lhs := $.acc ;
+        b_rhs := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).j ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+        is_plus := #block(^( a := $#parent(#this).op_sym ; b := \+ ; #break(#evaluate($#parent(#this).env.iops.eq_sym)) )) ;
+        b_op := $.env.add if $.is_plus else $.env.sub ;
+        .acc = #evaluate($.env.build_binop) ;
+        .i   = #block(^( a := $#parent(#this).j ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        #drop(.op_sym) ; #drop(.j) ; #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.is_plus) ; #drop(.b_op)
+    ) while #block(^( a := $#parent(#this).i ; b := $#parent(#this).cnt ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) )) ;
+    $.acc
+) ;
+h_add := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+add_body := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_ws ; \1 := $#parent(#this).ref_addop ; \2 := $#parent(#this).ref_ws ; \3 := $#parent(#this).ref_mul ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+add_tail := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).add_body ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_add := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_mul ; \1 := $#parent(#this).add_tail ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := AddExpr ; expr := $#parent(#this).e_add ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_add ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_add := #block(^( fe := $#parent(#this).fe ; name := AddExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+! ============================================================================ !
+! P11/12: CmpExpr = AddExpr (_ ("==" / "<") _ AddExpr)*                        !
+! ============================================================================ !
+lit_eqeq := #block(^( fe := $#parent(#this).fe ; sym := \=\= ; #break(#evaluate($#parent(#this).c_syn.lit)) )) ;
+e_cmpop := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).lit_eqeq ; \1 := $#parent(#this).lit_lt ; #break(#evaluate($#parent(#this).c_syn.choice)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := CmpOp ; expr := $#parent(#this).e_cmpop ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_cmpop := #block(^( fe := $#parent(#this).fe ; name := CmpOp ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+raw_h := ^(
+    T   := $.caps.constants.\true ;
+    Z   := $.caps.constants.u64_zero ;
+    ONE := $.caps.constants.u64_one ;
+    cnt := #evaluate($.caps.syntax.cst_child_count) ;
+    b_sym_a := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+    acc := #allocate_val(#block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).Z ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )), $.T) ;
+    i   := #allocate_val($.ONE, $.T) ;
+    (
+        op_sym := #block(^( node := $#parent(#this).node ; index := $#parent(#this).i ; #break(#evaluate($#parent(#this).caps.syntax.cst_child_view_sym)) )) ;
+        j := #block(^( a := $#parent(#this).i ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        b_lhs := $.acc ;
+        b_rhs := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).j ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+        is_eq := #block(^( a := $#parent(#this).op_sym ; b := \=\= ; #break(#evaluate($#parent(#this).env.iops.eq_sym)) )) ;
+        b_op := $.env.eq if $.is_eq else $.env.lt ;
+        .acc = #evaluate($.env.build_binop) ;
+        .i   = #block(^( a := $#parent(#this).j ; b := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).env.iops.add_i64)) )) ;
+        #drop(.op_sym) ; #drop(.j) ; #drop(.b_lhs) ; #drop(.b_rhs) ; #drop(.is_eq) ; #drop(.b_op)
+    ) while #block(^( a := $#parent(#this).i ; b := $#parent(#this).cnt ; #break(#evaluate($#parent(#this).env.iops.lt_i64)) )) ;
+    $.acc
+) ;
+h_cmp := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+
+cmp_body := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_ws ; \1 := $#parent(#this).ref_cmpop ; \2 := $#parent(#this).ref_ws ; \3 := $#parent(#this).ref_add ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+cmp_tail := #block(^( fe := $#parent(#this).fe ; body := $#parent(#this).cmp_body ; min := $#parent(#this).Z ; max := $#parent(#this).MAX ; #break(#evaluate($#parent(#this).c_syn.repeat)) )) ;
+e_cmp := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_add ; \1 := $#parent(#this).cmp_tail ; #break(#evaluate($#parent(#this).c_syn.seq)) )) ;
+#block(^( fe := $#parent(#this).fe ; name := CmpExpr ; expr := $#parent(#this).e_cmp ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_cmp ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+ref_cmp := #block(^( fe := $#parent(#this).fe ; name := CmpExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) )) ;
+
+! Wire OpExpr = CmpExpr (ControlExpr / BindInfix / AssignInfix automatically pick it upnot_) !
+#block(^( fe := $#parent(#this).fe ; name := OpExpr ; expr := $#parent(#this).ref_cmp ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+! Upgrade IfExpr & WhileExpr for user Layer 1: read Boolean.__raw directly with ZERO #block !
+raw_h := ^(
+    F := $.caps.constants.\false ;
+    n_F := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    e_then := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+    e_cond := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_one  ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+    e_else := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).env.two                 ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+
+    c_sym  := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+    w_c    := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).c_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    w_raw  := #block(^( arena := $#parent(#this).arena ; sym := __raw ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    al_c   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).e_cond ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    s_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_c ; \1 := $#parent(#this).al_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    p_c    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    p_raw  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).p_c ; \1 := $#parent(#this).w_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    d_raw  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    dr_c   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    tb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_then ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    eb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_else ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    v_then := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+    v_else := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).eb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+    br_n   := #block(^( arena := $#parent(#this).arena ; kind := branch ; \0 := $#parent(#this).d_raw ; \1 := $#parent(#this).v_then ; \2 := $#parent(#this).v_else ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    \0 := $.s_bind ; \1 := $.br_n ;
+    #evaluate($.caps.ast.seq)
+) ;
+#drop(.h_env) ;
+h_env := { two := $#parent(#this).TWO } ;
+h_if_bool := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+#block(^( fe := $#parent(#this).fe ; name := IfExpr ; expr := $#parent(#this).e_if ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_if_bool ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+raw_h := ^(
+    F := $.caps.constants.\false ;
+    n_F := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) )) ;
+    e_body := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+    e_cond := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_one  ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) )) ;
+
+    w_sym  := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) )) ;
+    w_loop := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).w_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    w_c    := #block(^( arena := $#parent(#this).arena ; sym := __wh_c ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    w_raw  := #block(^( arena := $#parent(#this).arena ; sym := __raw ; #break(#evaluate($#parent(#this).caps.ast.word)) )) ;
+    a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    p_loop := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    d_loop := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    ev_rec := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).d_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    al_c   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).e_cond ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    s_c    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_c ; \1 := $#parent(#this).al_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    p_c    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    p_raw  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).p_c ; \1 := $#parent(#this).w_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    d_raw  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    dr_c   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+
+    tb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_body ; \2 := $#parent(#this).ev_rec ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    v_tb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+
+    fb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    v_fb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+
+    br_ast := #block(^( arena := $#parent(#this).arena ; kind := branch ; \0 := $#parent(#this).d_raw ; \1 := $#parent(#this).v_tb ; \2 := $#parent(#this).v_fb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    st_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_c ; \1 := $#parent(#this).br_ast ; #break(#evaluate($#parent(#this).caps.ast.seq)) )) ;
+    v_st   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).st_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) )) ;
+
+    al_st  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).v_st ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    s1     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_loop ; \1 := $#parent(#this).al_st ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    s3     := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) )) ;
+    \0 := $.s1 ; \1 := $.ev_rec ; \2 := $.s3 ;
+    #evaluate($.caps.ast.seq)
+) ;
+h_while_bool := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
+#block(^( fe := $#parent(#this).fe ; name := WhileExpr ; expr := $#parent(#this).e_while ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_while_bool ; #evaluate($#parent(#this).c_syn.set_rule) )) ;
+
+ok
