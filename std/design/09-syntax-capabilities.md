@@ -105,7 +105,7 @@ All capability operations are exposed as standard `Native` `Prototype` values (o
 | **`io`** | `read_file({path: RawBytes}) -> RawBytes`, `write_file({path: RawBytes, bytes: RawBytes}) -> Unit` | Minimal compile-script file IO for Phase 1 MVP (superseded by `ffi.extern_symbol` + `libc`) |
 
 ## 6. Layer 1 Pure-Lang Modular Self-Bootstrap Architecture
-Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C++ `Layer1.h`, split into bootstrap (`lib/std/boot/`) and modular stdlib (`lib/std/`):
+Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C++ `Layer1.h`, split into minimal bootstrap (`lib/std/boot/`), optional syntax extensions (`lib/std/syntax/`), and compile-script tools (`lib/std/{start,run,build}.lang`):
 
 ### 6.1 Bootstrap Layer (`lib/std/boot/{boot0,boot1,core_syntax}.lang`)
 1. **`lib/std/boot/boot0.lang` + `boot1.lang`** (Pure 5-Symbol Layer 0 → `fe_boot1`):
@@ -114,16 +114,16 @@ Layer 1 syntax is **100% self-bootstrapped from Layer 0** with zero hardcoded C+
 2. **`lib/std/boot/core_syntax.lang`** (Type-Agnostic Structural Layer 1):
    - Registers `{}` / `{ expr }`, `"..."` (`RawBytes` with `"` / `\` escapes), smart `sym := RHS` (location-owned mutability), `ptr = val`, `coro @ val` (`#resume`), and **zero-`#block` transparent `IfExpr` / `WhileExpr`** operating on raw `bytes(1, 1)` during bootstrap.
    - Note: `true` and `false` are **not** boolean literals during bootstrap (they remain plain `Word` symbols; raw `bytes(1, 1)` comes from `capabilities.constants.true/false`).
-   - Loads `lib/std/layer1.lang`.
+   - Stops cleanly at `core_syntax` (returning `$.fe`) so callers can opt into `lib/std/syntax/layer1.lang` or any subset/custom DSL syntax.
 
-### 6.2 Modular Stdlib Layer (`lib/std/layer1.lang`)
-Orchestrates the full Layer 1 frontend `fe_layer1` in strict dependency order:
-1. **`lib/std/types.lang`**: Defines ZST-marker primitive `Shape`s (`Boolean = { __raw: bytes(1,1), __boolean_tag: {} }`, `i8..i64`, `u8..u64`, `f32`, `f64`).
-2. **`lib/std/literals.lang`**: **First introduces** `BoolTrue` / `BoolFalse` (`true` / `false` → `Boolean`) and `IntLit` (`[0-9]+` → ZST-tagged `i64`).
-3. **`lib/std/ops.lang`**:
+### 6.2 Optional Syntax Submodules (`lib/std/syntax/`) & Compile-Script Entry (`lib/std/start.lang`)
+`lib/std/start.lang` (Layer 0) bootstraps `core_syntax` + `lib/std/syntax/layer1.lang` and evaluates `args.0` in the compile-time environment (enabling `lib/std/run.lang`, `lib/std/build.lang`, and user build scripts to be written in clean Layer 1). `lib/std/syntax/layer1.lang` orchestrates the full Layer 1 preset in dependency order:
+1. **`lib/std/syntax/types.lang`**: Defines ZST-marker primitive `Shape`s (`Boolean = { __raw: bytes(1,1), __boolean_tag: {} }`, `i8..i64`, `u8..u64`, `f32`, `f64`).
+2. **`lib/std/syntax/literals.lang`**: **First introduces** `BoolTrue` / `BoolFalse` (`true` / `false` → `Boolean`) and `IntLit` (`[0-9]+` → ZST-tagged `i64`).
+3. **`lib/std/syntax/ops.lang`**:
    - Registers Shape-dispatched operators: P7 unary `+`/`-`/`~` (`~` dispatches logical NOT on `Boolean` and `bit_not` on integers), P8 `*`, P9 `+`/`-`, P11/12 `<`/`==`.
    - **Overrides `IfExpr` & `WhileExpr`** from `core_syntax.lang` to unwrap `Boolean.__raw` directly in `#this` with **zero `#block`** (preserving full transparency).
-4. **`lib/std/functions.lang`**:
+4. **`lib/std/syntax/functions.lang`**:
    - Registers **`ApplyExpr`** (juxtaposition of two `Prefix` expressions = strictly single-arg call, excluding `if`/`else`/`while`), expanding via a two-step handoff into a fresh `#block` with `__arg`, `__fn_env`, and `#break(#evaluate($.__code))`.
    - Registers **`LambdaExpr`** (`param -> body`, right-associative, strictly single-arg; `_ -> body` simply binds `_`), emitting a pure constant `{ __env := {} ; __code := ^( param := $.__arg ; body ) }`.
    - **Overrides `SelfField` (`.a`)** from `boot0.lang` to perform lexical upward lookup along `#this → #parent(...)`, stopping at any frame containing `__fn_env` (checking `__fn_env` before returning null). Explicit **`#this.a`** (via `Postfix` `p.a`) remains strictly single-frame `#field(#this, a)`.

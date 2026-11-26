@@ -484,11 +484,6 @@ e_infix_final := #block(^( fe := $#parent(#this).fe ; 0 := $#parent(#this).ref_b
 
 ! ============================================================================ !
 ! Now fe has full core_syntax ({}, "...", if/else, while, @, smart :=, =)      !
-! Load Stage 2 orchestrator: lib/std/layer1.lang (written in core_syntaxnot_)     !
+! Stops here so callers can opt into lib/std/syntax/layer1.lang or any subset. !
 ! ============================================================================ !
-sym := lib/std/layer1\.lang ;
-path := #evaluate($.c_sym.to_bytes) ; #drop(.sym) ;
-src := #evaluate($.c_io.read_file) ; #drop(.path) ;
-ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
-l1_proto := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
-#evaluate($.l1_proto)
+$.fe
