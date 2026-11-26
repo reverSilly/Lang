@@ -158,21 +158,6 @@ Runtime::IntrinsicSpec intern_intrinsic(
     }, spec);
 }
 
-Runtime::ShapeLayout read_slot_shape(Runtime::RuntimeContext& rt, Runtime::SymbolId sym) {
-    Runtime::ConstructingFrame* f = rt.current_frame();
-    if (!f) throw std::runtime_error("intrinsic: no active frame");
-    Runtime::PointerLayout p = f->field(sym);
-    if (p.is_null()) {
-        throw std::runtime_error("intrinsic: missing slot '" + std::string(rt.symbols.name(sym)) + "' in #this");
-    }
-    Runtime::Value v = rt.deref(p);
-    if (v.shape_addr != rt.shapes.shape_meta) {
-        throw std::runtime_error(
-            "intrinsic eq_shape: slot '" + std::string(rt.symbols.name(sym)) + "' must be a Shape");
-    }
-    return v.as_pod<Runtime::ShapeLayout>();
-}
-
 } // namespace
 
 Ast::AstValue reify_ast_value(const Runtime::RuntimeContext& rt, const Runtime::Value& val) {
@@ -181,10 +166,15 @@ Ast::AstValue reify_ast_value(const Runtime::RuntimeContext& rt, const Runtime::
         return Ast::AstValue{Ast::SymbolVal{std::string(rt.symbols.name(id))}};
     }
     if (val.shape_addr == rt.shapes.shape_meta) {
-        auto sl = val.as_pod<Runtime::ShapeLayout>();
-        return Ast::AstValue{Ast::ShapeVal{reify_shape(rt, &sl)}};
+        throw std::runtime_error(
+            "ast.value: dereferenced ShapeLayout cannot be embedded; pass Pointer(Shape) instead");
     }
     if (val.shape_addr == rt.shapes.pointer_shape) {
+        auto p = val.as_pod<Runtime::PointerLayout>();
+        if (p.shape_ptr == rt.shapes.shape_meta && p.mutability == 0 && p.addr != 0 && rt.shapes.owns(p.addr)) {
+            const auto* sl = reinterpret_cast<const Runtime::ShapeLayout*>(p.addr);
+            return Ast::AstValue{Ast::ShapeVal{reify_shape(rt, sl)}};
+        }
         throw std::runtime_error(
             "ast.value: Pointer is runtime-bound and cannot be embedded in standalone Ast");
     }
@@ -276,8 +266,7 @@ Runtime::Value intern_ast_value(Runtime::RuntimeContext& rt, const Ast::AstValue
         },
         [&](const Ast::ShapeVal& sv) -> Runtime::Value {
             uint64_t addr = intern_ast_shape(rt, sv.shape);
-            const auto* sl = reinterpret_cast<const Runtime::ShapeLayout*>(addr);
-            return Runtime::Value::from_pod(rt.shapes.shape_meta, *sl);
+            return rt.make_pointer(Runtime::PointerLayout{addr, rt.shapes.shape_meta, 0});
         },
         [&](const Ast::AstProtoVal& pv) -> Runtime::Value {
             return rt.make_proto(rt.prototypes.create_ast(pv.ast));
@@ -349,19 +338,6 @@ Runtime::Value Evaluator::eval_proto_sync(uint64_t proto_addr) {
     return std::move(entry.handle.promise().result);
 }
 
-uint64_t Evaluator::canonical_shape_addr(const Runtime::ShapeLayout& sl) {
-    if (sl.is_leaf()) {
-        return rt.shapes.intern_leaf(sl.size, sl.align);
-    }
-    std::vector<Runtime::FieldEntry> entries;
-    entries.reserve(sl.fields.count);
-    const Runtime::FieldEntry* arr = sl.fields.entries_begin();
-    for (uint32_t i = 0; i < sl.fields.count; ++i) {
-        entries.push_back(arr[i]);
-    }
-    return rt.shapes.intern_struct(entries, sl.size, sl.align);
-}
-
 CoroEntry Evaluator::run_main_entry(Ast::ExprPtr expr) {
     try {
         co_return co_await eval_expr(expr);
@@ -379,31 +355,6 @@ CoroEntry Evaluator::run_proto_entry(uint64_t proto_addr) {
 }
 
 CoroEntry Evaluator::run_child_coro(Runtime::Coroutine* self, uint64_t proto_addr) {
-    Runtime::Value final_val = rt.make_unit();
-    try {
-        final_val = co_await eval_proto(proto_addr);
-    } catch (BreakSignal& sig) {
-        final_val = std::move(sig.value);
-    } catch (...) {
-        self->pop_frame();
-        self->state = Runtime::CoroutineState::Dead;
-        Runtime::Coroutine* caller = rt.coroutines.resolve(self->caller_handle);
-        rt.active_coro = caller;
-        rt.pending_reclaim_coro = self->self_handle;
-        throw;
-    }
-    self->pop_frame();
-    self->state = Runtime::CoroutineState::Dead;
-
-    Runtime::Coroutine* caller = rt.coroutines.resolve(self->caller_handle);
-    rt.pending_reclaim_coro = self->self_handle;
-    if (!caller) {
-        co_return std::move(final_val);
-    }
-    caller->set_in_value(final_val);
-    caller->state = Runtime::CoroutineState::Running;
-    rt.active_coro = caller;
-
     struct SetNextAwaiter {
         std::coroutine_handle<> target;
         bool await_ready() noexcept { return false; }
@@ -413,6 +364,34 @@ CoroEntry Evaluator::run_child_coro(Runtime::Coroutine* self, uint64_t proto_add
         }
         void await_resume() noexcept {}
     };
+
+    Runtime::Value final_val = rt.make_unit();
+    std::exception_ptr uncaught = nullptr;
+    try {
+        final_val = co_await eval_proto(proto_addr);
+    } catch (BreakSignal& sig) {
+        final_val = std::move(sig.value);
+    } catch (...) {
+        uncaught = std::current_exception();
+    }
+
+    self->pop_frame();
+    self->state = Runtime::CoroutineState::Dead;
+
+    Runtime::Coroutine* caller = rt.coroutines.resolve(self->caller_handle);
+    rt.pending_reclaim_coro = self->self_handle;
+    if (!caller) {
+        if (uncaught) std::rethrow_exception(uncaught);
+        co_return std::move(final_val);
+    }
+    if (uncaught) {
+        child_exception_ = uncaught;
+    } else {
+        caller->set_in_value(final_val);
+    }
+    caller->state = Runtime::CoroutineState::Running;
+    rt.active_coro = caller;
+
     co_await SetNextAwaiter{caller->resume_handle};
     co_return std::move(final_val);
 }
@@ -437,6 +416,10 @@ std::coroutine_handle<> Evaluator::ResumeAwaiter::await_suspend(std::coroutine_h
 
 Runtime::Value Evaluator::ResumeAwaiter::await_resume() {
     ev.rt.flush_pending_reclaim();
+    if (ev.child_exception_) {
+        std::exception_ptr ex = std::exchange(ev.child_exception_, nullptr);
+        std::rethrow_exception(ex);
+    }
     return ev.rt.make_unit();
 }
 
@@ -622,16 +605,9 @@ Runtime::Value Evaluator::eval_intrinsic(const Runtime::IntrinsicSpec& spec) {
 
         [&](const Runtime::CmpOp& op) -> Runtime::Value {
             using K = Runtime::CmpKind;
-            if (op.op == K::EqShape) {
-                auto a_sl = read_slot_shape(rt, op.lhs);
-                auto b_sl = read_slot_shape(rt, op.rhs);
-                return flag_out(canonical_shape_addr(a_sl) == canonical_shape_addr(b_sl));
-            }
             auto a_val = read_slot_bytes(rt, op.lhs, op.width);
             auto b_val = read_slot_bytes(rt, op.rhs, op.width);
             switch (op.op) {
-                case K::EqShape:
-                    break;
                 case K::EqBytes:
                     return flag_out(std::memcmp(a_val.bytes.data(), b_val.bytes.data(), op.width) == 0);
                 case K::SLt:
@@ -837,12 +813,14 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
         }
 
         case K::Allocate: {
-            expect_shape(args[0], rt.shapes.shape_meta, "#allocate: arg 0 must be a Shape");
+            expect_shape(args[0], rt.shapes.pointer_shape, "#allocate: arg 0 must be Pointer(Shape)");
             expect_shape(args[1], rt.shapes.raw1_shape, "#allocate: arg 1 must be bytes(1, 1)");
-            auto sl = args[0].as_pod<Runtime::ShapeLayout>();
-            uint64_t s_addr = canonical_shape_addr(sl);
+            auto sp = args[0].as_pod<Runtime::PointerLayout>();
+            if (sp.shape_ptr != rt.shapes.shape_meta || sp.addr == 0 || !rt.shapes.owns(sp.addr)) {
+                throw std::runtime_error("#allocate: arg 0 must be a valid Pointer(Shape) in ShapeArena");
+            }
             bool is_mut = args[1].as_pod<uint8_t>() != 0;
-            Runtime::FrameSlot* slot = frame->allocate(s_addr, is_mut);
+            Runtime::FrameSlot* slot = frame->allocate(sp.addr, is_mut);
             co_return rt.make_pointer(slot->pointer());
         }
         case K::AllocateVal: {
@@ -897,7 +875,7 @@ EvalTask Evaluator::eval_builtin(const Ast::BuiltinExpr& b) {
         case K::Shape: {
             const Runtime::ShapeLayout* s = args[0].shape();
             if (!s) throw std::runtime_error("#shape: value has null shape");
-            co_return Runtime::Value::from_pod(rt.shapes.shape_meta, *s);
+            co_return rt.make_pointer(Runtime::PointerLayout{args[0].shape_addr, rt.shapes.shape_meta, 0});
         }
 
         case K::Branch: {

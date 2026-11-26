@@ -28,7 +28,7 @@ static void test_pure_layer0_slots_and_intrinsics() {
 
     const char* src = R"(
         #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
-        #bind(width, #allocate_val(#deref(#field(#field(#field(#field(#this, capabilities), constants), raw8_shape), size)), #deref(#field(#this, F)))) ;
+        #bind(width, #allocate_val(#deref(#field(#deref(#field(#field(#field(#this, capabilities), constants), raw8_shape)), size)), #deref(#field(#this, F)))) ;
         #bind(lhs, #allocate_val(a, #deref(#field(#this, F)))) ;
         #bind(rhs, #allocate_val(b, #deref(#field(#this, F)))) ;
         #bind(add8, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), intrinsics), add_int))), #deref(#field(#this, F)))) ;
@@ -73,7 +73,7 @@ static void test_block_flatten_break_and_branch() {
 
     Value count_val = ev.run(fe.parse(R"(
         #bind(s, #allocate_val(#shape(#deref(#field(#this, closed_obj))), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
-        #bind(map, #allocate_val(#deref(#field(#field(#this, s), fields)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+        #bind(map, #allocate_val(#deref(#field(#deref(#field(#this, s)), fields)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
         #evaluate(#deref(#field(#field(#field(#this, capabilities), field_map), count)))
     )"));
     assert(count_val.as_pod<uint64_t>() == 1);

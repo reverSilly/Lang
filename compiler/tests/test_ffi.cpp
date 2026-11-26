@@ -44,10 +44,10 @@ static void test_ffi_extern_symbol_named_and_positional() {
     auto make_abi = [&](uint64_t args_s, uint64_t ret_s) {
         ConstructingFrame tmp;
         auto* s_args = tmp.allocate_val(
-            Value::from_pod(rt.shapes.shape_meta, *reinterpret_cast<const ShapeLayout*>(args_s)), false);
+            rt.make_pointer(PointerLayout{args_s, rt.shapes.shape_meta, 0}), false);
         tmp.bind(rt.symbols.intern("args"), s_args->pointer());
         auto* s_ret = tmp.allocate_val(
-            Value::from_pod(rt.shapes.shape_meta, *reinterpret_cast<const ShapeLayout*>(ret_s)), false);
+            rt.make_pointer(PointerLayout{ret_s, rt.shapes.shape_meta, 0}), false);
         tmp.bind(rt.symbols.intern("ret"), s_ret->pointer());
         auto* s_cc = tmp.allocate_val(rt.make_symbol(rt.symbols.intern("c")), false);
         tmp.bind(rt.symbols.intern("cc"), s_cc->pointer());
@@ -147,10 +147,10 @@ static void test_ffi_f64_tag_struct_by_value_and_layout_check() {
     auto make_abi = [&](uint64_t args_s, uint64_t ret_s) {
         ConstructingFrame tmp;
         auto* s_args = tmp.allocate_val(
-            Value::from_pod(rt.shapes.shape_meta, *reinterpret_cast<const ShapeLayout*>(args_s)), false);
+            rt.make_pointer(PointerLayout{args_s, rt.shapes.shape_meta, 0}), false);
         tmp.bind(rt.symbols.intern("args"), s_args->pointer());
         auto* s_ret = tmp.allocate_val(
-            Value::from_pod(rt.shapes.shape_meta, *reinterpret_cast<const ShapeLayout*>(ret_s)), false);
+            rt.make_pointer(PointerLayout{ret_s, rt.shapes.shape_meta, 0}), false);
         tmp.bind(rt.symbols.intern("ret"), s_ret->pointer());
         auto* s_cc = tmp.allocate_val(rt.make_symbol(rt.symbols.intern("c")), false);
         tmp.bind(rt.symbols.intern("cc"), s_cc->pointer());
@@ -259,10 +259,10 @@ static void test_ffi_bind_ptr_two_stage_indirect_call() {
     });
     ConstructingFrame tmp;
     auto* s_args = tmp.allocate_val(
-        Value::from_pod(rt.shapes.shape_meta, *reinterpret_cast<const ShapeLayout*>(add_args)), false);
+        rt.make_pointer(PointerLayout{add_args, rt.shapes.shape_meta, 0}), false);
     tmp.bind(rt.symbols.intern("args"), s_args->pointer());
     auto* s_ret = tmp.allocate_val(
-        Value::from_pod(rt.shapes.shape_meta, *reinterpret_cast<const ShapeLayout*>(rt.shapes.raw4_shape)), false);
+        rt.make_pointer(PointerLayout{rt.shapes.raw4_shape, rt.shapes.shape_meta, 0}), false);
     tmp.bind(rt.symbols.intern("ret"), s_ret->pointer());
     auto* s_cc = tmp.allocate_val(rt.make_symbol(rt.symbols.intern("c")), false);
     tmp.bind(rt.symbols.intern("cc"), s_cc->pointer());
