@@ -39,6 +39,10 @@ Runtime::SymbolId read_sym_field(Evaluator& ev, std::string_view field_name) {
     return v.as_pod<Runtime::SymbolId>();
 }
 
+Runtime::Value runtime_intrinsic(Runtime::RuntimeContext& rt, Runtime::RuntimeIntrinsicKind kind) {
+    return rt.make_proto(rt.prototypes.create_intrinsic(Runtime::RuntimeOp{kind}));
+}
+
 template <Runtime::IntBinKind Kind>
 Runtime::Value make_int_binop_factory(Runtime::RuntimeContext& rt, std::string name) {
     return native_proto(rt, "capabilities.intrinsics." + name, [name](Evaluator& ev) {
@@ -134,67 +138,32 @@ Runtime::Value build_constants_module(Runtime::RuntimeContext& rt) {
 }
 
 Runtime::Value build_field_map_module(Runtime::RuntimeContext& rt) {
+    using RK = Runtime::RuntimeIntrinsicKind;
     return build_struct(rt, {
-        {"empty", native_proto(rt, "capabilities.field_map.empty", [](Evaluator& ev) {
-            return Runtime::Value::from_pod(ev.rt.shapes.field_map_shape, Runtime::FieldMapArena::empty());
-        })},
-        {"is_empty", native_proto(rt, "capabilities.field_map.is_empty", [](Evaluator& ev) {
-            auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, Runtime::FieldMapArena::is_empty(fm) ? 1 : 0);
-        })},
-        {"count", native_proto(rt, "capabilities.field_map.count", [](Evaluator& ev) {
-            auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
-            return Runtime::Value::from_pod<uint64_t>(ev.rt.shapes.raw8_shape, Runtime::FieldMapArena::count(fm));
-        })},
-        {"get", native_proto(rt, "capabilities.field_map.get", [](Evaluator& ev) {
-            auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
-            auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
-            return ev.rt.make_pointer(Runtime::FieldMapArena::get(fm, sym));
-        })},
-        {"at", native_proto(rt, "capabilities.field_map.at", [](Evaluator& ev) {
-            auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
-            auto idx = static_cast<uint32_t>(read_field(ev, "index").as_pod<uint64_t>());
-            return Runtime::Value::from_pod(ev.rt.shapes.field_entry_shape, Runtime::FieldMapArena::at(fm, idx));
-        })},
-        {"insert", native_proto(rt, "capabilities.field_map.insert", [](Evaluator& ev) {
-            auto fm = read_field(ev, "map").as_pod<Runtime::FieldMapInline>();
-            auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
-            auto ptr = read_field(ev, "ptr").as_pod<Runtime::PointerLayout>();
-            auto next = ev.rt.shapes.field_maps.insert(fm, sym, ptr);
-            return Runtime::Value::from_pod(ev.rt.shapes.field_map_shape, next);
-        })},
-        {"ptr_shape", native_proto(rt, "capabilities.field_map.ptr_shape", [](Evaluator& ev) {
-            auto p = read_field(ev, "ptr").as_pod<Runtime::PointerLayout>();
-            if (p.shape_ptr == 0) {
-                throw std::runtime_error("capabilities.field_map.ptr_shape: null shape_ptr");
-            }
-            return ev.rt.make_pointer(Runtime::PointerLayout{p.shape_ptr, ev.rt.shapes.shape_meta, 0});
-        })},
+        {"empty", runtime_intrinsic(rt, RK::FieldMapEmpty)},
+        {"is_empty", runtime_intrinsic(rt, RK::FieldMapIsEmpty)},
+        {"count", runtime_intrinsic(rt, RK::FieldMapCount)},
+        {"get", runtime_intrinsic(rt, RK::FieldMapGet)},
+        {"at", runtime_intrinsic(rt, RK::FieldMapAt)},
+        {"insert", runtime_intrinsic(rt, RK::FieldMapInsert)},
+        {"ptr_shape", runtime_intrinsic(rt, RK::FieldMapPtrShape)},
+    });
+}
+
+Runtime::Value build_shapes_module(Runtime::RuntimeContext& rt) {
+    using RK = Runtime::RuntimeIntrinsicKind;
+    return build_struct(rt, {
+        {"intern_shape", runtime_intrinsic(rt, RK::InternShape)},
     });
 }
 
 Runtime::Value build_symbols_module(Runtime::RuntimeContext& rt) {
+    using RK = Runtime::RuntimeIntrinsicKind;
     return build_struct(rt, {
-        {"byte_len", native_proto(rt, "capabilities.symbols.byte_len", [](Evaluator& ev) {
-            auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
-            return Runtime::Value::from_pod<uint64_t>(ev.rt.shapes.raw8_shape, ev.rt.symbols.name(sym).size());
-        })},
-        {"byte_at", native_proto(rt, "capabilities.symbols.byte_at", [](Evaluator& ev) {
-            auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
-            auto idx = read_field(ev, "index").as_pod<uint64_t>();
-            std::string_view sv = ev.rt.symbols.name(sym);
-            if (idx >= sv.size()) throw std::out_of_range("capabilities.symbols.byte_at: out of range");
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, static_cast<uint8_t>(sv[idx]));
-        })},
-        {"to_bytes", native_proto(rt, "capabilities.symbols.to_bytes", [](Evaluator& ev) {
-            auto sym = read_field(ev, "sym").as_pod<Runtime::SymbolId>();
-            std::string_view sv = ev.rt.symbols.name(sym);
-            return ev.rt.make_raw_bytes(sv);
-        })},
-        {"intern_bytes", native_proto(rt, "capabilities.symbols.intern_bytes", [](Evaluator& ev) {
-            auto raw = read_raw_bytes(ev, "bytes");
-            return ev.rt.make_symbol(ev.rt.symbols.intern(raw));
-        })},
+        {"byte_len", runtime_intrinsic(rt, RK::SymbolByteLen)},
+        {"byte_at", runtime_intrinsic(rt, RK::SymbolByteAt)},
+        {"to_bytes", runtime_intrinsic(rt, RK::SymbolToBytes)},
+        {"intern_bytes", runtime_intrinsic(rt, RK::SymbolInternBytes)},
     });
 }
 
@@ -286,28 +255,10 @@ Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt) {
         {"lt_float", make_float_cmp_factory<CM::FLt>(rt, "lt_float")},
         {"le_float", make_float_cmp_factory<CM::FLe>(rt, "le_float")},
 
-        // RawBytes indexing & slicing
-        {"bytes_at", native_proto(rt, "capabilities.intrinsics.bytes_at", [](Evaluator& ev) {
-            auto raw = read_raw_bytes(ev, "bytes");
-            auto idx = read_field(ev, "index").as_pod<uint64_t>();
-            if (idx >= raw.size()) throw std::out_of_range("capabilities.intrinsics.bytes_at: out of range");
-            return Runtime::Value::from_pod<uint8_t>(ev.rt.shapes.raw1_shape, raw[idx]);
-        })},
-        {"bytes_slice", native_proto(rt, "capabilities.intrinsics.bytes_slice", [](Evaluator& ev) {
-            auto raw = read_raw_bytes(ev, "bytes");
-            auto start = read_field(ev, "start").as_pod<uint64_t>();
-            auto len = read_field(ev, "len").as_pod<uint64_t>();
-            if (start > raw.size() || start + len > raw.size()) {
-                throw std::out_of_range("capabilities.intrinsics.bytes_slice: out of range");
-            }
-            return ev.rt.make_raw_bytes(raw.data() + start, len);
-        })},
-        {"bytes_concat", native_proto(rt, "capabilities.intrinsics.bytes_concat", [](Evaluator& ev) {
-            auto lhs = read_raw_bytes(ev, "lhs");
-            auto rhs = read_raw_bytes(ev, "rhs");
-            lhs.insert(lhs.end(), rhs.begin(), rhs.end());
-            return ev.rt.make_raw_bytes(lhs.data(), lhs.size());
-        })},
+        // RawBytes indexing, slicing & concatenation (stageable IntrinsicProto)
+        {"bytes_at", runtime_intrinsic(rt, Runtime::RuntimeIntrinsicKind::BytesAt)},
+        {"bytes_slice", runtime_intrinsic(rt, Runtime::RuntimeIntrinsicKind::BytesSlice)},
+        {"bytes_concat", runtime_intrinsic(rt, Runtime::RuntimeIntrinsicKind::BytesConcat)},
     });
 }
 

@@ -11,7 +11,7 @@
 namespace reverSilly::Lang::Eval {
 
 // Stateless capability installers (zero hidden host state).
-//   - install_runtime_capabilities: Tier 1 only (constants, field_map, symbols, intrinsics)
+//   - install_runtime_capabilities: Tier 1 only (constants, field_map, shapes, symbols, intrinsics)
 //   - install_runtime_with_ffi:     Tier 1 + Tier 2 (adds ffi)
 //   - install_all_capabilities:     Tier 1 + Tier 2 + Tier 3 (adds ast, syntax, backends, temporary io)
 void install_runtime_capabilities(Runtime::RuntimeContext& rt);
@@ -31,6 +31,7 @@ Runtime::Value native_proto(Runtime::RuntimeContext& rt, std::string name, Runti
 // Tier 1: Core Factories & Reflection (RuntimeCaps.cpp)
 Runtime::Value build_constants_module(Runtime::RuntimeContext& rt);
 Runtime::Value build_field_map_module(Runtime::RuntimeContext& rt);
+Runtime::Value build_shapes_module(Runtime::RuntimeContext& rt);
 Runtime::Value build_symbols_module(Runtime::RuntimeContext& rt);
 Runtime::Value build_intrinsics_module(Runtime::RuntimeContext& rt);
 

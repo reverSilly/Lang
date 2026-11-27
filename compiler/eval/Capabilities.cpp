@@ -74,6 +74,7 @@ void install_runtime_capabilities(Runtime::RuntimeContext& rt) {
     mount_capabilities(rt, {
         {"constants", build_constants_module(rt)},
         {"field_map", build_field_map_module(rt)},
+        {"shapes", build_shapes_module(rt)},
         {"symbols", build_symbols_module(rt)},
         {"intrinsics", build_intrinsics_module(rt)},
     });
@@ -84,6 +85,7 @@ void install_runtime_with_ffi(Runtime::RuntimeContext& rt) {
     mount_capabilities(rt, {
         {"constants", build_constants_module(rt)},
         {"field_map", build_field_map_module(rt)},
+        {"shapes", build_shapes_module(rt)},
         {"symbols", build_symbols_module(rt)},
         {"intrinsics", build_intrinsics_module(rt)},
         {"ffi", build_ffi_module(rt)},
@@ -95,6 +97,7 @@ void install_all_capabilities(Runtime::RuntimeContext& rt) {
     mount_capabilities(rt, {
         {"constants", build_constants_module(rt)},
         {"field_map", build_field_map_module(rt)},
+        {"shapes", build_shapes_module(rt)},
         {"symbols", build_symbols_module(rt)},
         {"intrinsics", build_intrinsics_module(rt)},
         {"ffi", build_ffi_module(rt)},
