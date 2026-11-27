@@ -485,11 +485,55 @@ static void test_zero_caret_layer0_bootstrap_of_caret_syntax() {
     assert(rt.symbols.name(x_val.as_pod<SymbolId>()) == "hello");
 }
 
+
+static void test_runtime_error_diagnostics() {
+    RuntimeContext rt;
+    Evaluator ev(rt);
+    Frontend fe;
+    install_all_capabilities(rt);
+
+    // #deref on missing field reports missing field name and current #this fields
+    bool threw = false;
+    try {
+        ev.run(fe.parse(R"(
+            #bind(F, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), false)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+            #bind(alpha, #allocate_val(hello, #deref(#field(#this, F)))) ;
+            #deref(#field(#this, missing_slot))
+        )"));
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        std::string msg = e.what();
+        assert(msg.find("field 'missing_slot' not found") != std::string::npos);
+        assert(msg.find("#this has {size=") != std::string::npos);
+        assert(msg.find("fields=[") != std::string::npos);
+        assert(msg.find("alpha") != std::string::npos);
+    }
+    assert(threw);
+
+    // #write shape mismatch reports destination vs value shape
+    threw = false;
+    try {
+        ev.run(fe.parse(R"(
+            #bind(T, #allocate_val(#deref(#field(#field(#field(#this, capabilities), constants), true)), #deref(#field(#field(#field(#this, capabilities), constants), false)))) ;
+            #bind(x, #allocate_val(sym_a, #deref(#field(#this, T)))) ;
+            #write(#field(#this, x), #deref(#field(#this, T)))
+        )"));
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        std::string msg = e.what();
+        assert(msg.find("#write: shape mismatch") != std::string::npos);
+        assert(msg.find("destination expects") != std::string::npos);
+        assert(msg.find("got {size=1, align=1, fields=[]}") != std::string::npos);
+    }
+    assert(threw);
+}
+
 int main() {
     test_pure_layer0_slots_and_intrinsics();
     test_block_flatten_break_and_branch();
     test_coroutines_unified_frame_reflection_and_destroy();
     test_zero_caret_layer0_bootstrap_of_caret_syntax();
+    test_runtime_error_diagnostics();
     std::cout << "All Step 3 tests passed!" << std::endl;
     return 0;
 }
