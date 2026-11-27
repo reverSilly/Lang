@@ -241,6 +241,7 @@ void test_install_runtime_isolation() {
     // Tier 1 modules must be present
     assert(!rt.field(caps_ptr, rt.symbols.intern("constants")).is_null());
     assert(!rt.field(caps_ptr, rt.symbols.intern("field_map")).is_null());
+    assert(!rt.field(caps_ptr, rt.symbols.intern("shapes")).is_null());
     assert(!rt.field(caps_ptr, rt.symbols.intern("symbols")).is_null());
     assert(!rt.field(caps_ptr, rt.symbols.intern("intrinsics")).is_null());
 
@@ -361,6 +362,154 @@ static void test_prototype_factory_intrinsics() {
     )"));
     assert(ashr_res.shape_addr == rt.shapes.raw4_shape);
     assert(ashr_res.as_pod<int32_t>() == -2);
+}
+
+static void test_stageable_runtime_intrinsics_and_intern_shape() {
+    // Stage field_map, shapes, and symbols modules from a host RuntimeContext
+    // into a brand-new isolated target RuntimeContext with ZERO capabilities.
+    RuntimeContext host_rt;
+    install_runtime_capabilities(host_rt);
+    auto* hrf = host_rt.current_frame();
+    PointerLayout hcaps = hrf->field(host_rt.symbols.intern("capabilities"));
+
+    AstValue fm_mod_ast = reify_ast_value(host_rt, host_rt.deref(host_rt.field(hcaps, host_rt.symbols.intern("field_map"))));
+    AstValue sh_mod_ast = reify_ast_value(host_rt, host_rt.deref(host_rt.field(hcaps, host_rt.symbols.intern("shapes"))));
+    AstValue sy_mod_ast = reify_ast_value(host_rt, host_rt.deref(host_rt.field(hcaps, host_rt.symbols.intern("symbols"))));
+    PointerLayout hintr = host_rt.field(hcaps, host_rt.symbols.intern("intrinsics"));
+    AstValue ba_ast = reify_ast_value(host_rt, host_rt.deref(host_rt.field(hintr, host_rt.symbols.intern("bytes_at"))));
+    AstValue bs_ast = reify_ast_value(host_rt, host_rt.deref(host_rt.field(hintr, host_rt.symbols.intern("bytes_slice"))));
+    AstValue bc_ast = reify_ast_value(host_rt, host_rt.deref(host_rt.field(hintr, host_rt.symbols.intern("bytes_concat"))));
+
+    // Isolated target runtime (zero capabilities installed!)
+    RuntimeContext target_rt;
+    Evaluator ev(target_rt);
+    Frontend fe;
+    auto* trf = target_rt.current_frame();
+    assert(trf->field(target_rt.symbols.intern("capabilities")).is_null());
+
+    trf->bind(target_rt.symbols.intern("fm"), trf->allocate_val(intern_ast_value(target_rt, fm_mod_ast), false)->pointer());
+    trf->bind(target_rt.symbols.intern("sh"), trf->allocate_val(intern_ast_value(target_rt, sh_mod_ast), false)->pointer());
+    trf->bind(target_rt.symbols.intern("sy"), trf->allocate_val(intern_ast_value(target_rt, sy_mod_ast), false)->pointer());
+    trf->bind(target_rt.symbols.intern("p_ba"), trf->allocate_val(intern_ast_value(target_rt, ba_ast), false)->pointer());
+    trf->bind(target_rt.symbols.intern("p_bs"), trf->allocate_val(intern_ast_value(target_rt, bs_ast), false)->pointer());
+    trf->bind(target_rt.symbols.intern("p_bc"), trf->allocate_val(intern_ast_value(target_rt, bc_ast), false)->pointer());
+    trf->bind(target_rt.symbols.intern("F"), trf->allocate_val(Value::from_pod<uint8_t>(target_rt.shapes.raw1_shape, 0), false)->pointer());
+    trf->bind(target_rt.symbols.intern("T"), trf->allocate_val(Value::from_pod<uint8_t>(target_rt.shapes.raw1_shape, 1), false)->pointer());
+    trf->bind(target_rt.symbols.intern("V0"), trf->allocate_val(Value::from_pod<uint64_t>(target_rt.shapes.raw8_shape, 0), false)->pointer());
+    trf->bind(target_rt.symbols.intern("V1"), trf->allocate_val(Value::from_pod<uint64_t>(target_rt.shapes.raw8_shape, 1), false)->pointer());
+    trf->bind(target_rt.symbols.intern("V3"), trf->allocate_val(Value::from_pod<uint64_t>(target_rt.shapes.raw8_shape, 3), false)->pointer());
+    trf->bind(target_rt.symbols.intern("V8"), trf->allocate_val(Value::from_pod<uint64_t>(target_rt.shapes.raw8_shape, 8), false)->pointer());
+    trf->bind(target_rt.symbols.intern("S_RAW8"), trf->allocate_val(
+        target_rt.make_pointer(PointerLayout{target_rt.shapes.raw8_shape, target_rt.shapes.shape_meta, 0}), false)->pointer());
+
+    // 1. Stageable field_map.empty + shapes.intern_shape({ shape }) + #allocate in zero-cap target runtime
+    Value leaf_slot_ptr = ev.run(fe.parse(R"(
+        #bind(empty_fm, #allocate_val(#evaluate(#deref(#field(#field(#this, fm), empty))), #deref(#field(#this, F)))) ;
+        #bind(shape, #allocate_val(#deref(#deref(#field(#this, S_RAW8))), #deref(#field(#this, F)))) ;
+        #bind(interned_raw8, #allocate_val(#evaluate(#deref(#field(#field(#this, sh), intern_shape))), #deref(#field(#this, F)))) ;
+        #allocate(#deref(#field(#this, interned_raw8)), #deref(#field(#this, T)))
+    )"));
+    assert(leaf_slot_ptr.shape_addr == target_rt.shapes.pointer_shape);
+    assert(leaf_slot_ptr.as_pod<PointerLayout>().shape_ptr == target_rt.shapes.raw8_shape);
+    // Also verify a brand-new dynamic leaf shape (size=3, align=1) via shapes.intern_shape
+    {
+        ShapeLayout leaf3{3, 1, FieldMapArena::empty()};
+        trf->drop_in_chain(trf->field(target_rt.symbols.intern("shape")));
+        trf->bind(target_rt.symbols.intern("shape"),
+                  trf->allocate_val(Value::from_pod(target_rt.shapes.shape_meta, leaf3), false)->pointer());
+        Value p3 = ev.run(fe.parse(
+            "#allocate(#evaluate(#deref(#field(#field(#this, sh), intern_shape))), #deref(#field(#this, T)))"));
+        assert(p3.shape_addr == target_rt.shapes.pointer_shape);
+        const auto* s3 = reinterpret_cast<const ShapeLayout*>(p3.as_pod<PointerLayout>().shape_ptr);
+        assert(s3->size == 3 && s3->align == 1 && s3->is_leaf());
+    }
+
+    // 2. Dynamic struct shape with mutable field (mutability=1) -> intern_shape -> reify/intern preserves mutability!
+    {
+        FieldMapInline empty = FieldMapArena::empty();
+        PointerLayout rel_mut{0, target_rt.shapes.raw8_shape, 1};
+        FieldMapInline fm1 = target_rt.shapes.field_maps.insert(empty, target_rt.symbols.intern("m"), rel_mut);
+        ShapeLayout dyn_sl{8, 8, fm1};
+        Value dyn_shape_val = Value::from_pod(target_rt.shapes.shape_meta, dyn_sl);
+
+        trf->drop_in_chain(trf->field(target_rt.symbols.intern("shape")));
+        trf->bind(target_rt.symbols.intern("shape"), trf->allocate_val(dyn_shape_val, false)->pointer());
+
+        Value interned = ev.run(fe.parse("#evaluate(#deref(#field(#field(#this, sh), intern_shape)))"));
+        assert(interned.shape_addr == target_rt.shapes.pointer_shape);
+        PointerLayout sp = interned.as_pod<PointerLayout>();
+        assert(sp.shape_ptr == target_rt.shapes.shape_meta && target_rt.shapes.owns(sp.addr));
+
+        // Round-trip through AstValue into a third RuntimeContext and verify mutability == 1 is preserved
+        AstValue av_shape = reify_ast_value(target_rt, interned);
+        RuntimeContext rt3;
+        Value rt3_shape = intern_ast_value(rt3, av_shape);
+        const auto* sl3 = reinterpret_cast<const ShapeLayout*>(rt3_shape.as_pod<PointerLayout>().addr);
+        assert(sl3->fields.count == 1);
+        assert(sl3->fields.entries_begin()[0].mutability() == 1);
+
+        // Also test StructVal mutability preservation
+        ConstructingFrame tmp_f;
+        FrameSlot* ms = tmp_f.allocate_val(Value::from_pod<uint64_t>(target_rt.shapes.raw8_shape, 99), true);
+        tmp_f.bind(target_rt.symbols.intern("m"), ms->pointer());
+        Value closed_mut_struct = tmp_f.close_and_flatten(target_rt.shapes);
+        AstValue av_struct = reify_ast_value(target_rt, closed_mut_struct);
+        Value rt3_struct = intern_ast_value(rt3, av_struct);
+        assert(rt3_struct.shape_addr == rt3_shape.as_pod<PointerLayout>().addr);
+    }
+
+    // 3. Stageable symbols.* in isolated zero-capability target runtime
+    {
+        Value sym_roundtrip = ev.run(fe.parse(R"(
+            #bind(sym, #allocate_val(hello, #deref(#field(#this, F)))) ;
+            #bind(n, #allocate_val(#evaluate(#deref(#field(#field(#this, sy), byte_len))), #deref(#field(#this, F)))) ;
+            #bind(index, #allocate_val(#deref(#field(#this, V1)), #deref(#field(#this, F)))) ;
+            #bind(ch1, #allocate_val(#evaluate(#deref(#field(#field(#this, sy), byte_at))), #deref(#field(#this, F)))) ;
+            #bind(bytes, #allocate_val(#evaluate(#deref(#field(#field(#this, sy), to_bytes))), #deref(#field(#this, F)))) ;
+            #evaluate(#deref(#field(#field(#this, sy), intern_bytes)))
+        )"));
+        assert(sym_roundtrip.shape_addr == target_rt.shapes.symbol_shape);
+        assert(target_rt.symbols.name(sym_roundtrip.as_pod<SymbolId>()) == "hello");
+        assert(target_rt.deref(trf->field(target_rt.symbols.intern("n"))).as_pod<uint64_t>() == 5);
+        assert(target_rt.deref(trf->field(target_rt.symbols.intern("ch1"))).as_pod<uint8_t>() == 'e');
+
+        // Stageable bytes_slice + bytes_concat + bytes_at in zero-cap target runtime
+        Value b_at = ev.run(fe.parse(R"(
+            #bind(start, #allocate_val(#deref(#field(#this, V1)), #deref(#field(#this, F)))) ;
+            #bind(len, #allocate_val(#deref(#field(#this, V3)), #deref(#field(#this, F)))) ;
+            #bind(lhs, #allocate_val(#evaluate(#deref(#field(#this, p_bs))), #deref(#field(#this, F)))) ;
+            #bind(rhs, #allocate_val(#deref(#field(#this, lhs)), #deref(#field(#this, F)))) ;
+            #drop(#field(#this, bytes)) ;
+            #bind(bytes, #allocate_val(#evaluate(#deref(#field(#this, p_bc))), #deref(#field(#this, F)))) ;
+            #evaluate(#deref(#field(#this, p_ba)))
+        )"));
+        assert(b_at.shape_addr == target_rt.shapes.raw1_shape);
+        assert(b_at.as_pod<uint8_t>() == 'l'); // "ellell"[1] == 'l'
+    }
+
+    // 4. shapes.intern_shape rejects invalid align (0 or non-power-of-2) and out-of-bounds field
+    {
+        auto expect_intern_throws = [&](ShapeLayout bad_sl) {
+            trf->drop_in_chain(trf->field(target_rt.symbols.intern("shape")));
+            trf->bind(target_rt.symbols.intern("shape"),
+                      trf->allocate_val(Value::from_pod(target_rt.shapes.shape_meta, bad_sl), false)->pointer());
+            bool threw = false;
+            try {
+                (void)ev.run(fe.parse("#evaluate(#deref(#field(#field(#this, sh), intern_shape)))"));
+            } catch (const std::runtime_error&) {
+                threw = true;
+            }
+            assert(threw);
+        };
+
+        expect_intern_throws(ShapeLayout{8, 0, FieldMapArena::empty()}); // align == 0
+        expect_intern_throws(ShapeLayout{8, 3, FieldMapArena::empty()}); // align not power of 2
+
+        FieldMapInline oob_fm = target_rt.shapes.field_maps.insert(
+            FieldMapArena::empty(), target_rt.symbols.intern("bad"),
+            PointerLayout{4, target_rt.shapes.raw8_shape, 0});
+        expect_intern_throws(ShapeLayout{8, 8, oob_fm}); // offset 4 + size 8 > 8
+    }
 }
 
 static void test_backends_interpreter_run_isolation() {
@@ -498,6 +647,7 @@ int main() {
     test_io_read_write_and_symbols_intern();
     test_intrinsics_bytes_u8_and_eq_shape();
     test_prototype_factory_intrinsics();
+    test_stageable_runtime_intrinsics_and_intern_shape();
     test_syntax_cst_view_bytes_and_child_view_sym();
     test_install_runtime_isolation();
     test_backends_interpreter_run_isolation();

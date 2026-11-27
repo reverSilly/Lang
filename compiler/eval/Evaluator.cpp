@@ -43,6 +43,27 @@ Runtime::Value read_slot_bytes(Runtime::RuntimeContext& rt, Runtime::SymbolId sy
     return v;
 }
 
+Runtime::Value read_named_slot(Runtime::RuntimeContext& rt, std::string_view name) {
+    Runtime::ConstructingFrame* f = rt.current_frame();
+    if (!f) throw std::runtime_error("intrinsic: no active frame");
+    Runtime::SymbolId sym = rt.symbols.intern(name);
+    Runtime::PointerLayout p = f->field(sym);
+    if (p.is_null()) {
+        throw std::runtime_error("intrinsic: missing required field '" + std::string(name) + "' in #this");
+    }
+    return rt.deref(p);
+}
+
+Runtime::Value read_typed_slot(
+    Runtime::RuntimeContext& rt, std::string_view name, uint64_t expected_shape, const char* type_label) {
+    Runtime::Value v = read_named_slot(rt, name);
+    if (v.shape_addr != expected_shape) {
+        throw std::runtime_error(
+            "intrinsic: field '" + std::string(name) + "' must be " + std::string(type_label));
+    }
+    return v;
+}
+
 template <typename Fn>
 decltype(auto) dispatch_sint(uint8_t width, Fn&& fn) {
     switch (width) {
@@ -91,6 +112,7 @@ Ast::AstShape reify_shape(const Runtime::RuntimeContext& rt, const Runtime::Shap
                 std::string(rt.symbols.name(arr[i].sym)),
                 arr[i].offset(),
                 reify_shape(rt, sub),
+                arr[i].mutability(),
             });
         }
     }
@@ -107,7 +129,7 @@ uint64_t intern_ast_shape(Runtime::RuntimeContext& rt, const Ast::AstShape& s) {
         Runtime::FieldEntry fe{};
         fe.sym = rt.symbols.intern(f.name);
         fe.state = static_cast<uint8_t>(Runtime::SlotState::Live);
-        fe.rel_ptr = Runtime::PointerLayout{f.offset, intern_ast_shape(rt, f.shape), 0};
+        fe.rel_ptr = Runtime::PointerLayout{f.offset, intern_ast_shape(rt, f.shape), f.mutability};
         entries.push_back(fe);
     }
     return rt.shapes.intern_struct(entries, s.size, s.align);
@@ -134,6 +156,9 @@ Ast::AstIntrinsicSpec reify_intrinsic(
             return Ast::AstCmpOp{
                 op.op, op.width, std::string(rt.symbols.name(op.lhs)), std::string(rt.symbols.name(op.rhs))};
         },
+        [&](const Runtime::RuntimeOp& op) -> Ast::AstIntrinsicSpec {
+            return Ast::AstRuntimeOp{op.op};
+        },
     }, spec);
 }
 
@@ -154,6 +179,9 @@ Runtime::IntrinsicSpec intern_intrinsic(
         },
         [&](const Ast::AstCmpOp& op) -> Runtime::IntrinsicSpec {
             return Runtime::CmpOp{op.op, op.width, rt.symbols.intern(op.lhs), rt.symbols.intern(op.rhs)};
+        },
+        [&](const Ast::AstRuntimeOp& op) -> Runtime::IntrinsicSpec {
+            return Runtime::RuntimeOp{op.op};
         },
     }, spec);
 }
@@ -250,6 +278,7 @@ Ast::AstValue reify_ast_value(const Runtime::RuntimeContext& rt, const Runtime::
             std::string(rt.symbols.name(arr[i].sym)),
             arr[i].offset(),
             reify_ast_value(rt, fv),
+            arr[i].mutability(),
         });
     }
     return Ast::AstValue{std::move(st)};
@@ -305,7 +334,7 @@ Runtime::Value intern_ast_value(Runtime::RuntimeContext& rt, const Ast::AstValue
                 Runtime::FieldEntry fe{};
                 fe.sym = rt.symbols.intern(f.name);
                 fe.state = static_cast<uint8_t>(Runtime::SlotState::Live);
-                fe.rel_ptr = Runtime::PointerLayout{f.offset, fv.shape_addr, 0};
+                fe.rel_ptr = Runtime::PointerLayout{f.offset, fv.shape_addr, f.mutability};
                 entries.push_back(fe);
             }
             uint64_t sh = rt.shapes.intern_struct(entries, st.size, st.align);
@@ -640,6 +669,162 @@ Runtime::Value Evaluator::eval_intrinsic(const Runtime::IntrinsicSpec& spec) {
                     });
             }
             throw std::runtime_error("Evaluator::eval_intrinsic: unknown CmpKind");
+        },
+
+        [&](const Runtime::RuntimeOp& op) -> Runtime::Value {
+            using K = Runtime::RuntimeIntrinsicKind;
+            switch (op.op) {
+                case K::FieldMapEmpty:
+                    return Runtime::Value::from_pod(rt.shapes.field_map_shape, Runtime::FieldMapArena::empty());
+                case K::FieldMapIsEmpty: {
+                    auto fm = read_typed_slot(rt, "map", rt.shapes.field_map_shape, "FieldMap")
+                                  .as_pod<Runtime::FieldMapInline>();
+                    return flag_out(Runtime::FieldMapArena::is_empty(fm));
+                }
+                case K::FieldMapCount: {
+                    auto fm = read_typed_slot(rt, "map", rt.shapes.field_map_shape, "FieldMap")
+                                  .as_pod<Runtime::FieldMapInline>();
+                    return Runtime::Value::from_pod<uint64_t>(rt.shapes.raw8_shape, Runtime::FieldMapArena::count(fm));
+                }
+                case K::FieldMapGet: {
+                    auto fm = read_typed_slot(rt, "map", rt.shapes.field_map_shape, "FieldMap")
+                                  .as_pod<Runtime::FieldMapInline>();
+                    auto sym = read_typed_slot(rt, "sym", rt.shapes.symbol_shape, "Symbol")
+                                   .as_pod<Runtime::SymbolId>();
+                    return rt.make_pointer(Runtime::FieldMapArena::get(fm, sym));
+                }
+                case K::FieldMapAt: {
+                    auto fm = read_typed_slot(rt, "map", rt.shapes.field_map_shape, "FieldMap")
+                                  .as_pod<Runtime::FieldMapInline>();
+                    auto idx = static_cast<uint32_t>(
+                        read_typed_slot(rt, "index", rt.shapes.raw8_shape, "raw8").as_pod<uint64_t>());
+                    return Runtime::Value::from_pod(rt.shapes.field_entry_shape, Runtime::FieldMapArena::at(fm, idx));
+                }
+                case K::FieldMapInsert: {
+                    auto fm = read_typed_slot(rt, "map", rt.shapes.field_map_shape, "FieldMap")
+                                  .as_pod<Runtime::FieldMapInline>();
+                    auto sym = read_typed_slot(rt, "sym", rt.shapes.symbol_shape, "Symbol")
+                                   .as_pod<Runtime::SymbolId>();
+                    auto ptr = read_typed_slot(rt, "ptr", rt.shapes.pointer_shape, "Pointer")
+                                   .as_pod<Runtime::PointerLayout>();
+                    auto next = rt.shapes.field_maps.insert(fm, sym, ptr);
+                    return Runtime::Value::from_pod(rt.shapes.field_map_shape, next);
+                }
+                case K::FieldMapPtrShape: {
+                    auto p = read_typed_slot(rt, "ptr", rt.shapes.pointer_shape, "Pointer")
+                                 .as_pod<Runtime::PointerLayout>();
+                    if (p.shape_ptr == 0) {
+                        throw std::runtime_error("field_map.ptr_shape: null shape_ptr");
+                    }
+                    return rt.make_pointer(Runtime::PointerLayout{p.shape_ptr, rt.shapes.shape_meta, 0});
+                }
+                case K::InternShape: {
+                    auto sl = read_typed_slot(rt, "shape", rt.shapes.shape_meta, "Shape")
+                                  .as_pod<Runtime::ShapeLayout>();
+                    if (sl.align == 0 || (sl.align & (sl.align - 1)) != 0) {
+                        throw std::runtime_error(
+                            "shapes.intern_shape: align must be a positive power of two");
+                    }
+                    if (sl.fields.count == 0) {
+                        uint64_t addr = rt.shapes.intern_leaf(sl.size, sl.align);
+                        return rt.make_pointer(Runtime::PointerLayout{addr, rt.shapes.shape_meta, 0});
+                    }
+                    if (sl.fields.entries_ptr == 0) {
+                        throw std::runtime_error("shapes.intern_shape: null entries_ptr for non-empty FieldMap");
+                    }
+                    const Runtime::FieldEntry* arr = sl.fields.entries_begin();
+                    std::vector<Runtime::FieldEntry> entries;
+                    entries.reserve(sl.fields.count);
+                    for (uint32_t i = 0; i < sl.fields.count; ++i) {
+                        const Runtime::FieldEntry& fe = arr[i];
+                        if (fe.sym == 0) {
+                            throw std::runtime_error("shapes.intern_shape: field entry must have non-null symbol");
+                        }
+                        if (fe.slot_state() != Runtime::SlotState::Live) {
+                            throw std::runtime_error("shapes.intern_shape: field entry must be Live");
+                        }
+                        uint64_t sub_addr = fe.sub_shape_addr();
+                        if (sub_addr == 0 || !rt.shapes.owns(sub_addr)) {
+                            throw std::runtime_error("shapes.intern_shape: sub-shape must be owned by ShapeArena");
+                        }
+                        const auto* sub = reinterpret_cast<const Runtime::ShapeLayout*>(sub_addr);
+                        if (fe.offset() > sl.size || sub->size > sl.size - fe.offset()) {
+                            throw std::runtime_error("shapes.intern_shape: field exceeds shape size");
+                        }
+                        entries.push_back(fe);
+                    }
+                    uint64_t addr = rt.shapes.intern_struct(entries, sl.size, sl.align);
+                    return rt.make_pointer(Runtime::PointerLayout{addr, rt.shapes.shape_meta, 0});
+                }
+                case K::SymbolByteLen: {
+                    auto sym = read_typed_slot(rt, "sym", rt.shapes.symbol_shape, "Symbol")
+                                   .as_pod<Runtime::SymbolId>();
+                    return Runtime::Value::from_pod<uint64_t>(rt.shapes.raw8_shape, rt.symbols.name(sym).size());
+                }
+                case K::SymbolByteAt: {
+                    auto sym = read_typed_slot(rt, "sym", rt.shapes.symbol_shape, "Symbol")
+                                   .as_pod<Runtime::SymbolId>();
+                    auto idx = read_typed_slot(rt, "index", rt.shapes.raw8_shape, "raw8").as_pod<uint64_t>();
+                    std::string_view sv = rt.symbols.name(sym);
+                    if (idx >= sv.size()) throw std::out_of_range("symbols.byte_at: out of range");
+                    return Runtime::Value::from_pod<uint8_t>(rt.shapes.raw1_shape, static_cast<uint8_t>(sv[idx]));
+                }
+                case K::SymbolToBytes: {
+                    auto sym = read_typed_slot(rt, "sym", rt.shapes.symbol_shape, "Symbol")
+                                   .as_pod<Runtime::SymbolId>();
+                    return rt.make_raw_bytes(rt.symbols.name(sym));
+                }
+                case K::SymbolInternBytes: {
+                    Runtime::Value v = read_named_slot(rt, "bytes");
+                    const auto* sl = v.shape();
+                    if (!sl || !sl->is_leaf() || sl->align != 1) {
+                        throw std::runtime_error(
+                            "symbols.intern_bytes: field 'bytes' must be a RawBytes leaf value (align = 1)");
+                    }
+                    return rt.make_symbol(rt.symbols.intern(
+                        std::string_view(reinterpret_cast<const char*>(v.bytes.data()), v.bytes.size())));
+                }
+                case K::BytesAt: {
+                    Runtime::Value v = read_named_slot(rt, "bytes");
+                    const auto* sl = v.shape();
+                    if (!sl || !sl->is_leaf() || sl->align != 1) {
+                        throw std::runtime_error(
+                            "intrinsics.bytes_at: field 'bytes' must be a RawBytes leaf value (align = 1)");
+                    }
+                    auto idx = read_typed_slot(rt, "index", rt.shapes.raw8_shape, "raw8").as_pod<uint64_t>();
+                    if (idx >= v.bytes.size()) throw std::out_of_range("intrinsics.bytes_at: out of range");
+                    return Runtime::Value::from_pod<uint8_t>(rt.shapes.raw1_shape, v.bytes[idx]);
+                }
+                case K::BytesSlice: {
+                    Runtime::Value v = read_named_slot(rt, "bytes");
+                    const auto* sl = v.shape();
+                    if (!sl || !sl->is_leaf() || sl->align != 1) {
+                        throw std::runtime_error(
+                            "intrinsics.bytes_slice: field 'bytes' must be a RawBytes leaf value (align = 1)");
+                    }
+                    auto start = read_typed_slot(rt, "start", rt.shapes.raw8_shape, "raw8").as_pod<uint64_t>();
+                    auto len = read_typed_slot(rt, "len", rt.shapes.raw8_shape, "raw8").as_pod<uint64_t>();
+                    if (start > v.bytes.size() || len > v.bytes.size() - start) {
+                        throw std::out_of_range("intrinsics.bytes_slice: out of range");
+                    }
+                    return rt.make_raw_bytes(v.bytes.data() + start, len);
+                }
+                case K::BytesConcat: {
+                    Runtime::Value lhs = read_named_slot(rt, "lhs");
+                    Runtime::Value rhs = read_named_slot(rt, "rhs");
+                    const auto* sl_l = lhs.shape();
+                    const auto* sl_r = rhs.shape();
+                    if (!sl_l || !sl_l->is_leaf() || sl_l->align != 1 ||
+                        !sl_r || !sl_r->is_leaf() || sl_r->align != 1) {
+                        throw std::runtime_error(
+                            "intrinsics.bytes_concat: fields 'lhs' and 'rhs' must be RawBytes leaf values (align = 1)");
+                    }
+                    std::vector<uint8_t> out = std::move(lhs.bytes);
+                    out.insert(out.end(), rhs.bytes.begin(), rhs.bytes.end());
+                    return rt.make_raw_bytes(out.data(), out.size());
+                }
+            }
+            throw std::runtime_error("Evaluator::eval_intrinsic: unknown RuntimeIntrinsicKind");
         },
     }, spec);
 }

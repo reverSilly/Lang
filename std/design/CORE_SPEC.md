@@ -38,7 +38,7 @@
 - **三类 Arena 驻留物同构跨阶段**：
   - `Symbol`（4B）→ `SymbolVal` → 目标 `SymbolPool` 重新驻留。
   - `Prototype`（8B，`AstProto`/`IntrinsicProto`/`FfiProto`/`FfiBindPtrProto`）→ 对应 `AstValue` → 目标 `PrototypeArena` 重新驻留。
-  - `Pointer(Shape)`（24B，满足 `shape_ptr == shape_meta && mutability == 0 && ShapeArena::owns(addr)`）→ 递归 `reify_shape` 展开为 `ShapeVal` → 目标端自底向上 `intern_shape` 进目标 `ShapeArena`，还原为只读 `Pointer(Shape)`。
+  - `Pointer(Shape)`（24B，满足 `shape_ptr == shape_meta && mutability == 0 && ShapeArena::owns(addr)`）→ 递归 `reify_shape` 展开为 `ShapeVal`（完整保留各字段 `mutability`）→ 目标端自底向上 `intern_ast_shape` 进目标 `ShapeArena`，还原为只读 `Pointer(Shape)`；`StructVal` 同理保留字段 `mutability`。
 - **严格拒绝嵌入 Standalone AST**：栈/帧 `Pointer`、解引用后的 40B `ShapeLayout` 值、`Handle`、`NativeProto`、`BoundFfiProto`。
 - **二进制线格式**：12 字节定长头（8B magic `"LANGAST\0"` + 4B 小端版本号 `v1`）+ `cereal::PortableBinaryArchive` 载荷（保持 `shared_ptr` DAG 共享，严格拒绝空根与尾随字节）。
 
@@ -92,23 +92,24 @@
 
 ## 5. Capabilities 与 FFI ABI（`Capabilities.cpp`、`RuntimeCaps.cpp`、`CompilerCaps.cpp`、`FfiCaps.cpp`、`FfiDispatch.cpp`）
 
-所有 capability 原语均为 `NativeProto`，通过 `#evaluate` 从 `#this` 读取命名字段或位置字段（`0, 1, ...`）。目标隔离运行环境（`backends.interpreter.run` 与打包可执行文件）**零 `capabilities`**。
+宿主机 `capabilities` 结构体本身为编译期设施，目标隔离运行环境（`backends.interpreter.run` 与打包可执行文件）**零 `capabilities`**；其中纯数据 `IntrinsicProto`（含 `field_map`、`shapes`、`symbols`、`bytes_*` 及算术/比较指令工厂产物）与 `FfiProto` / `FfiBindPtrProto` 均可经 `ast.value` 跨阶段嵌入目标程序运行。
 
-### 5.1 9 个编译期挂载模块
+### 5.1 10 个编译期挂载模块
 1. **`constants`（17 项）**：`true`/`false`（`raw1`）、`u64_zero`/`u64_one`/`u64_max`（`raw8`），以及 12 个 `Pointer(Shape)`（`unit_shape`, `raw1/2/4/8_shape`, `symbol_shape`, `pointer_shape`, `field_entry_shape`, `field_map_shape`, `shape_meta`, `prototype_shape`, `handle_shape`）。
-2. **`field_map`（7 项）**：`empty`, `is_empty`, `count`, `get`, `at`, `insert`, `ptr_shape`（返回 `Pointer(Shape)`）。
-3. **`symbols`（4 项）**：`byte_len`, `byte_at`, `to_bytes`, `intern_bytes`。
-4. **`intrinsics`（30 项）**：
-   - 27 个纯数据 `IntrinsicProto` 工厂（可跨阶段）：整数 `add/sub/mul/div/rem_int`、位运算 `bit_and/or/xor/not`/`shl`/`shr`、整数转换 `ext_int`/`trunc_int`、浮点 `add/sub/mul/div_float`、浮点转换 `ext_float`/`trunc_float`（仅读 `src`，固定 `4 <-> 8`）、`int_to_float`/`float_to_int`、比较 `eq_bytes`（支持 `width ∈ 1..255`）/`lt_int`/`le_int`/`eq_float`/`lt_float`/`le_float`。*（已移除 `eq_shape`，`Pointer(Shape)` 直接用 `.addr` 8B 比较。）*
-   - 3 个 `RawBytes` 原语：`bytes_at`, `bytes_slice`, `bytes_concat`。
-5. **`ffi`（2 项）**：
+2. **`field_map`（7 项，纯数据可跨期 `IntrinsicProto`）**：`empty`, `is_empty`, `count`, `get`, `at`, `insert`, `ptr_shape`（返回 `Pointer(Shape)`）。
+3. **`shapes`（1 项，纯数据可跨期 `IntrinsicProto`）**：`intern_shape({ shape: Shape }) -> Pointer(Shape)`（严格校验 `align` 为正 2 的幂、各 `FieldEntry` 具名且 `Live`、子形状驻留于 `ShapeArena` 且不越界后驻留去重）。
+4. **`symbols`（4 项，纯数据可跨期 `IntrinsicProto`）**：`byte_len`, `byte_at`, `to_bytes`, `intern_bytes`。
+5. **`intrinsics`（30 项）**：
+   - 27 个纯数据 `IntrinsicProto` 工厂（产物可跨阶段）：整数 `add/sub/mul/div/rem_int`、位运算 `bit_and/or/xor/not`/`shl`/`shr`、整数转换 `ext_int`/`trunc_int`、浮点 `add/sub/mul/div_float`、浮点转换 `ext_float`/`trunc_float`（仅读 `src`，固定 `4 <-> 8`）、`int_to_float`/`float_to_int`、比较 `eq_bytes`（支持 `width ∈ 1..255`）/`lt_int`/`le_int`/`eq_float`/`lt_float`/`le_float`。*（已移除 `eq_shape`，`Pointer(Shape)` 直接用 `.addr` 8B 比较。）*
+   - 3 个 `RawBytes` 原语（纯数据可跨期 `IntrinsicProto`）：`bytes_at`, `bytes_slice`, `bytes_concat`。
+6. **`ffi`（2 项）**：
    - `extern_symbol({ lib: RawBytes, name: RawBytes, abi }) -> FfiProto`（可跨阶段；`lib` 原样传给 `dlopen`/`LoadLibraryA`，空串 `""` 表示当前进程符号表）。
    - `bind_ptr({ fn: Symbol, abi }) -> FfiBindPtrProto`（两阶段间接调用：运行期 `#evaluate` 读 `#this.<fn>` 得不可跨阶段的 `BoundFfiProto`）。
    - `abi := { args: Pointer(Shape), ret: Pointer(Shape), cc: c }`；两工厂在编译期即急切校验并缓存 `ffi_cif`。
-6. **`ast`（10 项）**：`new_arena`, `destroy_arena`, `word`, `builtin`, `seq`, `value`, `proto`, `to_proto`, `serialize`, `deserialize`。
-7. **`syntax`（19 项）**：`new_layer0`, `destroy_frontend`, `lit`, `range`, `ref`, `any`, `eof`, `seq`, `choice`, `repeat`, `lookahead`, `get_rule`, `set_rule`（执行 CST handler 时除 `node`/`arena` 外会隐式复制 `capabilities` 到回调帧）, `parse`, `cst_child_count`, `cst_view_sym`, `cst_view_bytes`, `cst_child_view_sym`, `cst_eval_child`。
-8. **`backends.interpreter`（2 项）**：`run({ ast })`（新建隔离 `RuntimeContext`+`Evaluator` 执行并回传可跨阶段结果）、`emit_executable({ ast, out_path })`（输出独立打包可执行文件并赋 `+x`）。
-9. **`io`（2 项，Phase 1 临时）**：`read_file`, `write_file`。
+7. **`ast`（10 项）**：`new_arena`, `destroy_arena`, `word`, `builtin`, `seq`, `value`, `proto`, `to_proto`, `serialize`, `deserialize`。
+8. **`syntax`（19 项）**：`new_layer0`, `destroy_frontend`, `lit`, `range`, `ref`, `any`, `eof`, `seq`, `choice`, `repeat`, `lookahead`, `get_rule`, `set_rule`（执行 CST handler 时除 `node`/`arena` 外会隐式复制 `capabilities` 到回调帧）, `parse`, `cst_child_count`, `cst_view_sym`, `cst_view_bytes`, `cst_child_view_sym`, `cst_eval_child`。
+9. **`backends.interpreter`（2 项）**：`run({ ast })`（新建隔离 `RuntimeContext`+`Evaluator` 执行并回传可跨阶段结果）、`emit_executable({ ast, out_path })`（输出独立打包可执行文件并赋 `+x`）。
+10. **`io`（2 项，Phase 1 临时）**：`read_file`, `write_file`。
 
 ### 5.2 FFI `Shape -> ffi_type` 纯净 4 条映射规则（仅支持 `cc = c`）
 1. `size == 0 && is_leaf()` → `ffi_type_void`（仅允许作返回值，禁止作参数）。
@@ -120,5 +121,5 @@
 
 ## 6. CLI 与独立打包可执行契约（`main.cpp`、`stub_main.cpp`）
 
-- **编译器入口（`main.cpp`）**：`lang <entry.lang> [args...]`。挂载全部 9 个 `capabilities` 模块，将 `argv[2..]` 注入 `args`（`{ count, 0, 1, ... }`），以 Layer 0 解析执行，成功恒返回退出码 `0`。
+- **编译器入口（`main.cpp`）**：`lang <entry.lang> [args...]`。挂载全部 10 个 `capabilities` 模块，将 `argv[2..]` 注入 `args`（`{ count, 0, 1, ... }`），以 Layer 0 解析执行，成功恒返回退出码 `0`。
 - **独立打包产物（`stub_main.cpp`）**：文件布局 `[embedded_lang_stub][Ast::serialize payload][PackTrailer: u64_le payload_size + magic]`。运行时自定位反序列化，注入完整 `argv[0..]` 到 `args`（**零 `capabilities`**），提取顶层返回值（裸 `raw1/2/4/8` 或带 `.__raw` 字段的包装整数）的低 8 位作为进程退出码。

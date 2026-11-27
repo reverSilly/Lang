@@ -65,6 +65,25 @@ enum class CmpKind : uint8_t {
     EqBytes, SLt, ULt, SLe, ULe, FEq, FLt, FLe,
 };
 
+// Stageable runtime reflection & arena intrinsics (zero host capability dependency).
+enum class RuntimeIntrinsicKind : uint8_t {
+    FieldMapEmpty,
+    FieldMapIsEmpty,
+    FieldMapCount,
+    FieldMapGet,
+    FieldMapAt,
+    FieldMapInsert,
+    FieldMapPtrShape,
+    InternShape,
+    SymbolByteLen,
+    SymbolByteAt,
+    SymbolToBytes,
+    SymbolInternBytes,
+    BytesAt,
+    BytesSlice,
+    BytesConcat,
+};
+
 struct Expr;
 using ExprPtr = std::shared_ptr<const Expr>;
 
@@ -80,6 +99,7 @@ struct AstField {
     std::string name;
     uint64_t offset = 0;
     AstShape shape;
+    uint8_t mutability = 0;
 };
 
 // Environment-independent intrinsic specs (slot names stored as std::string for delayed interning).
@@ -88,13 +108,15 @@ struct AstIntUnaryOp { IntUnaryKind op; uint8_t width = 0; std::string src; };
 struct AstFloatBinOp { FloatBinKind op; uint8_t width = 0; std::string lhs, rhs; };
 struct AstCastOp     { CastKind op;     uint8_t from_width = 0, to_width = 0; std::string src; };
 struct AstCmpOp      { CmpKind op;      uint8_t width = 0; std::string lhs, rhs; };
+struct AstRuntimeOp  { RuntimeIntrinsicKind op; };
 
 using AstIntrinsicSpec = std::variant<
     AstIntBinOp,
     AstIntUnaryOp,
     AstFloatBinOp,
     AstCastOp,
-    AstCmpOp>;
+    AstCmpOp,
+    AstRuntimeOp>;
 
 // 8-variant standalone compile-time constant value (zero RuntimeContext dependency).
 // Strictly excludes all Pointer, Handle, NativeProto, and runtime-bound BoundFfiProto values.
@@ -164,6 +186,7 @@ struct AstStructField {
     std::string name;
     uint64_t offset = 0;
     AstValue value;
+    uint8_t mutability = 0;
 };
 
 // Layer 0 Word: delayed interning (resolved to 4-byte SymbolId in RuntimeContext).

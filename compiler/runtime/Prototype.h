@@ -24,6 +24,7 @@ using Ast::IntUnaryKind;
 using Ast::FloatBinKind;
 using Ast::CastKind;
 using Ast::CmpKind;
+using Ast::RuntimeIntrinsicKind;
 
 // Portable declarative external C symbol specification (zero dlopen handle, zero NativeFn).
 struct FfiBinding {
@@ -84,8 +85,12 @@ struct CmpOp {
     SymbolId rhs = 0;
 };
 
-// Pure-data hardware / LLVM IR intrinsic specification (zero std::function closure).
-using IntrinsicSpec = std::variant<IntBinOp, IntUnaryOp, FloatBinOp, CastOp, CmpOp>;
+struct RuntimeOp {
+    RuntimeIntrinsicKind op;
+};
+
+// Pure-data hardware / LLVM IR / runtime reflection intrinsic specification (zero std::function closure).
+using IntrinsicSpec = std::variant<IntBinOp, IntUnaryOp, FloatBinOp, CastOp, CmpOp, RuntimeOp>;
 
 struct AstProto {
     Ast::ExprPtr ast;

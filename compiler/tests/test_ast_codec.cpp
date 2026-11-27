@@ -21,6 +21,7 @@ bool eq_shape(const AstShape& a, const AstShape& b) {
     for (size_t i = 0; i < a.fields.size(); ++i) {
         if (a.fields[i].name != b.fields[i].name) return false;
         if (a.fields[i].offset != b.fields[i].offset) return false;
+        if (a.fields[i].mutability != b.fields[i].mutability) return false;
         if (!eq_shape(a.fields[i].shape, b.fields[i].shape)) return false;
     }
     return true;
@@ -47,6 +48,9 @@ bool eq_intrinsic(const AstIntrinsicSpec& a, const AstIntrinsicSpec& b) {
     if (auto* x = std::get_if<AstCmpOp>(&a)) {
         const auto& y = std::get<AstCmpOp>(b);
         return x->op == y.op && x->width == y.width && x->lhs == y.lhs && x->rhs == y.rhs;
+    }
+    if (auto* x = std::get_if<AstRuntimeOp>(&a)) {
+        return x->op == std::get<AstRuntimeOp>(b).op;
     }
     return false;
 }
@@ -84,6 +88,7 @@ bool eq_value(const AstValue& a, const AstValue& b) {
         for (size_t i = 0; i < x->fields.size(); ++i) {
             if (x->fields[i].name != y.fields[i].name) return false;
             if (x->fields[i].offset != y.fields[i].offset) return false;
+            if (x->fields[i].mutability != y.fields[i].mutability) return false;
             if (!eq_value(x->fields[i].value, y.fields[i].value)) return false;
         }
         return true;
@@ -101,7 +106,7 @@ bool eq_expr(const ExprPtr& a, const ExprPtr& b) {
         const auto& y = std::get<BuiltinExpr>(b->node);
         if (x->kind != y.kind || x->args.size() != y.args.size()) return false;
         for (size_t i = 0; i < x->args.size(); ++i) {
-            if (!eq_expr(x->args[i], y.args[i])) return false;
+            if (!eq_expr(x->args[i], y->args[i])) return false;
         }
         return true;
     }
@@ -109,7 +114,7 @@ bool eq_expr(const ExprPtr& a, const ExprPtr& b) {
         const auto& y = std::get<SequenceExpr>(b->node);
         if (x->items.size() != y.items.size()) return false;
         for (size_t i = 0; i < x->items.size(); ++i) {
-            if (!eq_expr(x->items[i], y.items[i])) return false;
+            if (!eq_expr(x->items[i], y->items[i])) return false;
         }
         return true;
     }
@@ -138,8 +143,8 @@ void test_all_variants_roundtrip() {
     AstShape pair_shape{
         16, 8,
         {
-            AstField{"a", 0, raw8},
-            AstField{"b", 8, raw8},
+            AstField{"a", 0, raw8, 0},
+            AstField{"b", 8, raw8, 1},
         }};
 
     ExprPtr inner_body = make_expr<BuiltinExpr>(
@@ -149,8 +154,8 @@ void test_all_variants_roundtrip() {
     StructVal nested_struct{
         16, 8,
         {
-            AstStructField{"raw", 0, AstValue{RawBytes{4, {0xDE, 0xAD, 0xBE, 0xEF}}}},
-            AstStructField{"sym", 8, AstValue{SymbolVal{"hello_world"}}},
+            AstStructField{"raw", 0, AstValue{RawBytes{4, {0xDE, 0xAD, 0xBE, 0xEF}}}, 1},
+            AstStructField{"sym", 8, AstValue{SymbolVal{"hello_world"}}, 0},
         }};
 
     std::vector<ExprPtr> items;
@@ -165,6 +170,9 @@ void test_all_variants_roundtrip() {
     items.push_back(make_expr<ValueExpr>(AstValue{IntrinsicVal{AstFloatBinOp{FloatBinKind::Mul, 8, "x", "y"}}}));
     items.push_back(make_expr<ValueExpr>(AstValue{IntrinsicVal{AstCastOp{CastKind::SIToFP, 4, 8, "v"}}}));
     items.push_back(make_expr<ValueExpr>(AstValue{IntrinsicVal{AstCmpOp{CmpKind::SLt, 8, "l", "r"}}}));
+    items.push_back(make_expr<ValueExpr>(AstValue{IntrinsicVal{AstRuntimeOp{RuntimeIntrinsicKind::InternShape}}}));
+    items.push_back(make_expr<ValueExpr>(AstValue{IntrinsicVal{AstRuntimeOp{RuntimeIntrinsicKind::FieldMapCount}}}));
+    items.push_back(make_expr<ValueExpr>(AstValue{IntrinsicVal{AstRuntimeOp{RuntimeIntrinsicKind::BytesConcat}}}));
     items.push_back(make_expr<ValueExpr>(AstValue{FfiExternVal{"libc.so.6", "puts", pair_shape, raw8, "c"}}));
     items.push_back(make_expr<ValueExpr>(AstValue{FfiBindPtrVal{"fn_ptr", pair_shape, raw8, "c"}}));
     items.push_back(make_expr<ValueExpr>(AstValue{nested_struct}));
