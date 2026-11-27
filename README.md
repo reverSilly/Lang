@@ -25,7 +25,7 @@ lib/std/            # 纯 .lang 自举标准库
   build.lang        # 独立打包可执行文件构建器
   libc.lang         # 声明式标准 C FFI 模块
 tests/              # 端到端与 Layer 1 测试套件
-std/design/         # 冻结核心契约 CORE_SPEC.md 与归档历史设计稿（archive/）
+std/design/         # 核心规范（CORE_SPEC.md 为唯一事实来源，archive/ 存放历史稿）
 editors/vscode/     # VS Code 语法高亮插件
 ```
 
@@ -57,10 +57,10 @@ ctest --test-dir build --output-on-failure
    - 在 `lib/std/syntax/` 编写语法处理器时，凡是**纯运行时逻辑**（类型/Shape 分发、智能绑定分支、函数帧挂载、词法作用域查找等），一律用可读的 Layer 1 语法写成 `Prototype` (`^( ... )`) 并通过 `ast.value` 提升。
    - AST 节点构造仅保留最薄的一层胶水：把尚未求值的子表达式包成 `ast.proto`，或将编译期已知符号/参数绑入槽后 `#evaluate` 固定 Prototype。避免手写大段“AST 汇编”。
 2. **单一事实来源 + 1 页变更单（Spec & RFC/ADR）**
-   - Core 边界经逐行审计冻结后，全局只维护一份与 C++ 实现 100% 对齐的核心契约（[`std/design/CORE_SPEC.md`](std/design/CORE_SPEC.md)），旧设计稿归档至 `std/design/archive/`，不再多头同步修改。
+   - Core 边界经逐行审计冻结后，全局只维护一份与 C++ 实现 100% 对齐的核心契约（`CORE_SPEC.md`），旧设计稿归档为历史参考，不再多头同步修改。
    - 新特性（如 RAII、Pattern Matching）在动代码前先写 **1 页变更单**（目标、核心规则、正反边界用例、影响范围）；确认实现后归档为不可变决策记录（ADR）。
 3. **垂直切片与拆分测试**
    - 每次只推进一个正交特性或重构任务；测试按特性拆分为独立短文件，保证单点改动可快速定位。
-4. **GitHub 项目管理与 CI**
-   - 动态任务与阶段进度统一使用 **GitHub Issues + Milestones** 管理（提交信息中使用 `Closes #N` 自动关联关单）。
-   - 后续通过 **GitHub Actions CI** 在每次推送/PR 时自动运行全量回归测试。
+4. **GitHub 工作流与 CI**
+   - 动态任务与阶段进度统一使用 **GitHub Issues + Milestones** 管理；**新特性与重构走工作分支 + PR**（PR 描述使用 `Closes #N` 自动关联关单），待 CI 绿灯后合入 `master`。
+   - 通过 **GitHub Actions CI**（`.github/workflows/ci.yml`）在每次推送/PR 时自动运行全量 C++ 单测、Layer 1 回归与打包可执行文件测试。
