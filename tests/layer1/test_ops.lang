@@ -1,0 +1,45 @@
+! ============================================================================ !
+! tests/layer1/test_ops.lang — Unary/Binary Ops, Precedence, Symbol & Shape == !
+! ============================================================================ !
+
+_T := true ; T_raw := $._T.__raw ;
+_F := false ; F_raw := $._F.__raw ;
+
+assert_true := ^(
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
+) ;
+
+! 1. ZST-marker Boolean & Unary Prefix Operators (+, -, ~) !
+cond := ~true == false ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~false == true ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~~true == true ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := +42 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := --42 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := -42 + 42 == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := -(2 + 3) == -5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := -2 * -3 == 6 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~0 == -1 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~(-1) == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~42 == -43 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! u8 bitwise ~ (0x01 -> 0xFE not_= 0x00) vs Boolean logical ~ (true -> false == 0x00) !
+u8_one := { __raw := $#parent(#this).T_raw ; __u8_tag := {} } ;
+u8_not := ~$.u8_one ;
+cond := ~~$.u8_one == $.u8_one ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := ~($.u8_not.__raw == $.F_raw) ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. Precedence, left-associativity & nested Shape-dispatched ops !
+r1 := (1 + 2) * (3 + 4) ;
+cond := $.r1 == 21 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+r2 := 2 + 3 * 4 ;
+cond := $.r2 == 14 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+r3 := 10 - 3 - 2 ;
+cond := $.r3 == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 3. Symbol & Shape equality via `==` dispatcher !
+cond := foo == foo ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := #shape(42) == #shape(0) ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+ops_tests_passed

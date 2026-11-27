@@ -1,0 +1,39 @@
+! ============================================================================ !
+! tests/layer1/test_control_flow.lang — Suffix if/else, while & Coroutines (@) !
+! ============================================================================ !
+
+_T := true ; T_raw := $._T.__raw ;
+
+assert_true := ^(
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
+) ;
+
+! 1. English-order suffix `if/else` !
+x := 25 ;
+v_if1 := 100 if ($.x == 25) else 0 ;
+v_if2 := 100 if ($.x < 10) else 200 ;
+cond := $.v_if1 == 100 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.v_if2 == 200 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. English-order suffix `while`: sum 1..10 == 55 !
+sum := #allocate_val(0, $.T_raw) ;
+idx := #allocate_val(1, $.T_raw) ;
+(.sum = $.sum + $.idx ; .idx = $.idx + 1) while ($.idx < 11) ;
+cond := $.sum == 55 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 3. Coroutines with `@` (`#resume`) !
+worker := #new(^(
+    v1 := $#in ;
+    #caller @ ($.v1 * 2) ;
+    v2 := $#in ;
+    #break($.v2 + 100)
+)) ;
+$.worker @ 10 ;
+out1 := $#in ;
+cond := $.out1 == 20 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+$.worker @ 5 ;
+out2 := $#in ;
+cond := $.out2 == 105 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+control_flow_tests_passed

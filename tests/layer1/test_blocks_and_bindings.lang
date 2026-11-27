@@ -1,0 +1,66 @@
+! ============================================================================ !
+! tests/layer1/test_blocks_and_bindings.lang                                   !
+! Smart `:=`, mutability, closed blocks `{}`, `#parent`, dynamic symbols,      !
+! and `#block(p, is_mut)` unbound Pointer & direct field access.               !
+! ============================================================================ !
+
+_T := true ; T_raw := $._T.__raw ;
+
+assert_true := ^(
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
+) ;
+
+! 1. Smart `:=` dispatcher & location-owned mutability !
+x := #allocate_val(10, $.T_raw) ;
+.x = 25 ;
+p := .x ;
+cond := $.x == 25 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $$.p == 25 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. Closed struct blocks `{}` and `{ expr }` !
+empty_u := {} ;
+pt := { px := 10 ; py := 32 } ;
+cond := $.pt.px + $.pt.py == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 3. Multi-level ancestor block access via #parent(#parent(#this)) !
+nested_gp := {
+    outer_v := 99 ;
+    mid := {
+        inner := {
+            #break($#parent(#parent(#this)).outer_v)
+        } ;
+        #break($.inner)
+    } ;
+    #break($.mid)
+} ;
+cond := $.nested_gp == 99 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 4. Dynamic Symbol as value: :=, .Atom, p.Atom, Prefix LHS =, and \0 escape !
+sym := another ;
+($.sym) := 1 ;
+cond := $.another == 1 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+sym2 := dyn_var ;
+$.sym2 := 7 ;
+cond := $.dyn_var == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.($.sym2) == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+f_key := py ;
+cond := $.pt.($.f_key) == 32 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+$.p = 30 ;
+cond := $.x == 30 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+\0 := 77 ;
+cond := $.\0 == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 5. `#block(p, is_mut)` -> parent-frame unbound Pointer & direct field access !
+cond := $({ px := 10 ; py := 32 }.px) == 10 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $((10, 20, 12).\2) == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Explicit mutable `#block(p, true)` slot can be mutated directly !
+m_slot := #block(^( #break(10) ), $.T_raw) ;
+.m_slot = 42 ;
+cond := $.m_slot == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+blocks_and_bindings_tests_passed
