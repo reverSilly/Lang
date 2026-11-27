@@ -166,6 +166,7 @@ foreach(l1_test IN ITEMS
     test_blocks_and_bindings
     test_functions
     test_tuples
+    test_raii_mem
 )
     add_test(
         NAME layer1_${l1_test}

@@ -1,0 +1,672 @@
+! ============================================================================ !
+! lib/std/mem.lang — Stageable Standard Library RAII & Ownership Primitives    !
+!                                                                              !
+! Evaluates inside a `#block` (reading `#parent(#this).capabilities`) and      !
+! `#break`s a 100% pure stageable module struct (zero host NativeProto)        !
+! exporting:                                                                   !
+!   recast, is_pod, destroy, drop, move, move_into, swap, clone,               !
+!   cleanup_unbound, cleanup_all                                               !
+! ============================================================================ !
+
+caps  := $#parent(#this).capabilities ;
+c_con := $.caps.constants ;
+c_fm  := $.caps.field_map ;
+c_int := $.caps.intrinsics ;
+F     := $.c_con.\false ;
+T     := $.c_con.\true ;
+Z     := $.c_con.u64_zero ;
+ONE   := $.c_con.u64_one ;
+W1    := $(($.c_con.raw1_shape).size) ;
+W4    := $(($.c_con.raw4_shape).size) ;
+W8    := $(($.c_con.raw8_shape).size) ;
+
+! Stageable raw integer & comparison intrinsics !
+p_add8 := #block(^( width := $#parent(#this).W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).c_int.add_int)) ), $.F) ;
+p_sub8 := #block(^( width := $#parent(#this).W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).c_int.sub_int)) ), $.F) ;
+p_lt8  := #block(^( signed := $#parent(#this).F ; width := $#parent(#this).W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).c_int.lt_int)) ), $.F) ;
+p_eq8  := #block(^( width := $#parent(#this).W8 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).c_int.eq_bytes)) ), $.F) ;
+p_eq4  := #block(^( width := $#parent(#this).W4 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).c_int.eq_bytes)) ), $.F) ;
+p_eq1  := #block(^( width := $#parent(#this).W1 ; lhs := a ; rhs := b ; #break(#evaluate($#parent(#this).c_int.eq_bytes)) ), $.F) ;
+
+! Deterministic 4-byte 0 for checking FieldEntry.sym.__raw == 0 !
+p_trunc_8_4 := #block(^( from := $#parent(#this).W8 ; to := $#parent(#this).W4 ; src := x ; #break(#evaluate($#parent(#this).c_int.trunc_int)) ), $.F) ;
+u32_zero := #block(^( x := $#parent(#this).Z ; #break(#evaluate($#parent(#this).p_trunc_8_4)) ), $.F) ;
+
+! Shared pure stageable environment captured by exported mem closures !
+mem_ops := {
+    F         := $#parent(#this).F ;
+    T         := $#parent(#this).T ;
+    Z         := $#parent(#this).Z ;
+    ONE       := $#parent(#this).ONE ;
+    u32_zero  := $#parent(#this).u32_zero ;
+    fm_count  := $#parent(#this).c_fm.count ;
+    fm_at     := $#parent(#this).c_fm.at ;
+    fm_ptr_sh := $#parent(#this).c_fm.ptr_shape ;
+    add8      := $#parent(#this).p_add8 ;
+    sub8      := $#parent(#this).p_sub8 ;
+    lt8       := $#parent(#this).p_lt8 ;
+    eq8       := $#parent(#this).p_eq8 ;
+    eq4       := $#parent(#this).p_eq4 ;
+    eq1       := $#parent(#this).p_eq1
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 1. recast(ptr, s_ptr) -> Pointer                                             !
+! ---------------------------------------------------------------------------- !
+fn_recast := {
+    __env  := $#parent(#this).mem_ops ;
+    __code := ^(
+        p_in := #deref(#field(#field(#this, __arg), \0)) ;
+        s_in := #deref(#field(#field(#this, __arg), \1)) ;
+        #deref(#block(^(
+            addr       := #deref(#field(#field(#parent(#this), p_in), addr)) ;
+            shape_ptr  := #deref(#field(#field(#parent(#this), s_in), addr)) ;
+            mutability := #deref(#field(#field(#parent(#this), p_in), mutability)) ;
+            __ptr_tag  := {}
+        ), $.F))
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 2. is_pod(s_ptr) -> Boolean                                                  !
+! ---------------------------------------------------------------------------- !
+fn_is_pod := {
+    __env  := $#parent(#this).mem_ops ;
+    __code := ^(
+        s_ptr := #deref(#field(#this, __arg)) ;
+        z_ptr := #deref(#block(^(
+            addr       := $.Z ;
+            shape_ptr  := #deref(#field(#field(#parent(#this), s_ptr), addr)) ;
+            mutability := $.F ;
+            __ptr_tag  := {}
+        ), $.F)) ;
+        dp := #field($.z_ptr, __destroy) ;
+        has_d := #block(^(
+            a := #deref(#field(#field(#parent(#this), dp), shape_ptr)) ;
+            b := $.Z ;
+            #break(#evaluate($.eq8))
+        ), $.F) ;
+        #branch($.has_d, ^(
+            ! has_d == 1 means dp.shape_ptr == 0 (no __destroy): check child fields !
+            s_fields := #deref(#field($.s_ptr, fields)) ;
+            cnt := #block(^(
+                map := $#parent(#this).s_fields ;
+                #break(#evaluate($.fm_count))
+            ), $.F) ;
+            res_slot := #allocate_val($.T, $.T) ;
+            i_slot   := #allocate_val($.Z, $.T) ;
+            self_fn  := { __env := $.__fn_env ; __code := $.__code } ;
+            loop_p := ^(
+                ok_res := #deref(.res_slot) ;
+                in_rng := #block(^(
+                    a := $#parent(#this).i_slot ;
+                    b := $#parent(#this).cnt ;
+                    #break(#evaluate($.lt8))
+                ), $.F) ;
+                #branch($.ok_res, ^(
+                    #branch($.in_rng, ^(
+                        fe := #block(^(
+                            map   := $#parent(#this).s_fields ;
+                            index := $#parent(#this).i_slot ;
+                            #break(#evaluate($.fm_at))
+                        ), $.F) ;
+                        is_live := #block(^(
+                            a := #deref(#field(#field(#parent(#this), fe), state)) ;
+                            b := $.T ;
+                            #break(#evaluate($.eq1))
+                        ), $.F) ;
+                        #branch($.is_live, ^(
+                            sub_sh := #block(^(
+                                ptr := #deref(#field(#field(#parent(#this), fe), ptr)) ;
+                                #break(#evaluate($.fm_ptr_sh))
+                            ), $.F) ;
+                            sub_ok := $.self_fn $.sub_sh ;
+                            #write(.res_slot, #deref(#field(.sub_ok, __raw))) ;
+                            #drop(.sub_ok) ; #drop(.sub_sh)
+                        ), ^( {} )) ;
+                        next_i := #block(^(
+                            a := $#parent(#this).i_slot ;
+                            b := $.ONE ;
+                            #break(#evaluate($.add8))
+                        ), $.F) ;
+                        #write(.i_slot, $.next_i) ;
+                        #drop(.fe) ; #drop(.is_live) ; #drop(.next_i) ;
+                        #drop(.ok_res) ; #drop(.in_rng) ;
+                        #evaluate($.loop_p)
+                    ), ^(
+                        #drop(.ok_res) ; #drop(.in_rng) ;
+                        {}
+                    ))
+                ), ^(
+                    #drop(.ok_res) ; #drop(.in_rng) ;
+                    {}
+                ))
+            ) ;
+            #evaluate($.loop_p) ;
+            #deref(#block(^(
+                __raw         := $#parent(#this).res_slot ;
+                __boolean_tag := {}
+            ), $.F))
+        ), ^(
+            ! dp.shape_ptr ~= 0 -> has __destroy -> not POD !
+            #deref(#block(^(
+                __raw         := $.F ;
+                __boolean_tag := {}
+            ), $.F))
+        ))
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 3. destroy(ptr) -> Unit  (in-place recursive destructor; no #drop)           !
+! ---------------------------------------------------------------------------- !
+fn_destroy := {
+    __env  := $#parent(#this).mem_ops ;
+    __code := ^(
+        ptr   := #deref(#field(#this, __arg)) ;
+        s_ptr := #block(^(
+            ptr := $#parent(#this).ptr ;
+            #break(#evaluate($.fm_ptr_sh))
+        ), $.F) ;
+        s_fields := #deref(#field($.s_ptr, fields)) ;
+        cnt := #block(^(
+            map := $#parent(#this).s_fields ;
+            #break(#evaluate($.fm_count))
+        ), $.F) ;
+        is_leaf := #block(^(
+            a := $#parent(#this).cnt ;
+            b := $.Z ;
+            #break(#evaluate($.eq8))
+        ), $.F) ;
+        #branch($.is_leaf, ^(
+            #deref({})
+        ), ^(
+            ! 1. If object defines __destroy, call it first (while __env is still live) !
+            dp := #field($.ptr, __destroy) ;
+            no_d := #block(^(
+                a := #deref(#field(#field(#parent(#this), dp), shape_ptr)) ;
+                b := $.Z ;
+                #break(#evaluate($.eq8))
+            ), $.F) ;
+            #branch($.no_d, ^( {} ), ^(
+                d_fn := #deref($.dp) ;
+                _r   := $.d_fn $.ptr ;
+                #drop(._r) ; #drop(.d_fn)
+            )) ;
+            ! 2. Reverse-iterate entries[cnt-1 .. 0] and destroy all sym~=0 && Live fields !
+            idx_slot := #allocate_val($.cnt, $.T) ;
+            self_fn  := { __env := $.__fn_env ; __code := $.__code } ;
+            loop_p := ^(
+                has_more := #block(^(
+                    a := $.Z ;
+                    b := $#parent(#this).idx_slot ;
+                    #break(#evaluate($.lt8))
+                ), $.F) ;
+                #branch($.has_more, ^(
+                    cur_i := #block(^(
+                        a := $#parent(#this).idx_slot ;
+                        b := $.ONE ;
+                        #break(#evaluate($.sub8))
+                    ), $.F) ;
+                    #write(.idx_slot, $.cur_i) ;
+                    fe := #block(^(
+                        map   := $#parent(#this).s_fields ;
+                        index := $#parent(#this).cur_i ;
+                        #break(#evaluate($.fm_at))
+                    ), $.F) ;
+                    is_live := #block(^(
+                        a := #deref(#field(#field(#parent(#this), fe), state)) ;
+                        b := $.T ;
+                        #break(#evaluate($.eq1))
+                    ), $.F) ;
+                    is_anon := #block(^(
+                        a := #deref(#field(#field(#field(#parent(#this), fe), sym), __raw)) ;
+                        b := $.u32_zero ;
+                        #break(#evaluate($.eq4))
+                    ), $.F) ;
+                    #branch($.is_live, ^(
+                        #branch($.is_anon, ^( {} ), ^(
+                            sub_ptr := #field($.ptr, #deref(#field(.fe, sym))) ;
+                            _sr     := $.self_fn $.sub_ptr ;
+                            #drop(._sr) ; #drop(.sub_ptr)
+                        ))
+                    ), ^( {} )) ;
+                    #drop(.cur_i) ; #drop(.fe) ; #drop(.is_live) ; #drop(.is_anon) ; #drop(.has_more) ;
+                    #evaluate($.loop_p)
+                ), ^(
+                    #drop(.has_more) ;
+                    #deref({})
+                ))
+            ) ;
+            #evaluate($.loop_p)
+        ))
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 4. drop(ptr) -> Unit  (destroy(ptr) + Core #drop(ptr))                       !
+! ---------------------------------------------------------------------------- !
+drop_env := {
+    destroy := $#parent(#this).fn_destroy
+} ;
+fn_drop := {
+    __env  := $.drop_env ;
+    __code := ^(
+        ptr := #deref(#field(#this, __arg)) ;
+        _r  := $.destroy $.ptr ;
+        #drop(._r) ;
+        #drop($.ptr)
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 5. move(ptr) -> Pointer  (destructive move into caller's fresh unbound slot) !
+! ---------------------------------------------------------------------------- !
+fn_move := {
+    __env  := {} ;
+    __code := ^(
+        src := #deref(#field(#this, __arg)) ;
+        val := #deref($.src) ;
+        #drop($.src) ;
+        #deref(.val)
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 6. move_into(dst, src) -> Unit  (destroy dst if Live, write src, #drop src)  !
+! ---------------------------------------------------------------------------- !
+move_into_env := {
+    F         := $.F ;
+    T         := $.T ;
+    Z         := $.Z ;
+    ONE       := $.ONE ;
+    fm_count  := $#parent(#this).c_fm.count ;
+    fm_at     := $#parent(#this).c_fm.at ;
+    fm_ptr_sh := $#parent(#this).c_fm.ptr_shape ;
+    add8      := $#parent(#this).p_add8 ;
+    lt8       := $#parent(#this).p_lt8 ;
+    eq8       := $#parent(#this).p_eq8 ;
+    eq1       := $#parent(#this).p_eq1 ;
+    destroy   := $#parent(#this).fn_destroy
+} ;
+fn_move_into := {
+    __env  := $#parent(#this).move_into_env ;
+    __code := ^(
+        dst := #deref(#field(#field(#this, __arg), \0)) ;
+        src := #deref(#field(#field(#this, __arg), \1)) ;
+        ! Check if dst is an Uninitialized direct slot in any active open frame !
+        live_slot  := #allocate_val($.T, $.T) ;
+        found_slot := #allocate_val($.F, $.T) ;
+        cur_frame  := #allocate_val(#parent(#this), $.T) ;
+        walk_p := ^(
+            not_found := #block(^(
+                a := $#parent(#this).found_slot ;
+                b := $.F ;
+                #break(#evaluate($.eq1))
+            ), $.F) ;
+            cf := #deref(.cur_frame) ;
+            cf_null := #block(^(
+                a := #deref(#field(#field(#parent(#this), cf), addr)) ;
+                b := $.Z ;
+                #break(#evaluate($.eq8))
+            ), $.F) ;
+            #branch($.not_found, ^(
+                #branch($.cf_null, ^(
+                    #drop(.not_found) ; #drop(.cf) ; #drop(.cf_null) ; {}
+                ), ^(
+                    cf_sh := #block(^(
+                        ptr := $#parent(#this).cf ;
+                        #break(#evaluate($.fm_ptr_sh))
+                    ), $.F) ;
+                    cf_fields := #deref(#field($.cf_sh, fields)) ;
+                    cnt := #block(^(
+                        map := $#parent(#this).cf_fields ;
+                        #break(#evaluate($.fm_count))
+                    ), $.F) ;
+                    i_slot := #allocate_val($.Z, $.T) ;
+                    scan_p := ^(
+                        nf2 := #block(^(
+                            a := $#parent(#this).found_slot ;
+                            b := $.F ;
+                            #break(#evaluate($.eq1))
+                        ), $.F) ;
+                        in_r := #block(^(
+                            a := $#parent(#this).i_slot ;
+                            b := $#parent(#this).cnt ;
+                            #break(#evaluate($.lt8))
+                        ), $.F) ;
+                        #branch($.nf2, ^(
+                            #branch($.in_r, ^(
+                                fe := #block(^(
+                                    map   := $#parent(#this).cf_fields ;
+                                    index := $#parent(#this).i_slot ;
+                                    #break(#evaluate($.fm_at))
+                                ), $.F) ;
+                                abs_a := #block(^(
+                                    a := #deref(#field(#field(#parent(#this), cf), addr)) ;
+                                    b := #deref(#field(#field(#field(#parent(#this), fe), ptr), addr)) ;
+                                    #break(#evaluate($.add8))
+                                ), $.F) ;
+                                hit := #block(^(
+                                    a := $#parent(#this).abs_a ;
+                                    b := #deref(#field(#field(#parent(#this), dst), addr)) ;
+                                    #break(#evaluate($.eq8))
+                                ), $.F) ;
+                                #branch($.hit, ^(
+                                    #write(.found_slot, $.T) ;
+                                    #write(.live_slot, #deref(#field(.fe, state)))
+                                ), ^( {} )) ;
+                                ni := #block(^(
+                                    a := $#parent(#this).i_slot ;
+                                    b := $.ONE ;
+                                    #break(#evaluate($.add8))
+                                ), $.F) ;
+                                #write(.i_slot, $.ni) ;
+                                #drop(.fe) ; #drop(.abs_a) ; #drop(.hit) ; #drop(.ni) ; #drop(.nf2) ; #drop(.in_r) ;
+                                #evaluate($.scan_p)
+                            ), ^(
+                                #drop(.nf2) ; #drop(.in_r) ; {}
+                            ))
+                        ), ^(
+                            #drop(.nf2) ; #drop(.in_r) ; {}
+                        ))
+                    ) ;
+                    #evaluate($.scan_p) ;
+                    #write(.cur_frame, #parent($.cf)) ;
+                    #drop(.cf_sh) ; #drop(.cf_fields) ; #drop(.cnt) ; #drop(.i_slot) ;
+                    #drop(.not_found) ; #drop(.cf) ; #drop(.cf_null) ;
+                    #evaluate($.walk_p)
+                ))
+            ), ^(
+                #drop(.not_found) ; #drop(.cf) ; #drop(.cf_null) ; {}
+            ))
+        ) ;
+        #evaluate($.walk_p) ;
+        is_live := #deref(.live_slot) ;
+        #branch($.is_live, ^(
+            _d := $.destroy $.dst ;
+            #drop(._d)
+        ), ^( {} )) ;
+        #write($.dst, #deref($.src)) ;
+        #drop($.src)
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 7. swap(p1, p2) -> Unit  (zero-RAII raw byte swap)                           !
+! ---------------------------------------------------------------------------- !
+swap_env := {
+    F := $.F
+} ;
+fn_swap := {
+    __env  := $#parent(#this).swap_env ;
+    __code := ^(
+        p1  := #deref(#field(#field(#this, __arg), \0)) ;
+        p2  := #deref(#field(#field(#this, __arg), \1)) ;
+        tmp := #allocate_val(#deref($.p1), $.F) ;
+        #write($.p1, #deref($.p2)) ;
+        #write($.p2, #deref(.tmp)) ;
+        #drop(.tmp)
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 8. clone(ptr) -> Pointer  (__clone hook, or bitwise copy if POD, else abort) !
+! ---------------------------------------------------------------------------- !
+clone_env := {
+    F         := $.F ;
+    Z         := $.Z ;
+    fm_ptr_sh := $#parent(#this).c_fm.ptr_shape ;
+    eq8       := $#parent(#this).p_eq8 ;
+    is_pod    := $#parent(#this).fn_is_pod
+} ;
+fn_clone := {
+    __env  := $#parent(#this).clone_env ;
+    __code := ^(
+        ptr := #deref(#field(#this, __arg)) ;
+        cp  := #field($.ptr, __clone) ;
+        no_c := #block(^(
+            a := #deref(#field(#field(#parent(#this), cp), shape_ptr)) ;
+            b := $.Z ;
+            #break(#evaluate($.eq8))
+        ), $.F) ;
+        #branch($.no_c, ^(
+            s_ptr := #block(^(
+                ptr := $#parent(#this).ptr ;
+                #break(#evaluate($.fm_ptr_sh))
+            ), $.F) ;
+            pod_b := $.is_pod $.s_ptr ;
+            #branch(#deref(#field(.pod_b, __raw)), ^(
+                #deref($.ptr)
+            ), ^(
+                #deref(#field(#this, mem_clone_unsupported_non_pod))
+            ))
+        ), ^(
+            c_fn  := #deref($.cp) ;
+            res_p := $.c_fn $.ptr ;
+            val   := #deref(.res_p) ;
+            #drop(.res_p) ;
+            #deref(.val)
+        ))
+    )
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 9. cleanup_unbound(frame_ptr) & 10. cleanup_all(frame_ptr)                   !
+!    Skips active child open frames via `#parent(entry_ptr).shape_ptr ~= 0`    !
+! ---------------------------------------------------------------------------- !
+cleanup_env := {
+    F         := $.F ;
+    T         := $.T ;
+    Z         := $.Z ;
+    ONE       := $.ONE ;
+    u32_zero  := $.u32_zero ;
+    fm_count  := $#parent(#this).c_fm.count ;
+    fm_at     := $#parent(#this).c_fm.at ;
+    fm_ptr_sh := $#parent(#this).c_fm.ptr_shape ;
+    add8      := $#parent(#this).p_add8 ;
+    sub8      := $#parent(#this).p_sub8 ;
+    lt8       := $#parent(#this).p_lt8 ;
+    eq8       := $#parent(#this).p_eq8 ;
+    eq4       := $#parent(#this).p_eq4 ;
+    eq1       := $#parent(#this).p_eq1 ;
+    drop      := $#parent(#this).fn_drop
+} ;
+
+fn_cleanup_unbound := {
+    __env  := $#parent(#this).cleanup_env ;
+    __code := ^(
+        fp := #deref(#field(#this, __arg)) ;
+        f_sh := #block(^(
+            ptr := $#parent(#this).fp ;
+            #break(#evaluate($.fm_ptr_sh))
+        ), $.F) ;
+        f_fields := #deref(#field($.f_sh, fields)) ;
+        cnt := #block(^(
+            map := $#parent(#this).f_fields ;
+            #break(#evaluate($.fm_count))
+        ), $.F) ;
+        idx_slot := #allocate_val($.cnt, $.T) ;
+        loop_p := ^(
+            has_more := #block(^(
+                a := $.Z ;
+                b := $#parent(#this).idx_slot ;
+                #break(#evaluate($.lt8))
+            ), $.F) ;
+            #branch($.has_more, ^(
+                cur_i := #block(^(
+                    a := $#parent(#this).idx_slot ;
+                    b := $.ONE ;
+                    #break(#evaluate($.sub8))
+                ), $.F) ;
+                #write(.idx_slot, $.cur_i) ;
+                ! Re-read live frame_shape on each step since #drop mutates entries !
+                f_sh2 := #block(^(
+                    ptr := $#parent(#this).fp ;
+                    #break(#evaluate($.fm_ptr_sh))
+                ), $.F) ;
+                f_f2 := #deref(#field($.f_sh2, fields)) ;
+                cnt2 := #block(^(
+                    map := $#parent(#this).f_f2 ;
+                    #break(#evaluate($.fm_count))
+                ), $.F) ;
+                in_b := #block(^(
+                    a := $#parent(#this).cur_i ;
+                    b := $#parent(#this).cnt2 ;
+                    #break(#evaluate($.lt8))
+                ), $.F) ;
+                #branch($.in_b, ^(
+                    fe := #block(^(
+                        map   := $#parent(#this).f_f2 ;
+                        index := $#parent(#this).cur_i ;
+                        #break(#evaluate($.fm_at))
+                    ), $.F) ;
+                    is_live := #block(^(
+                        a := #deref(#field(#field(#parent(#this), fe), state)) ;
+                        b := $.T ;
+                        #break(#evaluate($.eq1))
+                    ), $.F) ;
+                    is_anon := #block(^(
+                        a := #deref(#field(#field(#field(#parent(#this), fe), sym), __raw)) ;
+                        b := $.u32_zero ;
+                        #break(#evaluate($.eq4))
+                    ), $.F) ;
+                    #branch($.is_live, ^(
+                        #branch($.is_anon, ^(
+                            entry_ptr := #deref(#block(^(
+                                addr       := #block(^(
+                                    a := #deref(#field(#field(#parent(#parent(#this)), fp), addr)) ;
+                                    b := #deref(#field(#field(#field(#parent(#parent(#this)), fe), ptr), addr)) ;
+                                    #break(#evaluate($.add8))
+                                ), $.F) ;
+                                shape_ptr  := #deref(#field(#field(#field(#parent(#this), fe), ptr), shape_ptr)) ;
+                                mutability := #deref(#field(#field(#field(#parent(#this), fe), ptr), mutability)) ;
+                                __ptr_tag  := {}
+                            ), $.F)) ;
+                            par := #parent($.entry_ptr) ;
+                            not_child := #block(^(
+                                a := #deref(#field(#field(#parent(#this), par), shape_ptr)) ;
+                                b := $.Z ;
+                                #break(#evaluate($.eq8))
+                            ), $.F) ;
+                            #branch($.not_child, ^(
+                                _dr := $.drop $.entry_ptr ;
+                                #drop(._dr)
+                            ), ^( {} )) ;
+                            #drop(.entry_ptr) ; #drop(.par) ; #drop(.not_child)
+                        ), ^( {} ))
+                    ), ^( {} )) ;
+                    #drop(.fe) ; #drop(.is_live) ; #drop(.is_anon)
+                ), ^( {} )) ;
+                #drop(.cur_i) ; #drop(.f_sh2) ; #drop(.f_f2) ; #drop(.cnt2) ; #drop(.in_b) ; #drop(.has_more) ;
+                #evaluate($.loop_p)
+            ), ^(
+                #drop(.has_more) ;
+                #deref({})
+            ))
+        ) ;
+        #evaluate($.loop_p)
+    )
+} ;
+
+fn_cleanup_all := {
+    __env  := $#parent(#this).cleanup_env ;
+    __code := ^(
+        fp := #deref(#field(#this, __arg)) ;
+        f_sh := #block(^(
+            ptr := $#parent(#this).fp ;
+            #break(#evaluate($.fm_ptr_sh))
+        ), $.F) ;
+        f_fields := #deref(#field($.f_sh, fields)) ;
+        cnt := #block(^(
+            map := $#parent(#this).f_fields ;
+            #break(#evaluate($.fm_count))
+        ), $.F) ;
+        idx_slot := #allocate_val($.cnt, $.T) ;
+        loop_p := ^(
+            has_more := #block(^(
+                a := $.Z ;
+                b := $#parent(#this).idx_slot ;
+                #break(#evaluate($.lt8))
+            ), $.F) ;
+            #branch($.has_more, ^(
+                cur_i := #block(^(
+                    a := $#parent(#this).idx_slot ;
+                    b := $.ONE ;
+                    #break(#evaluate($.sub8))
+                ), $.F) ;
+                #write(.idx_slot, $.cur_i) ;
+                f_sh2 := #block(^(
+                    ptr := $#parent(#this).fp ;
+                    #break(#evaluate($.fm_ptr_sh))
+                ), $.F) ;
+                f_f2 := #deref(#field($.f_sh2, fields)) ;
+                cnt2 := #block(^(
+                    map := $#parent(#this).f_f2 ;
+                    #break(#evaluate($.fm_count))
+                ), $.F) ;
+                in_b := #block(^(
+                    a := $#parent(#this).cur_i ;
+                    b := $#parent(#this).cnt2 ;
+                    #break(#evaluate($.lt8))
+                ), $.F) ;
+                #branch($.in_b, ^(
+                    fe := #block(^(
+                        map   := $#parent(#this).f_f2 ;
+                        index := $#parent(#this).cur_i ;
+                        #break(#evaluate($.fm_at))
+                    ), $.F) ;
+                    is_live := #block(^(
+                        a := #deref(#field(#field(#parent(#this), fe), state)) ;
+                        b := $.T ;
+                        #break(#evaluate($.eq1))
+                    ), $.F) ;
+                    #branch($.is_live, ^(
+                        entry_ptr := #deref(#block(^(
+                            addr       := #block(^(
+                                a := #deref(#field(#field(#parent(#parent(#this)), fp), addr)) ;
+                                b := #deref(#field(#field(#field(#parent(#parent(#this)), fe), ptr), addr)) ;
+                                #break(#evaluate($.add8))
+                            ), $.F) ;
+                            shape_ptr  := #deref(#field(#field(#field(#parent(#this), fe), ptr), shape_ptr)) ;
+                            mutability := #deref(#field(#field(#field(#parent(#this), fe), ptr), mutability)) ;
+                            __ptr_tag  := {}
+                        ), $.F)) ;
+                        par := #parent($.entry_ptr) ;
+                        not_child := #block(^(
+                            a := #deref(#field(#field(#parent(#this), par), shape_ptr)) ;
+                            b := $.Z ;
+                            #break(#evaluate($.eq8))
+                        ), $.F) ;
+                        #branch($.not_child, ^(
+                            _dr := $.drop $.entry_ptr ;
+                            #drop(._dr)
+                        ), ^( {} )) ;
+                        #drop(.entry_ptr) ; #drop(.par) ; #drop(.not_child)
+                    ), ^( {} )) ;
+                    #drop(.fe) ; #drop(.is_live)
+                ), ^( {} )) ;
+                #drop(.cur_i) ; #drop(.f_sh2) ; #drop(.f_f2) ; #drop(.cnt2) ; #drop(.in_b) ; #drop(.has_more) ;
+                #evaluate($.loop_p)
+            ), ^(
+                #drop(.has_more) ;
+                #deref({})
+            ))
+        ) ;
+        #evaluate($.loop_p)
+    )
+} ;
+
+! Export 100% pure stageable `mem` module !
+#break($({
+    recast          := $#parent(#this).fn_recast ;
+    is_pod          := $#parent(#this).fn_is_pod ;
+    destroy         := $#parent(#this).fn_destroy ;
+    drop            := $#parent(#this).fn_drop ;
+    move            := $#parent(#this).fn_move ;
+    move_into       := $#parent(#this).fn_move_into ;
+    swap            := $#parent(#this).fn_swap ;
+    clone           := $#parent(#this).fn_clone ;
+    cleanup_unbound := $#parent(#this).fn_cleanup_unbound ;
+    cleanup_all     := $#parent(#this).fn_cleanup_all
+}))
