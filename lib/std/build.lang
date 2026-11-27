@@ -1,10 +1,10 @@
 ! ============================================================================ !
-! lib/std/build.lang — Layer 1 Standalone Executable Builder (with `libc`)     !
+! lib/std/build.lang — Layer 1 Standalone Executable Builder (`libc` & `mem`)  !
 !                                                                              !
 ! Usage: lang lib/std/start.lang lib/std/build.lang <program.lang> <out_exe>   !
-!   1. Stages `lib/std/libc.lang` at compile time -> pure stageable `libc`     !
+!   1. Stages `lib/std/libc.lang` & `lib/std/mem.lang` at compile time         !
 !   2. Reads & parses <program.lang> from `args.1`                             !
-!   3. Lifts `libc` into target Ast and emits executable to `args.2`           !
+!   3. Lifts `libc` and `mem` into target Ast and emits executable to `args.2` !
 ! ============================================================================ !
 
 ! 1. Stage lib/std/libc.lang at compile time -> pure stageable `libc` value !
@@ -14,20 +14,33 @@ ast  := #evaluate($.c_syn.parse) ; #drop(.src) ;
 libc_p := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
 libc := #block($.libc_p, $.F) ;
 
-! 2. Read & parse target program from CLI `args.1` !
+! 2. Stage lib/std/mem.lang at compile time -> pure stageable `mem` value !
+path := "lib/std/mem.lang" ;
+src  := #evaluate($.c_io.read_file) ; #drop(.path) ;
+ast  := #evaluate($.c_syn.parse) ; #drop(.src) ;
+mem_p := #evaluate($.c_ast.to_proto) ; #drop(.ast) ;
+mem := #block($.mem_p, $.F) ;
+
+! 3. Read & parse target program from CLI `args.1` !
 path := $.args.\1 ;
 src  := #evaluate($.c_io.read_file) ; #drop(.path) ;
 user_ast := #evaluate($.c_syn.parse) ; #drop(.src) ;
 
-! 3. Lift `libc` into target Ast: `#bind(libc, #allocate_val(<libc>, false)) ; <user_ast>` !
+! 4. Lift `libc` and `mem` into target Ast !
 a_false := #block(^( arena := $.arena ; val := $.F ; #break(#evaluate($.c_ast.value)) ), $.F) ;
 a_w_libc := #block(^( arena := $.arena ; sym := libc ; #break(#evaluate($.c_ast.word)) ), $.F) ;
 a_v_libc := #block(^( arena := $.arena ; val := $.libc ; #break(#evaluate($.c_ast.value)) ), $.F) ;
 a_alloc_libc := #block(^( arena := $.arena ; kind := allocate_val ; \0 := $.a_v_libc ; \1 := $.a_false ; #break(#evaluate($.c_ast.builtin)) ), $.F) ;
 a_bind_libc  := #block(^( arena := $.arena ; kind := bind ; \0 := $.a_w_libc ; \1 := $.a_alloc_libc ; #break(#evaluate($.c_ast.builtin)) ), $.F) ;
-ast := #block(^( arena := $.arena ; \0 := $.a_bind_libc ; \1 := $.user_ast ; #break(#evaluate($.c_ast.seq)) ), $.F) ;
 
-! 4. Emit standalone packed executable to `args.2` !
+a_w_mem := #block(^( arena := $.arena ; sym := mem ; #break(#evaluate($.c_ast.word)) ), $.F) ;
+a_v_mem := #block(^( arena := $.arena ; val := $.mem ; #break(#evaluate($.c_ast.value)) ), $.F) ;
+a_alloc_mem := #block(^( arena := $.arena ; kind := allocate_val ; \0 := $.a_v_mem ; \1 := $.a_false ; #break(#evaluate($.c_ast.builtin)) ), $.F) ;
+a_bind_mem  := #block(^( arena := $.arena ; kind := bind ; \0 := $.a_w_mem ; \1 := $.a_alloc_mem ; #break(#evaluate($.c_ast.builtin)) ), $.F) ;
+
+ast := #block(^( arena := $.arena ; \0 := $.a_bind_libc ; \1 := $.a_bind_mem ; \2 := $.user_ast ; #break(#evaluate($.c_ast.seq)) ), $.F) ;
+
+! 5. Emit standalone packed executable to `args.2` !
 out_path := $.args.\2 ;
 #evaluate($.caps.backends.interpreter.emit_executable) ;
 #drop(.ast) ; #drop(.out_path) ;

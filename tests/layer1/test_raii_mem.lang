@@ -1,0 +1,201 @@
+! ============================================================================ !
+! tests/layer1/test_raii_mem.lang — Stdlib RAII (`lib/std/mem.lang`) E2E Tests !
+! ============================================================================ !
+
+assert_true := ^(
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
+) ;
+
+F_raw := false ; F := $.F_raw.__raw ;
+T_raw := true  ; T := $.T_raw.__raw ;
+
+! Mutable global-like destruction log accumulator (log = log * 10 + id) !
+log := #allocate_val(0, $.T) ;
+
+! Helper factory: creates a non-POD tracked resource capturing `log_p` in __destroy !
+make_res := p -> {
+    id        := $.p.\0 ;
+    __destroy := {
+        __env  := { log_p := $.p.\1 } ;
+        __code := ^(
+            old := #deref($.log_p) ;
+            rid := #deref(#field($.__arg, id)) ;
+            #write($.log_p, $.old * 10 + $.rid) ;
+            {}
+        )
+    }
+} ;
+
+! ---------------------------------------------------------------------------- !
+! 1. is_pod: primitives, plain structs, offset-0 __destroy, nested non-POD     !
+! ---------------------------------------------------------------------------- !
+cond := $($.mem.is_pod (#shape(42))) ; #evaluate($.assert_true) ; #drop(.cond) ;
+plain := { x := 1 ; y := 2 } ;
+cond := $($.mem.is_pod (#shape($.plain))) ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! __destroy at offset 0 (verifies shape_ptr ~= 0 check, not addr ~= 0) !
+d_at_zero := { __destroy := self -> {} ; tag := 1 } ;
+cond := ~($($.mem.is_pod (#shape($.d_at_zero)))) ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Nested struct containing a non-POD child !
+r_tmp := $.make_res (1, .log) ;
+nested_check := { a := 10 ; inner := $.mem.move (.r_tmp) } ;
+cond := ~($($.mem.is_pod (#shape($.nested_check)))) ; #evaluate($.assert_true) ; #drop(.cond) ;
+$.mem.drop (.nested_check) ;
+cond := $.log == 1 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! ---------------------------------------------------------------------------- !
+! 2. destroy & drop: outer __destroy first, then child fields in reverse order !
+! ---------------------------------------------------------------------------- !
+.log = 0 ;
+ra := $.make_res (1, .log) ;
+rb := $.make_res (2, .log) ;
+outer := {
+    a := $.mem.move (.ra) ;
+    b := $.mem.move (.rb) ;
+    __destroy := {
+        __env  := { log_p := .log } ;
+        __code := ^(
+            old := #deref($.log_p) ;
+            #write($.log_p, $.old * 10 + 9) ;
+            {}
+        )
+    }
+} ;
+$.mem.drop (.outer) ;
+! Expected order: outer(9) -> b(2) -> a(1) => 921 !
+cond := $.log == 921 ; #evaluate($.assert_true) ; #drop(.cond) ;
+! outer binding was removed by drop !
+cond := (#field(#this, outer)).shape_ptr == (#field(#this, __nonexistent__)).shape_ptr ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! ---------------------------------------------------------------------------- !
+! 3. Real OS resource via libc.malloc / libc.free OwnedBuf                     !
+! ---------------------------------------------------------------------------- !
+buf_raw := #block(^(
+    sz64 := 64 ; \0 := $.sz64.__raw ;
+    #break(#evaluate($#parent(#this).libc.malloc))
+), $.F) ;
+owned_buf := {
+    ptr       := $.buf_raw ;
+    __destroy := {
+        __env  := { c_free := $.libc.free ; F := $.F } ;
+        __code := ^(
+            p_raw := #deref(#field($.__arg, ptr)) ;
+            #block(^(
+                \0 := $#parent(#this).p_raw ;
+                #evaluate($.c_free)
+            ), $.F) ;
+            {}
+        )
+    }
+} ;
+cond := ~($($.mem.is_pod (#shape($.owned_buf)))) ; #evaluate($.assert_true) ; #drop(.cond) ;
+$.mem.drop (.owned_buf) ;
+
+! ---------------------------------------------------------------------------- !
+! 4. Destructive move (zero-RAII) + single drop after move                     !
+! ---------------------------------------------------------------------------- !
+.log = 0 ;
+src_m := $.make_res (7, .log) ;
+dst_m := $.mem.move (.src_m) ;
+cond := $.log == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := (#field(#this, src_m)).shape_ptr == (#field(#this, __nonexistent__)).shape_ptr ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.dst_m.id == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+$.mem.drop (.dst_m) ;
+cond := $.log == 7 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! ---------------------------------------------------------------------------- !
+! 5. move_into: live mutable field in closed object + uninitialized slot       !
+! ---------------------------------------------------------------------------- !
+.log = 0 ;
+r_old := $.make_res (3, .log) ;
+r_new := $.make_res (4, .log) ;
+holder := #block(^(
+    f := #allocate_val(#deref(#parent(#this).r_old), $#parent(#this).T)
+), $.T) ;
+#drop(.r_old) ;
+! Move r_new into closed object's mutable field .holder.f -> destroys 3, writes 4, drops r_new !
+$.mem.move_into (.holder.f, .r_new) ;
+cond := $.log == 3 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.holder.f.id == 4 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := (#field(#this, r_new)).shape_ptr == (#field(#this, __nonexistent__)).shape_ptr ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! Uninitialized slot -> move_into must NOT call __destroy on uninit garbage !
+res_sh := #shape($.holder.f) ;
+uninit_s := #allocate($.res_sh, $.T) ;
+r_init := $.make_res (5, .log) ;
+$.mem.move_into (.uninit_s, .r_init) ;
+cond := $.log == 3 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.uninit_s.id == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+$.mem.drop (.uninit_s) ;
+$.mem.drop (.holder) ;
+cond := $.log == 354 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! ---------------------------------------------------------------------------- !
+! 6. swap (zero-RAII raw byte swap)                                            !
+! ---------------------------------------------------------------------------- !
+.log = 0 ;
+s_a_init := $.make_res (1, .log) ;
+s_b_init := $.make_res (2, .log) ;
+s_a := #allocate_val(#deref(.s_a_init), $.T) ; #drop(.s_a_init) ;
+s_b := #allocate_val(#deref(.s_b_init), $.T) ; #drop(.s_b_init) ;
+$.mem.swap (.s_a, .s_b) ;
+cond := $.log == 0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.s_a.id == 2 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.s_b.id == 1 ; #evaluate($.assert_true) ; #drop(.cond) ;
+$.mem.drop (.s_a) ;
+$.mem.drop (.s_b) ;
+cond := $.log == 21 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! ---------------------------------------------------------------------------- !
+! 7. clone: POD bitwise copy + custom __clone hook                             !
+! ---------------------------------------------------------------------------- !
+pod_v := 99 ;
+pod_c := $.mem.clone (.pod_v) ;
+cond := $.pod_c == 99 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+.log = 0 ;
+make_cloneable := p -> {
+    id := $.p.\0 ;
+    __destroy := {
+        __env  := { log_p := $.p.\1 } ;
+        __code := ^(
+            old := #deref($.log_p) ;
+            rid := #deref(#field($.__arg, id)) ;
+            #write($.log_p, $.old * 10 + $.rid) ;
+            {}
+        )
+    } ;
+    __clone := {
+        __env  := { log_p := $.p.\1 ; mk := { __env := $.__fn_env ; __code := $.__code } } ;
+        __code := ^(
+            rid := #deref(#field($.__arg, id)) ;
+            $.mk ($.rid + 1, $.log_p)
+        )
+    }
+} ;
+c1 := $.make_cloneable (5, .log) ;
+c2 := $.mem.clone (.c1) ;
+cond := $.c1.id == 5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.c2.id == 6 ; #evaluate($.assert_true) ; #drop(.cond) ;
+$.mem.drop (.c1) ;
+$.mem.drop (.c2) ;
+cond := $.log == 56 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! ---------------------------------------------------------------------------- !
+! 8. cleanup_unbound & cleanup_all (auto-skips active child frames via #parent)!
+! ---------------------------------------------------------------------------- !
+.log = 0 ;
+#block(^(
+    named := $#parent(#this).make_res (1, #parent(#this).log) ;
+    ! Anonymous unbound temp slot !
+    $#parent(#this).make_res (8, #parent(#this).log) ;
+    ! cleanup_unbound destroys ONLY the anonymous temp (8), leaves `named` (1) live !
+    $#parent(#this).mem.cleanup_unbound (#this) ;
+    ! Now cleanup_all destroys remaining `named` (1) !
+    $#parent(#this).mem.cleanup_all (#this) ;
+    #break({})
+), $.F) ;
+cond := $.log == 81 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+raii_mem_tests_passed
