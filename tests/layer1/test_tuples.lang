@@ -1,0 +1,43 @@
+! ============================================================================ !
+! tests/layer1/test_tuples.lang — Pure Transparent Tuples (`a, b, c`)          !
+! ============================================================================ !
+
+assert_true := ^(
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
+) ;
+
+! 1. Positional fields \0, \1, \2 !
+t3 := 10, 20, 12 ;
+cond := $.t3.\0 == 10 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.t3.\1 == 20 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.t3.\2 == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.t3.\0 + $.t3.\1 + $.t3.\2 == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. Exact Shape isomorphism with positional struct `{ \0 := ... ; \1 := ... }` !
+s_tup := #shape($((1, 2))) ;
+s_pos := #shape($({ \0 := 1 ; \1 := 2 })) ;
+cond := $.s_tup == $.s_pos ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 3. Nested tuples & arithmetic elements !
+tn := (1 + 2, 3 * 4), (5, 6 + 7) ;
+cond := $.tn.\0.\0 == 3  ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.tn.\0.\1 == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.tn.\1.\0 == 5  ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.tn.\1.\1 == 13 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 4. Multi-arg call via single-arg juxtaposition + tuple `(a, b)` !
+add_pair := p -> $.p.\0 + $.p.\1 ;
+cond := $($.add_pair(15, 27)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $($.add_pair (15, 27)) == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 5. Lambda returning a bare tuple without extra parens !
+dup_pair := x -> $.x, $.x * 2 ;
+dp := $.dup_pair 14 ;
+cond := $.dp.\0 == 14 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.dp.\1 == 28 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 6. Tuple inside Core builtin via grouping `(a, b)` !
+bf := false ; t_box := #allocate_val($((7, 8)), $.bf.__raw) ;
+cond := $.t_box.\0 + $.t_box.\1 == 15 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+tuples_tests_passed

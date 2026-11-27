@@ -24,7 +24,7 @@ lib/std/            # 纯 .lang 自举标准库
   run.lang          # 目标程序隔离运行器（注入纯 stageable libc）
   build.lang        # 独立打包可执行文件构建器
   libc.lang         # 声明式标准 C FFI 模块
-tests/              # 端到端与 Layer 1 测试套件
+tests/              # 端到端与按特性拆分的 Layer 1 测试套件（tests/layer1/）
 std/design/         # 核心规范（CORE_SPEC.md 为唯一事实来源，archive/ 存放历史稿）
 editors/vscode/     # VS Code 语法高亮插件
 ```
@@ -38,11 +38,11 @@ editors/vscode/     # VS Code 语法高亮插件
 cmake -S compiler -B build
 cmake --build build -j
 
-# 2. 运行全量 C++ 单测与 Layer 1 端到端测试
+# 2. 运行全量 C++ 单测与按特性拆分的 Layer 1 端到端测试
 ctest --test-dir build --output-on-failure
 
 # 3. 使用 Layer 1 运行目标程序
-./build/lang lib/std/start.lang lib/std/run.lang tests/test_layer1.lang
+./build/lang lib/std/start.lang lib/std/run.lang tests/layer1/test_functions.lang
 
 # 4. 打包独立可执行文件
 ./build/lang lib/std/start.lang lib/std/build.lang tests/test_pack_exe.lang ./build/pack_exe

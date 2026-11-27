@@ -1,0 +1,30 @@
+! ============================================================================ !
+! tests/layer1/test_literals.lang — Literals: i64, Boolean, RawBytes strings   !
+! ============================================================================ !
+
+_0 := 0 ; R0 := $._0.__raw ;
+_5 := 5 ; R5 := $._5.__raw ;
+_12 := 12 ; R12 := $._12.__raw ;
+
+assert_true := ^(
+    ok if $.cond else #deref(#field(#this, __assertion_failed__))
+) ;
+
+! 1. i64, Boolean (ZST-marker), pure RawBytes string !
+a := 42 ;
+s := "hello_layer1" ;
+cond := $.a == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+s_sh := #shape($.s) ; cond := $(($.s_sh).size) == $.R12 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := true == true ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := false == false ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 2. Empty BytesLit and Escaped support (" and \) !
+eb := "" ;
+eb_sh := #shape($.eb) ;
+cond := $(($.eb_sh).size) == $.R0 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+esc_b := "a\"b\\c" ;
+esc_sh := #shape($.esc_b) ;
+cond := $(($.esc_sh).size) == $.R5 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+literals_tests_passed

@@ -3,9 +3,9 @@
 !   1. Bootstraps Layer 1 (boot0 -> boot1 -> layer1)                           !
 !   2. Stages lib/std/libc.lang at compile time (`to_proto` + `#block`)        !
 !   3. Runs compile-time test `tests/test_ast_build.lang` (`to_proto`+`#block`)!
-!   4. Runs isolated target `tests/test_layer1.lang` (`backends.interpreter`)  !
-!   5. Lifts `libc` + cast intrinsics into `tests/test_ffi.lang` AST and runs  !
+!   4. Lifts `libc` + cast intrinsics into `tests/test_ffi.lang` AST and runs  !
 !      it in a brand-new RuntimeContext + Evaluator (`backends.interpreter`)   !
+!   (Per-feature Layer 1 target tests live under `tests/layer1/` in ctest.)    !
 ! ============================================================================ !
 
 ! 1. Load and run lib/std/boot/boot0.lang in root #this -> binds fe (fe_layer1) & arena !
@@ -69,18 +69,7 @@
 #drop(#field(#this, ast)) ;
 #bind(res_ast_build, #block(#deref(#field(#this, ast_build_p)), #deref(#field(#this, F)))) ;
 
-! 4. Isolated target test: tests/test_layer1.lang (direct `backends.interpreter.run`, zero `to_proto`) !
-#bind(sym, #allocate_val(tests/test_layer1.lang, #deref(#field(#this, F)))) ;
-#bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, sym)) ;
-#bind(src, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), io), read_file))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, path)) ;
-#bind(ast, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), parse))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, src)) ;
-#bind(res_layer1, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
-#drop(#field(#this, ast)) ;
-
-! 5. Isolated target FFI test: lift `libc` + cast intrinsics into `tests/test_ffi.lang` AST -> `backends.interpreter.run` !
+! 4. Isolated target FFI test: lift `libc` + cast intrinsics into `tests/test_ffi.lang` AST -> `backends.interpreter.run` !
 #bind(sym, #allocate_val(tests/test_ffi.lang, #deref(#field(#this, F)))) ;
 #bind(path, #allocate_val(#evaluate(#deref(#field(#field(#field(#this, capabilities), symbols), to_bytes))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, sym)) ;
@@ -173,7 +162,7 @@
 #bind(res_ffi, #allocate_val(#evaluate(#deref(#field(#field(#field(#field(#this, capabilities), backends), interpreter), run))), #deref(#field(#this, F)))) ;
 #drop(#field(#this, ast)) ;
 
-! 6. Release compiler arena & frontend (target FFI libraries auto-closed on target RuntimeContext teardown) !
+! 5. Release compiler arena & frontend (target FFI libraries auto-closed on target RuntimeContext teardown) !
 #evaluate(#deref(#field(#field(#field(#this, capabilities), ast), destroy_arena))) ;
 #evaluate(#deref(#field(#field(#field(#this, capabilities), syntax), destroy_frontend))) ;
 

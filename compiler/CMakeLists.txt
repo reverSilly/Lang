@@ -159,8 +159,20 @@ add_test(
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
-add_test(
-    NAME test_run_layer1
-    COMMAND lang ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/start.lang ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/run.lang ${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_layer1.lang
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+foreach(l1_test IN ITEMS
+    test_literals
+    test_ops
+    test_control_flow
+    test_blocks_and_bindings
+    test_functions
+    test_tuples
 )
+    add_test(
+        NAME layer1_${l1_test}
+        COMMAND lang
+            ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/start.lang
+            ${CMAKE_CURRENT_SOURCE_DIR}/../lib/std/run.lang
+            ${CMAKE_CURRENT_SOURCE_DIR}/../tests/layer1/${l1_test}.lang
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+    )
+endforeach()
