@@ -429,8 +429,21 @@ raw_h := ^(
     rhs := $#block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).ONE ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.false) ;
 
     n_F    := $#block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.false) ;
-    w_key  := $#block(^( arena := $#parent(#this).arena ; sym := __bind_k ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.false) ;
-    w_tmp  := $#block(^( arena := $#parent(#this).arena ; sym := __bind_v ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.false) ;
+    bs     := #evaluate($.caps.syntax.cst_view_bytes) ;
+    k_sym  := $#block(^(
+        sym := __bk_ ; lhs := #evaluate($#parent(#this).caps.symbols.to_bytes) ;
+        rhs := $#parent(#this).bs ;
+        bytes := #evaluate($#parent(#this).caps.intrinsics.bytes_concat) ;
+        #break(#evaluate($#parent(#this).caps.symbols.intern_bytes))
+    ), $.caps.constants.false) ;
+    v_sym  := $#block(^(
+        sym := __bv_ ; lhs := #evaluate($#parent(#this).caps.symbols.to_bytes) ;
+        rhs := $#parent(#this).bs ;
+        bytes := #evaluate($#parent(#this).caps.intrinsics.bytes_concat) ;
+        #break(#evaluate($#parent(#this).caps.symbols.intern_bytes))
+    ), $.caps.constants.false) ;
+    w_key  := $#block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).k_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.false) ;
+    w_tmp  := $#block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).v_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.false) ;
     a_this := $#block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.false) ;
     a_par  := $#block(^( arena := $#parent(#this).arena ; kind := parent ; 0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.false) ;
     p_key  := $#block(^( arena := $#parent(#this).arena ; kind := field ; 0 := $#parent(#this).a_this ; 1 := $#parent(#this).w_key ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.false) ;
@@ -477,7 +490,7 @@ raw_h := ^(
     v_ptr_p  := $#block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_br ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.false) ;
 
     outer_br := $#block(^( arena := $#parent(#this).arena ; kind := branch ; 0 := $#parent(#this).cond_blk ; 1 := $#parent(#this).v_ptr_p ; 2 := $#parent(#this).v_fb_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.false) ;
-    0 := $.stmt0 ; 1 := $.stmt1 ; 2 := $.outer_br ;
+    0 := $.stmt1 ; 1 := $.stmt0 ; 2 := $.outer_br ;
     #evaluate($.caps.ast.seq)
 ) ;
 h_smart_bind := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;

@@ -1,7 +1,7 @@
 ! ============================================================================ !
 ! tests/layer1/test_blocks_and_bindings.lang                                   !
 ! Smart `:=`, mutability, closed blocks `{}`, `#parent`, dynamic symbols,      !
-! and `#block(p, is_mut)` unbound Pointer & direct field access.               !
+! nested same-frame `:=` reentrancy, and `#block(p, is_mut)`.                  !
 ! ============================================================================ !
 
 _T := true ; T_raw := $._T.__raw ;
@@ -54,7 +54,19 @@ cond := $.x == 30 ; #evaluate($.assert_true) ; #drop(.cond) ;
 \0 := 77 ;
 cond := $.\0 == 77 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
-! 5. `#block(p, is_mut)` -> parent-frame unbound Pointer & direct field access !
+! 5. Same-frame nested `:=` reentrancy (Issue #6) !
+nest_a := (nest_b := 1 ; $.nest_b + 41) ;
+cond := $.nest_a == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+cond := $.nest_b == 1  ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+(nest_k := nest_dyn ; $.nest_k) := (nest_m := 10 ; $.nest_m * 3) ;
+cond := $.nest_dyn == 30 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+inline_p := ^( in_x := 20 ; $.in_x + 22 ) ;
+nest_ev := #evaluate($.inline_p) ;
+cond := $.nest_ev == 42 ; #evaluate($.assert_true) ; #drop(.cond) ;
+
+! 6. `#block(p, is_mut)` -> parent-frame unbound Pointer & direct field access !
 cond := $({ px := 10 ; py := 32 }.px) == 10 ; #evaluate($.assert_true) ; #drop(.cond) ;
 cond := $((10, 20, 12).\2) == 12 ; #evaluate($.assert_true) ; #drop(.cond) ;
 
