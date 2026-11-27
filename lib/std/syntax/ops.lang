@@ -1,7 +1,7 @@
 ! ============================================================================ !
-! lib/std/ops.lang — Type-Dispatched Layer 1 Operators (depends on types.lang) !
+! lib/std/syntax/ops.lang — Type-Dispatched Layer 1 Operators                  !
 !                                                                              !
-! Written in Layer 1 (with types + literals active).                           !
+! Written in Layer 1 (with core_syntax + types + literals active).             !
 ! Installs operator precedence ladder into `OpExpr`:                           !
 !   P7: UnaryExpr = ("+" / "-" / "~") _ UnaryExpr / Prefix                     !
 !   P8: MulExpr   = UnaryExpr (_ "*" _ UnaryExpr)*                             !
@@ -9,13 +9,9 @@
 !   P11/12: CmpExpr = AddExpr (_ ("==" / "<") _ AddExpr)*                      !
 !   OpExpr = CmpExpr                                                           !
 !                                                                              !
-! All runtime dispatch uses ZST-tagged Shapes from `types.lang`:               !
-!   - `~` on Boolean -> logical NOT (Boolean); on i8..i64 / u8..u64 -> bit_not !
-!   - `+` / `-` unary on i64 -> identity / 0 - x (i64)                         !
-!   - `*` / `+` / `-` binary on i64 -> i64                                     !
-!   - `<` on i64 (or raw8) -> Boolean                                          !
-!   - `==` on matching Shapes (i64, u64, u8, i8, Boolean, Symbol, Shape,       !
-!     raw8, raw1) -> Boolean                                                   !
+! Prototype-first: runtime dispatch, operator frame handoff (`p_exec_unop` /   !
+! `p_exec_binop`), and transparent Boolean `if`/`while` (`p_if_bool`) are      !
+! written as stageable Prototypes; AST builders only emit thin glue.           !
 ! ============================================================================ !
 
 ! --- Build pure stageable op_iops table (zero caps / zero NativeProto) --- !
@@ -25,23 +21,23 @@ p_not_4 := #block(^( width := $#parent(#this).W4 ; src := x ; #break(#evaluate($
 p_not_8 := #block(^( width := $#parent(#this).W8 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.bit_not)) ), $.F) ;
 
 op_iops := {
-    add_i64      := $#parent(#this).p_add_i64 ;
-    sub_i64      := $#parent(#this).p_sub_i64 ;
-    mul_i64      := $#parent(#this).p_mul_i64 ;
-    lt_i64       := $#parent(#this).p_lt_i64 ;
-    eq_i64       := $#parent(#this).p_eq_i64 ;
-    eq_sym       := $#parent(#this).p_eq_sym ;
-    eq_raw1      := $#parent(#this).p_eq_raw1 ;
-    eq_shape     := $#parent(#this).p_eq_shape ;
-    not_1        := $#parent(#this).p_not_1 ;
-    not_2        := $#parent(#this).p_not_2 ;
-    not_4        := $#parent(#this).p_not_4 ;
-    not_8        := $#parent(#this).p_not_8 ;
-    zero_raw1    := $#parent(#this).F ;
-    zero_raw8    := $#parent(#this).Z ;
-    symbol_shape := $#parent(#this).c_con.symbol_shape ;
+    add_i64       := $#parent(#this).p_add_i64 ;
+    sub_i64       := $#parent(#this).p_sub_i64 ;
+    mul_i64       := $#parent(#this).p_mul_i64 ;
+    lt_i64        := $#parent(#this).p_lt_i64 ;
+    eq_i64        := $#parent(#this).p_eq_i64 ;
+    eq_sym        := $#parent(#this).p_eq_sym ;
+    eq_raw1       := $#parent(#this).p_eq_raw1 ;
+    eq_shape      := $#parent(#this).p_eq_shape ;
+    not_1         := $#parent(#this).p_not_1 ;
+    not_2         := $#parent(#this).p_not_2 ;
+    not_4         := $#parent(#this).p_not_4 ;
+    not_8         := $#parent(#this).p_not_8 ;
+    zero_raw1     := $#parent(#this).F ;
+    zero_raw8     := $#parent(#this).Z ;
+    symbol_shape  := $#parent(#this).c_con.symbol_shape ;
     pointer_shape := $#parent(#this).c_con.pointer_shape ;
-    types        := $#parent(#this).types
+    types         := $#parent(#this).types
 } ;
 
 ! Helper: wrap runtime op prototype with `op_iops` bound as `iops` !
@@ -247,7 +243,38 @@ op_raw := ^(
 ) ;
 op_eq := #evaluate($.wrap_std_op) ; #drop(.op_raw) ;
 
-! --- AST Builders for Unary & Binary Operators --- !
+! --- Prototype-first Runtime Frame Runners (100% stageable) --- !
+p_exec_unop := ^(
+    __p := #field(#parent(#this), $.__cfg.s) ;
+    x   := #deref($.__p) ;
+    #drop($.__p) ;
+    #break(#evaluate($.__cfg.op))
+) ;
+
+p_exec_binop := ^(
+    __pa := #field(#parent(#this), $.__cfg.sa) ;
+    __pb := #field(#parent(#this), __op_b) ;
+    a    := #deref($.__pa) ;
+    b    := #deref($.__pb) ;
+    #drop($.__pa) ;
+    #drop($.__pb) ;
+    #break(#evaluate($.__cfg.op))
+) ;
+
+! Zero-#block transparent Boolean if/else runner: cleans up __if_* before running branch !
+p_if_bool := ^(
+    #evaluate(
+        ${
+            __p := $#parent(#this).__if_t if $#parent(#this).__if_c.__raw else $#parent(#this).__if_e ;
+            #drop(#parent(#this).__if_c) ;
+            #drop(#parent(#this).__if_t) ;
+            #drop(#parent(#this).__if_e) ;
+            #break($.__p)
+        }
+    )
+) ;
+
+! --- Thin AST Glue for Unary & Binary Operators --- !
 build_unop_ast := ^(
     $#block(^(
         caps   := $#parent(#this).caps ;
@@ -255,26 +282,24 @@ build_unop_ast := ^(
         u_sym  := $#parent(#this).u_sym ;
         u_arg  := $#parent(#this).u_arg ;
         u_op   := $#parent(#this).u_op ;
+        p_exec := $#parent(#this).env.exec_unop ;
         F      := $.caps.constants.\false ;
+
         n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
-        a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        a_par  := #block(^( arena := $#parent(#this).arena ; kind := parent ; \0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         w_ua   := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).u_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-        w_x    := #block(^( arena := $#parent(#this).arena ; sym := x ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
+        w_cfg  := #block(^( arena := $#parent(#this).arena ; sym := __cfg ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
 
         al_arg := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).u_arg ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         s_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_ua ; \1 := $#parent(#this).al_arg ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-        p_pua  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_ua ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        d_pua  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pua ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        dr_pua := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pua ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        al_x   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pua ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        b_x    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_x ; \1 := $#parent(#this).al_x ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        cfg_v  := { s := $#parent(#this).u_sym ; op := $#parent(#this).u_op } ;
+        n_cfg  := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).cfg_v ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+        al_cfg := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).n_cfg ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        b_cfg  := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_cfg ; \1 := $#parent(#this).al_cfg ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        v_ex   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_exec ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+        ev_ex  := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_ex ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-        v_op   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).u_op ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
-        ev_op  := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        brk_op := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).ev_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        b_seq  := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_x ; \1 := $#parent(#this).dr_pua ; \2 := $#parent(#this).brk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
+        b_seq  := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_cfg ; \1 := $#parent(#this).ev_ex ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
         v_pr   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).b_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
         blk_p  := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_pr ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         blk_op := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).blk_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
@@ -290,69 +315,47 @@ build_binop_ast := ^(
         b_lhs   := $#parent(#this).b_lhs ;
         b_rhs   := $#parent(#this).b_rhs ;
         b_op    := $#parent(#this).b_op ;
+        p_exec  := $#parent(#this).env.exec_binop ;
         F       := $.caps.constants.\false ;
+
         n_F     := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
-        a_this  := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        a_par   := #block(^( arena := $#parent(#this).arena ; kind := parent ; \0 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         w_oa    := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).b_sym_a ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
         w_ob    := #block(^( arena := $#parent(#this).arena ; sym := __op_b ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-        w_a     := #block(^( arena := $#parent(#this).arena ; sym := a ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-        w_b     := #block(^( arena := $#parent(#this).arena ; sym := b ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
+        w_cfg   := #block(^( arena := $#parent(#this).arena ; sym := __cfg ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
 
         al_lhs  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).b_lhs ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         s_bind1 := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_oa ; \1 := $#parent(#this).al_lhs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         al_rhs  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).b_rhs ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         s_bind2 := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_ob ; \1 := $#parent(#this).al_rhs ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-        p_pa    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_oa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        d_pa    := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        al_a    := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pa ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        b_a     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_a ; \1 := $#parent(#this).al_a ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        dr_pa   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pa ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        cfg_v   := { sa := $#parent(#this).b_sym_a ; op := $#parent(#this).b_op } ;
+        n_cfg   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).cfg_v ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+        al_cfg  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).n_cfg ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        b_cfg   := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_cfg ; \1 := $#parent(#this).al_cfg ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        v_ex    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_exec ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+        ev_ex   := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_ex ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-        p_pb    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_ob ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        d_pb    := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_pb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        al_b    := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).d_pb ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        b_b     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_b ; \1 := $#parent(#this).al_b ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        dr_pb   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_pb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-
-        v_op    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).b_op ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
-        ev_op   := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-        brk_op  := #block(^( arena := $#parent(#this).arena ; kind := break ; \0 := $#parent(#this).ev_op ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-
-        inner_s := #block(^(
-            arena := $#parent(#this).arena ;
-            \0 := $#parent(#this).b_a ;
-            \1 := $#parent(#this).b_b ;
-            \2 := $#parent(#this).dr_pa ;
-            \3 := $#parent(#this).dr_pb ;
-            \4 := $#parent(#this).brk_op ;
-            #break(#evaluate($#parent(#this).caps.ast.seq))
-        ), $.caps.constants.\false) ;
+        inner_s := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).b_cfg ; \1 := $#parent(#this).ev_ex ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
         v_ip    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).inner_s ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
         blk_p   := #block(^( arena := $#parent(#this).arena ; kind := block ; \0 := $#parent(#this).v_ip ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
         blk_op  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).blk_p ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-        #break($#block(^(
-            arena := $#parent(#this).arena ;
-            \0 := $#parent(#this).s_bind1 ;
-            \1 := $#parent(#this).s_bind2 ;
-            \2 := $#parent(#this).blk_op ;
-            #break(#evaluate($#parent(#this).caps.ast.seq))
-        ), $.caps.constants.\false))
+        #break($#block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_bind1 ; \1 := $#parent(#this).s_bind2 ; \2 := $#parent(#this).blk_op ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false))
     ), $.caps.constants.\false)
 ) ;
 
 ops_env2 := {
-    pos    := $#parent(#this).op_pos ;
-    neg    := $#parent(#this).op_neg ;
-    not    := $#parent(#this).op_not ;
-    add    := $#parent(#this).op_add ;
-    sub    := $#parent(#this).op_sub ;
-    mul    := $#parent(#this).op_mul ;
-    lt     := $#parent(#this).op_lt ;
-    eq     := $#parent(#this).op_eq ;
-    iops   := $#parent(#this).iops ;
+    pos         := $#parent(#this).op_pos ;
+    neg         := $#parent(#this).op_neg ;
+    not         := $#parent(#this).op_not ;
+    add         := $#parent(#this).op_add ;
+    sub         := $#parent(#this).op_sub ;
+    mul         := $#parent(#this).op_mul ;
+    lt          := $#parent(#this).op_lt ;
+    eq          := $#parent(#this).op_eq ;
+    iops        := $#parent(#this).iops ;
+    exec_unop   := $#parent(#this).p_exec_unop ;
+    exec_binop  := $#parent(#this).p_exec_binop ;
     build_unop  := $#parent(#this).build_unop_ast ;
     build_binop := $#parent(#this).build_binop_ast
 } ;
@@ -492,74 +495,79 @@ e_cmp := #block(^( fe := $#parent(#this).fe ; \0 := $#parent(#this).ref_add ; \1
 #block(^( fe := $#parent(#this).fe ; name := CmpExpr ; expr := $#parent(#this).e_cmp ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_cmp ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 ref_cmp := #block(^( fe := $#parent(#this).fe ; name := CmpExpr ; #break(#evaluate($#parent(#this).c_syn.ref)) ), $.F) ;
 
-! Wire OpExpr = CmpExpr (ControlExpr / BindInfix / AssignInfix automatically pick it upnot_) !
+! Wire OpExpr = CmpExpr !
 #block(^( fe := $#parent(#this).fe ; name := OpExpr ; expr := $#parent(#this).ref_cmp ; hidden := $#parent(#this).F ; handler := $#parent(#this).Z ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 
-! Upgrade IfExpr & WhileExpr for user Layer 1: read Boolean.__raw directly with ZERO #block !
-raw_h := ^(
-    F := $.caps.constants.\false ;
-    n_F := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
-    e_then := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
-    e_cond := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_one  ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
-    e_else := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).env.two                 ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
+! ============================================================================ !
+! Transparent Boolean IfExpr & WhileExpr (thin glue over `p_if_bool`)          !
+! ============================================================================ !
+build_if_bool_ast := ^(
+    $#block(^(
+        caps   := $#parent(#this).caps ;
+        arena  := $#parent(#this).arena ;
+        e_cond := $#parent(#this).if_cond ;
+        e_then := $#parent(#this).if_then ;
+        e_else := $#parent(#this).if_else ;
+        p_if   := $#parent(#this).env.p_if ;
+        F      := $.caps.constants.\false ;
 
-    c_sym  := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) ), $.caps.constants.\false) ;
-    w_c    := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).c_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-    w_raw  := #block(^( arena := $#parent(#this).arena ; sym := __raw ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-    a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+        w_c    := #block(^( arena := $#parent(#this).arena ; sym := __if_c ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
+        w_t    := #block(^( arena := $#parent(#this).arena ; sym := __if_t ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
+        w_e    := #block(^( arena := $#parent(#this).arena ; sym := __if_e ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
 
-    al_c   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).e_cond ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    s_bind := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_c ; \1 := $#parent(#this).al_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    p_c    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    p_raw  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).p_c ; \1 := $#parent(#this).w_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    d_raw  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    dr_c   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        al_c   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).e_cond ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        s_c    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_c ; \1 := $#parent(#this).al_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-    tb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_then ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
-    eb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_else ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
-    v_then := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
-    v_else := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).eb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
-    br_n   := #block(^( arena := $#parent(#this).arena ; kind := branch ; \0 := $#parent(#this).d_raw ; \1 := $#parent(#this).v_then ; \2 := $#parent(#this).v_else ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    \0 := $.s_bind ; \1 := $.br_n ;
-    #evaluate($.caps.ast.seq)
+        v_t    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).e_then ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
+        al_t   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).v_t ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        s_t    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_t ; \1 := $#parent(#this).al_t ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+
+        v_e    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).e_else ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
+        al_e   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).v_e ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+        s_e    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_e ; \1 := $#parent(#this).al_e ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+
+        v_if   := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).p_if ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+        ev_if  := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).v_if ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
+
+        #break($#block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_c ; \1 := $#parent(#this).s_t ; \2 := $#parent(#this).s_e ; \3 := $#parent(#this).ev_if ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false))
+    ), $.caps.constants.\false)
 ) ;
+
 #drop(.h_env) ;
-h_env := { two := $#parent(#this).TWO } ;
+h_env := {
+    two      := $#parent(#this).TWO ;
+    p_if     := $#parent(#this).p_if_bool ;
+    build_if := $#parent(#this).build_if_bool_ast
+} ;
+
+raw_h := ^(
+    if_then := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
+    if_cond := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_one  ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
+    if_else := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).env.two                 ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
+    #evaluate($.env.build_if)
+) ;
 h_if_bool := #evaluate($.wrap_h_with) ; #drop(.raw_h) ;
 #block(^( fe := $#parent(#this).fe ; name := IfExpr ; expr := $#parent(#this).e_if ; hidden := $#parent(#this).F ; handler := $#parent(#this).h_if_bool ; #evaluate($#parent(#this).c_syn.set_rule) ), $.F) ;
 
 raw_h := ^(
-    F := $.caps.constants.\false ;
-    n_F := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
+    F      := $.caps.constants.\false ;
+    n_F    := #block(^( arena := $#parent(#this).arena ; val := $#parent(#this).F ; #break(#evaluate($#parent(#this).caps.ast.value)) ), $.caps.constants.\false) ;
     e_body := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_zero ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
     e_cond := #block(^( arena := $#parent(#this).arena ; node := $#parent(#this).node ; index := $#parent(#this).caps.constants.u64_one  ; #break(#evaluate($#parent(#this).caps.syntax.cst_eval_child)) ), $.caps.constants.\false) ;
 
     w_sym  := #block(^( node := $#parent(#this).node ; bytes := #evaluate($#parent(#this).caps.syntax.cst_view_bytes) ; #break(#evaluate($#parent(#this).caps.symbols.intern_bytes)) ), $.caps.constants.\false) ;
     w_loop := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).w_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-    w_c    := #block(^( arena := $#parent(#this).arena ; sym := __wh_c ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-    w_raw  := #block(^( arena := $#parent(#this).arena ; sym := __raw ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
     a_this := #block(^( arena := $#parent(#this).arena ; kind := this ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-
     p_loop := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
     d_loop := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
     ev_rec := #block(^( arena := $#parent(#this).arena ; kind := evaluate ; \0 := $#parent(#this).d_loop ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
 
-    al_c   := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).e_cond ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    s_c    := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_c ; \1 := $#parent(#this).al_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    p_c    := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_this ; \1 := $#parent(#this).w_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    p_raw  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).p_c ; \1 := $#parent(#this).w_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    d_raw  := #block(^( arena := $#parent(#this).arena ; kind := deref ; \0 := $#parent(#this).p_raw ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    dr_c   := #block(^( arena := $#parent(#this).arena ; kind := drop ; \0 := $#parent(#this).p_c ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-
-    tb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).e_body ; \2 := $#parent(#this).ev_rec ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
-    v_tb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).tb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
-
-    fb_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).dr_c ; \1 := $#parent(#this).a_this ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
-    v_fb   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).fb_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
-
-    br_ast := #block(^( arena := $#parent(#this).arena ; kind := branch ; \0 := $#parent(#this).d_raw ; \1 := $#parent(#this).v_tb ; \2 := $#parent(#this).v_fb ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
-    st_seq := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).s_c ; \1 := $#parent(#this).br_ast ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
-    v_st   := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).st_seq ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
+    if_cond := $.e_cond ;
+    if_then := #block(^( arena := $#parent(#this).arena ; \0 := $#parent(#this).e_body ; \1 := $#parent(#this).ev_rec ; #break(#evaluate($#parent(#this).caps.ast.seq)) ), $.caps.constants.\false) ;
+    if_else := $.a_this ;
+    st_ast  := #evaluate($.env.build_if) ;
+    v_st    := #block(^( arena := $#parent(#this).arena ; ast := $#parent(#this).st_ast ; #break(#evaluate($#parent(#this).caps.ast.proto)) ), $.caps.constants.\false) ;
 
     al_st  := #block(^( arena := $#parent(#this).arena ; kind := allocate_val ; \0 := $#parent(#this).v_st ; \1 := $#parent(#this).n_F ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
     s1     := #block(^( arena := $#parent(#this).arena ; kind := bind ; \0 := $#parent(#this).w_loop ; \1 := $#parent(#this).al_st ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
