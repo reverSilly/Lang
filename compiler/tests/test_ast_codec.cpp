@@ -106,7 +106,7 @@ bool eq_expr(const ExprPtr& a, const ExprPtr& b) {
         const auto& y = std::get<BuiltinExpr>(b->node);
         if (x->kind != y.kind || x->args.size() != y.args.size()) return false;
         for (size_t i = 0; i < x->args.size(); ++i) {
-            if (!eq_expr(x->args[i], y->args[i])) return false;
+            if (!eq_expr(x->args[i], y.args[i])) return false;
         }
         return true;
     }
@@ -114,7 +114,7 @@ bool eq_expr(const ExprPtr& a, const ExprPtr& b) {
         const auto& y = std::get<SequenceExpr>(b->node);
         if (x->items.size() != y.items.size()) return false;
         for (size_t i = 0; i < x->items.size(); ++i) {
-            if (!eq_expr(x->items[i], y->items[i])) return false;
+            if (!eq_expr(x->items[i], y.items[i])) return false;
         }
         return true;
     }
