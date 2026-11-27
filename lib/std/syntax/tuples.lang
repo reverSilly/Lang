@@ -53,14 +53,15 @@ p_rem_u64   := #block(^( signed := $#parent(#this).F ; width := $#parent(#this).
 p_trunc_8_1 := #block(^( from := $#parent(#this).W8 ; to := $#parent(#this).W1 ; src := x ; #break(#evaluate($#parent(#this).caps.intrinsics.trunc_int)) ), $.F) ;
 
 tuple_env := {
-    iops      := $#parent(#this).iops ;
-    ten       := $#parent(#this).TEN ;
-    zero_ch   := $#parent(#this).ASCII_ZERO ;
-    div_u64   := $#parent(#this).p_div_u64 ;
-    rem_u64   := $#parent(#this).p_rem_u64 ;
-    trunc_8_1 := $#parent(#this).p_trunc_8_1 ;
-    to_dec    := $#parent(#this).u64_to_dec ;
-    smart_bind := $#parent(#this).build_smart_bind_ast
+    iops         := $#parent(#this).iops ;
+    ten          := $#parent(#this).TEN ;
+    zero_ch      := $#parent(#this).ASCII_ZERO ;
+    div_u64      := $#parent(#this).p_div_u64 ;
+    rem_u64      := $#parent(#this).p_rem_u64 ;
+    trunc_8_1    := $#parent(#this).p_trunc_8_1 ;
+    to_dec       := $#parent(#this).u64_to_dec ;
+    p_smart_bind := $#parent(#this).p_smart_bind ;
+    smart_bind   := $#parent(#this).build_smart_bind_ast
 } ;
 #drop(.h_env) ; h_env := $.tuple_env ;
 
@@ -99,12 +100,10 @@ raw_h := ^(
             w_fld := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).fld_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
             w_tmp := #block(^( arena := $#parent(#this).arena ; sym := $#parent(#this).tmp_sym ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
 
-            ! Outer stmt: smart-bind __tp_<i>_<bs> := e_i (direct-binds nested tuple/struct Pointer, else allocate_val) !
-            sb_eq_shape := $.env.iops.eq_shape ;
-            w_sbt := #block(^( arena := $#parent(#this).arena ; sym := __sb_tp_tmp ; #break(#evaluate($#parent(#this).caps.ast.word)) ), $.caps.constants.\false) ;
-            sb_w_key := $.w_tmp ; sb_w_tmp := $.w_sbt ; sb_rhs := $.e_i ;
+            ! Outer stmt: smart-bind __tp_<i>_<bs> := e_i via Prototype-first smart_bind !
+            sb_w_key := $.w_tmp ; sb_rhs := $.e_i ;
             s_out := #evaluate($.env.smart_bind) ;
-            #drop(.sb_eq_shape) ; #drop(.w_sbt) ; #drop(.sb_w_key) ; #drop(.sb_w_tmp) ; #drop(.sb_rhs) ;
+            #drop(.sb_w_key) ; #drop(.sb_rhs) ;
 
             ! Inner stmt: #bind(<i>, #allocate_val(#deref(#field(#parent(#this), __tp_<i>_<bs>)), false)) ; #drop(#field(#parent(#this), __tp_<i>_<bs>)) !
             p_pt  := #block(^( arena := $#parent(#this).arena ; kind := field ; \0 := $#parent(#this).a_par ; \1 := $#parent(#this).w_tmp ; #break(#evaluate($#parent(#this).caps.ast.builtin)) ), $.caps.constants.\false) ;
