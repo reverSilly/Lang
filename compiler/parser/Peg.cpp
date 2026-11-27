@@ -122,13 +122,67 @@ std::optional<RuleId> Grammar::find_rule(std::string_view name) const {
 PackratParser::PackratParser(const Grammar& grammar, std::string_view input)
     : grammar_(grammar), input_(input), memo_by_pos_(input.size() + 1) {}
 
+namespace {
+bool is_generic_hint(std::string_view h) noexcept {
+    return h == "character set" || h == "byte range" || h == "any character";
+}
+
+std::string describe_found(std::string_view input, size_t pos) {
+    if (pos >= input.size()) return "end of input";
+    unsigned char c = static_cast<unsigned char>(input[pos]);
+    switch (c) {
+        case '\n': return "'\\n'";
+        case '\r': return "'\\r'";
+        case '\t': return "'\\t'";
+        case '\0': return "'\\0'";
+        default:
+            if (c >= 32 && c < 127) {
+                return std::string("'") + static_cast<char>(c) + "'";
+            }
+            return "byte 0x" + std::to_string(c);
+    }
+}
+
+std::string format_source_snippet(std::string_view input, const SourceLocation& loc) {
+    size_t line_start = loc.offset < input.size() ? loc.offset : input.size();
+    while (line_start > 0 && input[line_start - 1] != '\n') {
+        --line_start;
+    }
+    size_t line_end = loc.offset < input.size() ? loc.offset : input.size();
+    while (line_end < input.size() && input[line_end] != '\n' && input[line_end] != '\r') {
+        ++line_end;
+    }
+    std::string_view line_text = input.substr(line_start, line_end - line_start);
+    std::string line_num = std::to_string(loc.line);
+    std::string pad(line_num.size(), ' ');
+    size_t caret_offset = loc.col > 0 ? loc.col - 1 : 0;
+    std::string caret_pad(caret_offset, ' ');
+    return "\n  " + line_num + " | " + std::string(line_text)
+         + "\n  " + pad + " | " + caret_pad + "^";
+}
+} // namespace
+
 void PackratParser::record_failure(size_t pos, std::string_view hint) {
-    if (lookahead_depth_ > 0) return;
+    if (lookahead_depth_ > 0 || hint.empty()) return;
     if (pos > furthest_pos_) {
         furthest_pos_ = pos;
-        expected_hint_ = std::string(hint);
-    } else if (pos == furthest_pos_ && expected_hint_.empty() && !hint.empty()) {
-        expected_hint_ = std::string(hint);
+        expected_hints_.clear();
+        expected_hints_.emplace_back(hint);
+        return;
+    }
+    if (pos == furthest_pos_) {
+        if (!is_generic_hint(hint) && expected_hints_.size() == 1 && is_generic_hint(expected_hints_[0])) {
+            expected_hints_[0] = std::string(hint);
+            return;
+        }
+        if (is_generic_hint(hint) && !expected_hints_.empty() && !is_generic_hint(expected_hints_[0])) {
+            return;
+        }
+        if (expected_hints_.size() >= 6) return;
+        for (const auto& existing : expected_hints_) {
+            if (existing == hint) return;
+        }
+        expected_hints_.emplace_back(hint);
     }
 }
 
@@ -286,9 +340,15 @@ SyntaxNodePtr PackratParser::parse(std::string_view start_rule) {
     ParseResult res = eval_rule(*id_opt, 0);
     if (!res.ok || res.nodes.empty()) {
         SourceLocation loc = compute_location(input_, furthest_pos_);
-        std::string msg = expected_hint_.empty()
-            ? "unexpected syntax"
-            : ("expected " + expected_hint_);
+        std::string msg = "unexpected " + describe_found(input_, furthest_pos_);
+        if (!expected_hints_.empty()) {
+            msg += "; expected ";
+            for (size_t i = 0; i < expected_hints_.size(); ++i) {
+                if (i > 0) msg += ", ";
+                msg += expected_hints_[i];
+            }
+        }
+        msg += format_source_snippet(input_, loc);
         throw ParseError(loc, msg);
     }
     return res.nodes.front();

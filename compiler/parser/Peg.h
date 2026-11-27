@@ -197,7 +197,7 @@ private:
     std::string_view input_;
     std::vector<std::unordered_map<RuleId, MemoEntry>> memo_by_pos_;
     size_t furthest_pos_ = 0;
-    std::string expected_hint_;
+    std::vector<std::string> expected_hints_;
     int lookahead_depth_ = 0;
 
     void record_failure(size_t pos, std::string_view hint);

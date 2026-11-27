@@ -170,12 +170,42 @@ static void test_horizontal_and_vertical_layer1_extensions() {
     }
 }
 
+
+static void test_parse_error_diagnostics() {
+    Frontend fe;
+    bool threw = false;
+    try {
+        (void)fe.parse("foo ; (bar");
+    } catch (const ParseError& e) {
+        threw = true;
+        std::string msg = e.what();
+        assert(msg.find("unexpected end of input") != std::string::npos);
+        assert(msg.find("expected") != std::string::npos);
+        assert(msg.find("1 | foo ; (bar") != std::string::npos);
+        assert(msg.find("^") != std::string::npos);
+    }
+    assert(threw);
+
+    // Unclosed / prematurely-closed comment produces snippet + unexpected char
+    threw = false;
+    try {
+        (void)fe.parse("! comment != broken !");
+    } catch (const ParseError& e) {
+        threw = true;
+        std::string msg = e.what();
+        assert(msg.find("1 | ! comment != broken !") != std::string::npos);
+        assert(msg.find("^") != std::string::npos);
+    }
+    assert(threw);
+}
+
 int main() {
     test_word_escapes_and_comments();
     test_builtins_and_arity();
     test_grouping_and_sequences();
     test_strict_non_nullable_and_errors();
     test_horizontal_and_vertical_layer1_extensions();
+    test_parse_error_diagnostics();
     std::cout << "All Step 2 tests passed!" << std::endl;
     return 0;
 }
